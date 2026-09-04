@@ -22,7 +22,7 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, a **non-`.sh` file under `tests/`** (the enforceable half of the no-stand-in rule below), and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` and `.githooks/pre-push` are the two gates, and **each one states what it blocks in its own source** — read them there rather than here, because a list in this file is a second copy that goes stale silently. The one thing their source cannot state is an **absence**: a direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
@@ -141,6 +141,8 @@ Each fact lives in exactly ONE place; everything else points at it. **The durabl
 
 The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 usage / 2+ propagated tool failure / 4 didn't take effect), and the lifecycle semantics (launch → status → stop, idempotent stop, ambiguity → 4) are the one thing that survives any rewrite. The surface's normative statement is the code itself — each command's `usage()` — and `tests/contract.sh`, which proves it; `docs/AS-BUILT-cli-contract.md` holds only the *why* of the surface's shape and the semver boundary (what counts as public API). Changing the surface is a deliberate, documented act — never a side effect of a feature.
 
+<important if="you are adding, changing, or judging a check in tests/">
+
 ## Testing Guidelines (HARD RULE — enforced at review)
 
 **Functional tests only.** A command-line tool is tested by running it and reading its exit code and its stdout. There is no rig layer, no screen model, no pty harness and no unit tier: every check invokes a real entry point the way a caller does, and asserts on what came back.
@@ -172,6 +174,8 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 `bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket with real mpv on the far end (`playback.sh`); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
 
+</important>
+
 ### Minimum checks before every commit
 
 **The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
@@ -180,6 +184,8 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 - **Any change at all:** `tests/contract.sh --offline` (it also drives the empty-argument paths on the 3.2 floor) — every gate, both stores, the lifecycle and the death record, in ~30s with nothing fetched, because a gate that cannot run without YouTube is a gate that gets skipped. **Before every push, the same file with no flag**: `--offline` is a prefix of that run, never a substitute for it. It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
 - **Any change to the detached player:** `tests/playback.sh`. It starts real players (silent, `--volume 0`, in a state dir of its own) and does not pass until `pgrep` finds none of them left.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/RESEARCH-tui-player.md`.
+
+<important if="you are making a structural change — moving logic between files, retiring a path, or adding a surface">
 
 ## Safe-Evolution Methodology (how this suite is changed)
 
@@ -196,6 +202,10 @@ Any structural change follows a staged, reversible order:
 ```
 
 Principle: put the single destructive step last and smallest, prove its replacement first, and gate deletions by grep so no dangling reference survives.
+
+</important>
+
+<important if="you are planning, pre-morteming, or landing a unit of work — anything that touches a docs/PLAN-*.md">
 
 ## How a Unit of Work Moves
 
@@ -223,6 +233,10 @@ conveniences the checkout does not depend on.
 - **A landing is a checklist, not a feeling.** The unit of work closes against the document that authorized it, atomically: every plan item landed or explicitly deferred, every `done_when` executed rather than read, accepted pre-mortem fixes verified in, review findings resolved, the as-built docs resynced, the `PLAN-` deleted, the version judged. Skipping the housekeeping half means the work has not landed — the code is merely present. Landing closes the unit of work, not the code's liability: that stays with `docs/ARCHITECTURE.md`'s risk register and the audit below.
 - **A session ends by sorting its residue.** Durable state — settled decisions, work-in-progress position — goes into the in-flight `PLAN-` before the session closes; only conversation-shaped remainder goes to a `tmp/` handoff note. The dividing line: if it still has value after the next session consumes it, it is not handoff content.
 - **Accretion is audited, not watched for.** Diff review catches what a change introduces; the whole-tree sweep (`/audit-conformance`) catches what accumulates between changes. Its cadence and rules are its own skill's.
+
+</important>
+
+<important if="you are writing or resyncing a doc under docs/ — a PLAN-, an AS-BUILT-, ARCHITECTURE.md, ROADMAP.md or a RESEARCH-">
 
 ## SDLC & Architectural Documentation
 
@@ -296,6 +310,10 @@ The live files:
 - `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.
 - One repo, one README: there is deliberately no `tests/README.md` — the two suites are described in the root README's `## Tests` section and in their own docstrings.
 
+</important>
+
+<important if="you are adding or invoking an agent skill, or a terminal frame in README.md or docs/ has gone stale">
+
 ### Agent skills
 
 **Skills live in `.claude/skills/` — nowhere else.** Claude Code discovers project skills only there (plus `~/.claude/skills/` and plugins); a skill parked anywhere else is invisible and will simply never be invoked. **A skill is for work needing judgement; a fixed command sequence is a script.** Two exist:
@@ -311,6 +329,8 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 
 **Driving the TUI is not a skill, it is `tests/drive.sh`.** Launching at a fixed geometry, polling the ready marker, sending keys and reaping the detached player are mechanical, and a mechanical sequence written as prose is a runner nobody executes the same way twice.
 
+</important>
+
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
@@ -318,6 +338,8 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - Per-request choices are **flags**; set-once tuning is a **configuration key** — suite-wide `UT_*`, per-engine `YT_*` / `BILI_*` / `NE_*` (the prefix is also what makes a name config-reachable, so a constant must not wear one — and a new engine's prefix has to be added to the `ut_read_config` regex in EVERY entry point, which is duplicated verbatim, or its keys are silently unreadable). It resolves through four levels — flag > environment > the user's config file > the shipped `config` — and its default is declared once, in `config`, never behind a `:-` in a script. The keys are enumerated by the shipped `config` itself. This keeps each verb's flag surface narrow enough for a small model to call safely; do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.
+
+<important if="you are about to commit, push, tag, or bump VERSION">
 
 ## Commit & Pull Request Guidelines
 
@@ -327,6 +349,8 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - `bash -n` on every script in `shell/` before every commit; `tests/contract.sh --offline` with it, and the full `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
 - **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/AS-BUILT-cli-contract.md` opens with what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md`), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for the packaging NO to reverse.
+
+</important>
 
 ## Security & Configuration Tips
 
