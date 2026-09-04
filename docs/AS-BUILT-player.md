@@ -464,10 +464,10 @@ Now-Playing 视图每秒刷一次，否则每一拍都要付一条进程链。�
 已验证：在 `uting` 里按两下 `0`，把一个以 `--volume 0` 启动的播放器推到 `10`，`--status` 报的
 就是 `10` —— 只读记录值的话它会永远报 `0`。
 
-**四个属性，一次往返（`live_props` / `read_player_live`）。** 同样的论证覆盖 `pause`、`time-pos`
-与 `duration`，而且更糟：状态文件从来就没存过它们，所以 socket 是它们**唯一**存在的地方。
-`live_props(sock, prop…)` 把整份属性清单顺着**一条**连接发下去，`read_player_live` 再做关联，
-`--status` 的两种输出模式共用它，于是归一化只存在一份。三条规矩是承重的：
+**十三个属性，一次往返（`live_props` / `read_player_live`）。** 同样的论证覆盖 `pause`、
+`time-pos` 与 `duration`，而且更糟：状态文件从来就没存过它们，所以 socket 是它们**唯一**存在的
+地方。`live_props(sock, prop…)` 把整份属性清单顺着**一条**连接发下去，`read_player_live` 再做
+关联，`--status` 的两种输出模式共用它，于是归一化只存在一份。三条规矩是承重的：
 
 - **按 `request_id` 关联，绝不按行序。** mpv 会把**异步事件**复用给每一个连着的客户端，与命令
   回复交织在一起（mpv `ipc.rst`），所以对 socket 输出光来一个 `head -1` 可能抓到的是一个事件
@@ -489,6 +489,31 @@ Now-Playing 视图每秒刷一次，否则每一拍都要付一条进程链。�
 （没有 `nc`、socket 死了、没人答）。在那里报 `false` 就是一次**捏造的读数**，而活读存在的意义
 正是终结这种失败模式。一个有用的副作用：`paused != null` 如今是一个刚 detach 的播放器诚实的
 就绪探测 —— 而 `volume` 在 mpv 还没开始监听时就能从状态文件里答出来。
+
+**`media` —— 真正在解码的那一份，为什么它必须来自 socket 而不是引擎。** 记录里的 `selected`
+是引擎**要到的**那个格式串（`"251 - audio only (medium)"`），是**请求**，不是**答案**：流会被
+重新协商，一次 merge 会退回 progressive，而一个格式 id 对解码器最后拿到了什么只字未提。能回答
+这个问题的只有 mpv，而我们本来就在问它 —— 所以九个属性（`video-format`、`width`、`height`、
+`container-fps`、`video-bitrate`、`audio-codec-name`、`audio-bitrate`、`audio-params/samplerate`、
+`audio-params/hr-channels`）搭的是**同一条**已经开着的连接。多开一条连接、或者再 fork 一次
+yt-dlp 去重新推导，才是要付的代价；九行 `get_property` 不是。
+
+**这里每一个成员都可能合法地是 `null`，所以没有一个是错误。** 一个纯音频轨没有
+video-format / width / height（实测 2026-09-04，经 ne 引擎的 mp3：四个属性全部 unavailable）；
+`video-bitrate` 是 demuxer 的**估计值**，视频解得好好的时候它照样可能不在 —— 同日实测，mpv 0.41
+对一路 merge 过的 AV1+opus YouTube 流，在开播八秒时 `width`/`height`/`container-fps` 都答了，
+唯独它答 `property unavailable`。所以 `null` 在这里的意思是"不适用，或者还不知道"，绝不是
+"播放器坏了" —— 与 `paused` 那条 `null` ≠ `false` 的规矩是同一条，只是换了一族字段。
+`tests/playback.sh` 把这一点写成了**区分性输入**：一次纯音频播放同时否掉两种似是而非的实现 ——
+把引擎的 `selected` 抄进 `audio_codec` 的（codec 名里不可能有空格），以及把缺失的数字当 0 的
+（`width: 0` 声称有一路比"没有"还窄一像素的视频轨）。
+
+**它是一个总是在场的对象，而不是一组可能缺席的键。** `media` 永远有全部九个成员，取不到就是
+`null`；让调用方去分辨"键不在"与"值是 null"，是白让人多做一次判断 —— 与 `failed:[]` 永远在场
+是同一个论证。人机面刻意**不**印它：`--status` 的散文行连 position 那一对都放弃了（"要playhead
+的人有 `uting`"），九个字段更不可能挤上去，而"到底在解码什么"的人机面是 `uting` 的详情块
+（AS-BUILT-tui.md「编排」的 details 段），那里有地方摊开。散文那一路仍然读满十三个属性 —— `read_player_live`
+是**一个**函数，null 政策只存在一份，而代价是一条它本来就要开的连接上的几行字，不是第二次往返。
 
 **写那一侧多两道门。** `do_set_volume` 在发之前测 `[[ -S "$sock" ]]` —— 测的是"它是不是 socket"
 而不只是"存不存在"，于是一个被 `SIGKILL` 的 mpv 留下的陈旧 socket 报 `ipc_failed` 而不是挂住；

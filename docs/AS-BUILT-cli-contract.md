@@ -401,6 +401,10 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AS
   一个把请求回声进 `selected` 的引擎能过掉其余每一条检查。
   **零额外网络**：这两个值本来就在那份已经取回的原始记录里（`.format` / `.resolution`），
   从前被丢掉。取不到时是 `null`，与 `title`/`duration` 同一套可空约定。
+  还有**第三个**答案，而它不在这个信封里：真正在解码的那一份（编解码、分辨率、码率、采样率）
+  只有 mpv 知道，所以它是 `ut-play --status` 的 `media`，读自播放器自己的 socket
+  （AS-BUILT-player.md「运行时 IPC」）。引擎在这里止步是对的 —— 流会被重新协商，
+  而一个格式 id 对解码器最后拿到了什么只字未提。
 - **`retried`** = 引擎回落到了一个匿名 client（AS-BUILT-engine.md「先探后播」）。
   播放器把它转手进播放信封的 `retried`；它不再自己观察这件事。
   **它不是一个登录裁决**：`retried:false` 只说明带 cookie 那次调用没有出错，

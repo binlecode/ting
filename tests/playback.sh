@@ -15,7 +15,8 @@
 # AS-BUILT-cli-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
 # verbatim — contract.sh proves that envelope reaches the gate, this is where it launches.
 #
-# Cost: **~82s / 51 ok** (2026-09-01, three runs at 81s, 82s and 83s), and it is real work
+# Cost: **~93s / 59 ok** (2026-09-04; 82s/51 ok on 2026-09-01, before the live read grew the
+# media facts and the count drifted), and it is real work
 # rather than waiting. The breakdown is the older 62s run's (2026-08-26) and still names where
 # the time goes: roughly 30s is seven live engine resolves (ut-play:530 records the measured
 # median between tracks at 4.3s) and ~19s is the listening-log section playing a 19-second
@@ -37,7 +38,9 @@
 #
 # It also owns the LIVE READ (--status off the mpv socket), for the same reason: the peer is
 # real mpv or it is nothing. The suite keeps no stand-in for a component, so a claim about
-# talking to mpv can only be made where mpv is running — which is here, and only here.
+# talking to mpv can only be made where mpv is running — which is here, and only here. That
+# now includes `media` — what is actually decoding — which exists in no record and in no
+# engine envelope at all, so this file is the only place it can be proved to exist.
 #
 # Portability: bash 3.2. Needs jq for the envelopes; no tmux and no terminal — every
 # assertion here is an exit code or a field out of a real envelope.
@@ -110,11 +113,17 @@ wait_for_sock() {
 # By FIELD rather than one loop per field: position and duration arrive at the same moment for
 # the same reason, and the duration site below is a queue changing tracks, where reading once
 # races the child killing one mpv and starting the next.
+#
+# `field` is a DOTTED PATH, so a nested live field (media.audio_codec) polls through the same
+# loop as a flat one. getpath, not .[$f], for exactly that: the media object arrives when the
+# decoder does, which is the same race every other field here is waiting out, and a second
+# poller written to walk one level deeper would be the same bounded-poll rule stated twice.
 wait_live() {
     local id=$1 field=$2 v="" i
     for i in $(seq 1 40); do
         v=$(shell/ut-play --status -j 2>/dev/null \
-            | jq -r --arg i "$id" --arg f "$field" '.players[]|select(.id==$i)|.[$f] // empty' 2>/dev/null)
+            | jq -r --arg i "$id" --arg f "$field" \
+                '.players[]|select(.id==$i)|getpath($f|split("."))//empty' 2>/dev/null)
         case "$v" in "" | null | 0) ;; *) printf '%s' "$v"; return 0 ;; esac
         sleep 1
     done
@@ -238,6 +247,47 @@ report "live duration is a number" 0 \
 report "the record carries selected" 0 \
     "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
         '.players[]|select(.id==$i)|.selected|type=="string"' >/dev/null 2>&1; echo $?)"
+# `media` — what is ACTUALLY DECODING, and the only place in the suite it can be proved: the
+# facts come off the mpv socket, so an implementation without a real peer has nothing to
+# report and this suite keeps no stand-in for one.
+#
+# THE DISCRIMINATING INPUT IS THE PLAYER ITSELF, playing audio. Two plausible wrong
+# implementations are separated here without touching a tracked file:
+#
+#   * "copy what the engine said" — the record already carries `selected`, and on this play
+#     it is a yt-dlp format string like "251 - audio only (medium)". A codec name cannot
+#     contain a space, so the pattern below goes red the moment audio_codec is that string
+#     rather than the decoder's own answer;
+#   * "an absent number is zero" — this is an AUDIO play, so video_codec/width/height do not
+#     apply, and the contract is that they are null. A width of 0 claims a video track one
+#     pixel narrower than none; null says the question does not apply. Same distinction the
+#     `paused` check above rests on, one field family over.
+#
+# audio_bitrate is deliberately NOT asserted: mpv computes it from recently decoded packets
+# and reports it unavailable for the first seconds of a track and on some streams
+# indefinitely (measured 2026-09-04, mpv 0.41). A check on it would go red on a demuxer's
+# timing rather than on a bug, and a red that is not a bug still costs somebody a look.
+if acodec=$(wait_live "$id1" media.audio_codec); then
+    ok "media.audio_codec came off the socket ($acodec), not out of the record"
+else
+    bad "player 1 never reported a decoding codec — the media read is unproved"
+fi
+report "audio_codec is a codec name, not the engine's format string" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.media.audio_codec|test("^[a-z0-9_.+-]+$")' >/dev/null 2>&1; echo $?)"
+report "sample_rate is a number the engine never sent" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.media.sample_rate|type=="number" and .>0' >/dev/null 2>&1; echo $?)"
+report "an audio play reports video_codec/width null, not 0" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.media|.video_codec==null and .width==null' >/dev/null 2>&1; echo $?)"
+# The whole object is always present with all nine members, absent value or not: a caller
+# that has to tell a missing KEY from a null VALUE is a caller we made work for nothing.
+report "media carries all nine keys" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.media|keys_unsorted|sort ==
+         ["audio_bitrate","audio_codec","channels","fps","height","sample_rate","video_bitrate","video_codec","width"]' \
+        >/dev/null 2>&1; echo $?)"
 echo "── the playback verbs: the envelope reports what mpv answered ───"
 # --pause / --resume / --seek / --seek-to over the same one-shot socket as --set-volume.
 # contract.sh owns the idle half (no player → 4, an unsigned --seek → 1); what only a real

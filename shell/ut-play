@@ -249,13 +249,18 @@ Output contracts (one line of JSON each; the why behind each shape: AS-BUILT-cli
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
   --status  {status:"players", players:[{id,pid,url,engine,mode,volume,paused,position,
-            duration,title,selected,selected_resolution,started_at,queue}],
+            duration,title,selected,selected_resolution,media,started_at,queue}],
             failed:[{id,url,engine,mode,started_at,ended_at,exit_code,reason}]}
             volume/paused/position/duration are read live off the player (null = could
             not ask); selected is the format the ENGINE picked, backfilled after the
-            resolve (null until then); engine and url together are the CALL that is
-            playing (\`ut-play --engine E -- URL\`), and both follow the queue from track
-            to track; failed lists players that died on their own
+            resolve (null until then), while media is what is ACTUALLY DECODING, read off
+            the same socket: {video_codec,width,height,fps,video_bitrate,audio_codec,
+            audio_bitrate,sample_rate,channels} — always present, each member null when the
+            property does not apply (audio-only has no video_codec) or is not yet known;
+            bitrates are bits per second and are demuxer estimates. engine and url
+            together are the CALL that is playing (\`ut-play --engine E -- URL\`), and
+            both follow the queue from track to track; failed lists players that died on
+            their own
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
@@ -1063,22 +1068,59 @@ live_props() {
 }
 
 # The policy half of the read above, shared by both --status output modes so the correlation
-# and the normalisation exist once. Sets four globals, each EMPTY when the player did not
+# and the normalisation exist once. Sets thirteen globals, each EMPTY when the player did not
 # answer (no nc, dead socket, property null) — empty becomes JSON null at the call site, and
 # the distinction matters: `false` means "playing", null means "could not ask".
+#
+# THE MEDIA FACTS (LP_VCODEC..LP_CHANNELS) RIDE A ROUND TRIP WE WERE MAKING ANYWAY. What is
+# actually decoding — codec, geometry, bitrate, sample rate — is a question only the player
+# can answer, and until now nothing in the suite asked it: the record's `selected` is the
+# format string the ENGINE picked ("251 - audio only (medium)"), which is the request, not
+# the answer. A stream can be renegotiated, a merge can fail back to progressive, and an
+# engine's format id says nothing about what the decoder ended up with. Nine more
+# get_property lines on the ONE connection live_props already opens is the whole cost; a
+# second connection, or a yt-dlp call to re-derive them, would not be.
+#
+# Every one of them is legitimately null on a normal player, which is why none is an error:
+# an audio-only track has no video-format/width/height (measured 2026-09-04, mp3 via the ne
+# engine: all four unavailable), and `video-bitrate` is a demuxer ESTIMATE that is simply
+# absent on some streams even while video decodes — measured on the same date, mpv 0.41
+# answered `property unavailable` for a merged AV1+opus YouTube stream eight seconds in
+# while width/height/container-fps all answered. A null here means "not applicable or not
+# yet known", never "the player is broken".
 LP_VOLUME=""
 LP_PAUSED=""
 LP_POSITION=""
 LP_DURATION=""
+LP_VCODEC=""
+LP_WIDTH=""
+LP_HEIGHT=""
+LP_FPS=""
+LP_VBITRATE=""
+LP_ACODEC=""
+LP_ABITRATE=""
+LP_SAMPLERATE=""
+LP_CHANNELS=""
 read_player_live() {
     local sock=$1 rid val got=0 seen=0
     LP_VOLUME=""
     LP_PAUSED=""
     LP_POSITION=""
     LP_DURATION=""
-    # Breaking on the fourth answer is what keeps a WEDGED player cheap: a peer that never
+    LP_VCODEC=""
+    LP_WIDTH=""
+    LP_HEIGHT=""
+    LP_FPS=""
+    LP_VBITRATE=""
+    LP_ACODEC=""
+    LP_ABITRATE=""
+    LP_SAMPLERATE=""
+    LP_CHANNELS=""
+    # Breaking on the last answer is what keeps a WEDGED player cheap: a peer that never
     # closes its side would otherwise charge the full `nc -w1` second per player. `seen`
-    # bounds the loop so a chatty one cannot hold --status open either.
+    # bounds the loop so a chatty one cannot hold --status open either. An UNAVAILABLE
+    # property still answers (data null), so `got` reaches the full count on an audio-only
+    # track too — the break is not waiting on video that will never arrive.
     while IFS=$'\037' read -r rid val; do
         seen=$((seen + 1))
         case "$rid" in
@@ -1086,10 +1128,21 @@ read_player_live() {
         2) LP_PAUSED="$val"; got=$((got + 1)) ;;
         3) LP_POSITION="$val"; got=$((got + 1)) ;;
         4) LP_DURATION="$val"; got=$((got + 1)) ;;
+        5) LP_VCODEC="$val"; got=$((got + 1)) ;;
+        6) LP_WIDTH="$val"; got=$((got + 1)) ;;
+        7) LP_HEIGHT="$val"; got=$((got + 1)) ;;
+        8) LP_FPS="$val"; got=$((got + 1)) ;;
+        9) LP_VBITRATE="$val"; got=$((got + 1)) ;;
+        10) LP_ACODEC="$val"; got=$((got + 1)) ;;
+        11) LP_ABITRATE="$val"; got=$((got + 1)) ;;
+        12) LP_SAMPLERATE="$val"; got=$((got + 1)) ;;
+        13) LP_CHANNELS="$val"; got=$((got + 1)) ;;
         *) ;; # an async event; not one of ours
         esac
-        ((got >= 4 || seen >= 16)) && break
-    done < <(live_props "$sock" volume pause time-pos duration)
+        ((got >= 13 || seen >= 32)) && break
+    done < <(live_props "$sock" volume pause time-pos duration \
+        video-format width height container-fps video-bitrate \
+        audio-codec-name audio-bitrate audio-params/samplerate audio-params/hr-channels)
     # mpv answers with floats (100.000000, 83.437000); report integers, the unit the rest of
     # the contract speaks — --set-volume takes one, and the search envelope's `duration` is
     # integer seconds. A value that is not a number (including the literal "null") is dropped.
@@ -1097,6 +1150,51 @@ read_player_live() {
     [[ "$LP_POSITION" =~ ^[0-9]+ ]] && LP_POSITION="${LP_POSITION%.*}" || LP_POSITION=""
     [[ "$LP_DURATION" =~ ^[0-9]+ ]] && LP_DURATION="${LP_DURATION%.*}" || LP_DURATION=""
     [[ "$LP_PAUSED" == "true" || "$LP_PAUSED" == "false" ]] || LP_PAUSED=""
+    # Same rule for the numeric media facts, and it is the ONE guard that matters here: the
+    # literal string "null" would otherwise reach --argjson and be a valid JSON null by
+    # accident on some fields and a parse error on none — an accident is not a contract.
+    # fps keeps its fraction (29.97 is not 29) but loses mpv's six-digit tail.
+    [[ "$LP_WIDTH" =~ ^[0-9]+ ]] && LP_WIDTH="${LP_WIDTH%.*}" || LP_WIDTH=""
+    [[ "$LP_HEIGHT" =~ ^[0-9]+ ]] && LP_HEIGHT="${LP_HEIGHT%.*}" || LP_HEIGHT=""
+    [[ "$LP_VBITRATE" =~ ^[0-9]+ ]] && LP_VBITRATE="${LP_VBITRATE%.*}" || LP_VBITRATE=""
+    [[ "$LP_ABITRATE" =~ ^[0-9]+ ]] && LP_ABITRATE="${LP_ABITRATE%.*}" || LP_ABITRATE=""
+    [[ "$LP_SAMPLERATE" =~ ^[0-9]+ ]] && LP_SAMPLERATE="${LP_SAMPLERATE%.*}" || LP_SAMPLERATE=""
+    if [[ "$LP_FPS" =~ ^[0-9]+\.?[0-9]* ]]; then
+        LP_FPS=$(printf '%.2f' "$LP_FPS" 2>/dev/null) || LP_FPS=""
+        # A whole-number rate reads as 30, not 30.00 — the two decimals exist for 29.97.
+        [[ "$LP_FPS" == *.00 ]] && LP_FPS="${LP_FPS%.00}"
+    else
+        LP_FPS=""
+    fi
+    # The string fields carry mpv's own vocabulary (h264 / av1 / opus / mp3 / stereo) and are
+    # NOT normalised: renaming a codec here would put a second spelling of the decoder's own
+    # answer in the contract, and the caller who cares about codecs already knows these names.
+    [[ "$LP_VCODEC" == "null" ]] && LP_VCODEC=""
+    [[ "$LP_ACODEC" == "null" ]] && LP_ACODEC=""
+    [[ "$LP_CHANNELS" == "null" ]] && LP_CHANNELS=""
+    return 0
+}
+
+# The media half of read_player_live as ONE JSON object, built where the globals are, so
+# both --status arms and any future reader share the null policy instead of restating it.
+# ALWAYS an object, never null: `media` present with nine null members says "asked, nothing
+# to report", and a caller that has to distinguish an absent key from an absent value is a
+# caller we made work for nothing (the same argument `failed:[]` is built on).
+LP_MEDIA_JSON='{}'
+media_json() {
+    LP_MEDIA_JSON=$(jq -nc \
+        --arg vcodec "$LP_VCODEC" --arg acodec "$LP_ACODEC" --arg channels "$LP_CHANNELS" \
+        --argjson width "${LP_WIDTH:-null}" --argjson height "${LP_HEIGHT:-null}" \
+        --argjson fps "${LP_FPS:-null}" \
+        --argjson video_bitrate "${LP_VBITRATE:-null}" \
+        --argjson audio_bitrate "${LP_ABITRATE:-null}" \
+        --argjson sample_rate "${LP_SAMPLERATE:-null}" \
+        '{video_codec: (if $vcodec == "" then null else $vcodec end),
+          width: $width, height: $height, fps: $fps, video_bitrate: $video_bitrate,
+          audio_codec: (if $acodec == "" then null else $acodec end),
+          audio_bitrate: $audio_bitrate, sample_rate: $sample_rate,
+          channels: (if $channels == "" then null else $channels end)}') ||
+        LP_MEDIA_JSON='{"video_codec":null,"width":null,"height":null,"fps":null,"video_bitrate":null,"audio_codec":null,"audio_bitrate":null,"sample_rate":null,"channels":null}'
     return 0
 }
 
@@ -1955,6 +2053,7 @@ do_status() {
             local i parts=()
             for ((i = 0; i < n; i++)); do
                 read_player_live "$(player_sock "${LIVE_PLAYER_IDS[$i]}")"
+                media_json
                 # The queue comes off disk rather than the socket: it is the PLAYER's state,
                 # not mpv's — mpv is told one URL at a time and never learns there is a list.
                 queue_snapshot "${LIVE_PLAYER_IDS[$i]}"
@@ -1963,10 +2062,12 @@ do_status() {
                     --argjson paused "${LP_PAUSED:-null}" \
                     --argjson position "${LP_POSITION:-null}" \
                     --argjson duration "${LP_DURATION:-null}" \
+                    --argjson media "$LP_MEDIA_JSON" \
                     --argjson queue "$QUEUE_JSON" \
                     '{id, pid, url, engine, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
-                      title, selected, selected_resolution, started_at, queue: $queue}' \
+                      title, selected, selected_resolution, media: $media,
+                      started_at, queue: $queue}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The
@@ -1998,6 +2099,12 @@ do_status() {
                 # Only `paused` joins the human line: a person reading this wants to know why
                 # it went quiet. The position pair stays JSON-only — the human who wants a
                 # playhead has `uting`, which draws one, and this line is already long.
+                # `media` stays JSON-only for exactly that reason, one step further: nine
+                # fields cannot ride a line that already refuses two, and the human surface
+                # for "what is actually decoding" is uting's details block, which has room
+                # to lay it out. read_player_live still reads all thirteen properties here —
+                # it is ONE function so the null policy exists once, and the cost is lines
+                # on a connection this arm was opening anyway, not a second round trip.
                 [[ "$LP_PAUSED" == "true" ]] && pause_suffix=", paused"
                 # Only a queue of MORE THAN ONE earns a word here: every detached player has
                 # a queue now, and printing "track 1/1" on every line would be noise.
