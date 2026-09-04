@@ -2574,6 +2574,133 @@ fetch_play_res() {
     fi
     return 0
 }
+# THE MEDIA FACTS of whatever is playing — what is ACTUALLY DECODING, straight off mpv.
+# This is the one half of a track no search envelope can carry: a search row is a flat
+# extraction with no format list in it at all, so codec, geometry and bitrate do not exist
+# until a player has the stream open. They are read in fetch_play_times' existing batch
+# (see the reqs block there for why they ride it rather than a stride of their own).
+#
+# Each is EMPTY when the property does not apply or is not yet known, and both cases are
+# normal rather than errors: an audio-only track has no video-format/width/height, and
+# `video-bitrate` is a demuxer estimate that mpv reports as unavailable on plenty of streams
+# while video decodes perfectly (measured 2026-09-04, mpv 0.41: a merged AV1+opus YouTube
+# stream answered width/height/container-fps and refused video-bitrate). Empty means the
+# field is dropped from the line, exactly as an absent view count is dropped from the meta
+# line above it — printing a zero for a fact we do not have states something untrue.
+PM_VCODEC=""
+PM_W=""
+PM_H=""
+PM_FPS=""
+PM_VBR=""
+PM_ACODEC=""
+PM_ABR=""
+PM_SR=""
+PM_CH=""
+
+# mpv's raw answers -> the vocabulary the rest of this file speaks. NO FORKS: this runs once
+# per tick on the redraw path, and a command substitution per property would be nine forks a
+# second to reformat nine short strings. The literal string "null" is what the reader's jq
+# produces for a JSON null (`\(.data)` stringifies it), so it is the empty case, not a value.
+#
+# The codec and channel names are mpv's own (h264 / av1 / opus / mp3 / stereo) and stay
+# untouched: renaming them here would put a second spelling of the decoder's answer on
+# screen, and these names are the ones a user can search for.
+pm_normalise() {
+    [[ "$PM_VCODEC" == "null" ]] && PM_VCODEC=""
+    [[ "$PM_ACODEC" == "null" ]] && PM_ACODEC=""
+    [[ "$PM_CH" == "null" ]] && PM_CH=""
+    [[ "$PM_W" =~ ^[0-9]+ ]] && PM_W="${PM_W%.*}" || PM_W=""
+    [[ "$PM_H" =~ ^[0-9]+ ]] && PM_H="${PM_H%.*}" || PM_H=""
+    [[ "$PM_VBR" =~ ^[0-9]+ ]] && PM_VBR="${PM_VBR%.*}" || PM_VBR=""
+    [[ "$PM_ABR" =~ ^[0-9]+ ]] && PM_ABR="${PM_ABR%.*}" || PM_ABR=""
+    [[ "$PM_SR" =~ ^[0-9]+ ]] && PM_SR="${PM_SR%.*}" || PM_SR=""
+    # fps keeps a fraction — 29.97 is not 30 and a reader who knows the difference is
+    # exactly the reader this line is for — but loses mpv's six-digit tail. printf -v, not a
+    # substitution, for the same no-fork reason as everything else here.
+    if [[ "$PM_FPS" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+        printf -v PM_FPS '%.2f' "$PM_FPS" 2>/dev/null || PM_FPS=""
+        [[ "$PM_FPS" == *.00 ]] && PM_FPS="${PM_FPS%.00}"
+    else
+        PM_FPS=""
+    fi
+    return 0
+}
+
+# bits/sec -> the unit a human reads it in. Integer arithmetic only (bash 3.2 has no floats
+# and this must not fork a bc), so the tenth is taken by division rather than rounded into:
+# 2_499_000 reads 2.4 Mbps, not 2.5. That is the honest direction for an estimate — it never
+# claims a bitrate the stream did not carry.
+FMT_BR=""
+fmt_bitrate() {
+    local n=$1 k
+    FMT_BR=""
+    [[ "$n" =~ ^[0-9]+$ ]] || return 0
+    ((n > 0)) || return 0
+    # Round to kbps FIRST, then pick the unit off the rounded number. Testing the raw value
+    # against 1000000 instead printed "1000 kbps" for 999_999 — a reading that rounds up
+    # into the next unit has to change unit with it, or the one number the scale exists to
+    # keep short is the one that gets four digits.
+    k=$(((n + 500) / 1000))
+    if ((k >= 1000)); then
+        FMT_BR="$((k / 1000)).$((k / 100 % 10)) Mbps"
+    else
+        FMT_BR="$k kbps"
+    fi
+    return 0
+}
+
+# Hz -> kHz, one decimal only when there is one to show: 48000 is "48 kHz" and 44100 is
+# "44.1 kHz". A trailing ".0" on the common case is a digit that carries no information and
+# costs a cell on the narrowest surface in the suite.
+FMT_HZ=""
+fmt_hz() {
+    local n=$1 frac
+    FMT_HZ=""
+    [[ "$n" =~ ^[0-9]+$ ]] || return 0
+    ((n > 0)) || return 0
+    frac=$((n % 1000 / 100))
+    if ((frac)); then
+        FMT_HZ="$((n / 1000)).$frac kHz"
+    else
+        FMT_HZ="$((n / 1000)) kHz"
+    fi
+    return 0
+}
+
+# The media facts as ONE line, video part then audio part, each dropped entirely when the
+# player has nothing to say about it. Empty when there is nothing at all to report, which is
+# what lets the caller decide between printing a line and not spending one.
+#
+# Ordered video-first because that is the order they are asked about: a video stream's codec
+# and geometry are what a viewer checks, and on an audio-only track the video half simply is
+# not there and the line opens on the codec.
+MEDIA_LINE=""
+media_line() {
+    local v="" a=""
+    MEDIA_LINE=""
+    if [[ -n "$PM_VCODEC" ]]; then
+        v="$PM_VCODEC"
+        [[ -n "$PM_W" && -n "$PM_H" ]] && v="$v ${PM_W}x${PM_H}"
+        [[ -n "$PM_FPS" ]] && v="$v ${PM_FPS}fps"
+        fmt_bitrate "$PM_VBR"
+        [[ -n "$FMT_BR" ]] && v="$v $FMT_BR"
+    fi
+    if [[ -n "$PM_ACODEC" ]]; then
+        a="$PM_ACODEC"
+        fmt_bitrate "$PM_ABR"
+        [[ -n "$FMT_BR" ]] && a="$a $FMT_BR"
+        fmt_hz "$PM_SR"
+        [[ -n "$FMT_HZ" ]] && a="$a $FMT_HZ"
+        [[ -n "$PM_CH" ]] && a="$a $PM_CH"
+    fi
+    if [[ -n "$v" && -n "$a" ]]; then
+        MEDIA_LINE="$v $GL_SEP $a"
+    else
+        MEDIA_LINE="$v$a"
+    fi
+    return 0
+}
+
 fetch_play_times() {
     fetch_play_res
     PT_CUR="--:--"
@@ -2581,6 +2708,10 @@ fetch_play_times() {
     PT_PCT=""
     PT_POS_SEC=""
     PT_DUR_SEC=""
+    # The media facts reset with the clock and for the same reason: a tick that could not
+    # reach the socket must not leave the PREVIOUS reading on screen as if it were current.
+    PM_VCODEC=""; PM_W=""; PM_H=""; PM_FPS=""; PM_VBR=""
+    PM_ACODEC=""; PM_ABR=""; PM_SR=""; PM_CH=""
     local live=0
     if ((CURRENT_PLAY_IS_LIVE)); then
         live=1
@@ -2595,20 +2726,44 @@ fetch_play_times() {
     # clock describes the broadcast, so its position/duration would be fetched to discard.
     local raw_pos="null" raw_dur="null" raw_pct="null" raw_pause="null" raw_title="null"
     local rid val got=0 seen=0
-    local want=5
+    local want=14
+    # Requests 6-14 are the MEDIA FACTS — what is actually decoding, which is the half of a
+    # track the search envelope can never carry: a flat search row has no format list at all
+    # (verified against yt-dlp's own entry keys), so codec, geometry and bitrate exist only
+    # once a player has one open. They ride THIS batch rather than a stride of their own
+    # because the connection, the nc fork and the jq are all already paid for here — nine
+    # more get_property lines down a pipe that is running is the cheapest read in the file,
+    # and cheaper than the cache-invalidation a "fetch once per track" version would need
+    # (the tripwire below already exists for the title, and a second consumer of it is a
+    # second thing to keep correct). Fetching them every tick also keeps `audio-bitrate`
+    # honest: mpv computes it from recently decoded packets, so it is a MOVING estimate and
+    # is legitimately unavailable in the first seconds of a track.
     local -a reqs=(
         '{"command":["get_property","time-pos"],"request_id":1}'
         '{"command":["get_property","duration"],"request_id":2}'
         '{"command":["get_property","percent-pos"],"request_id":3}'
         '{"command":["get_property","pause"],"request_id":4}'
         '{"command":["get_property","media-title"],"request_id":5}'
+        '{"command":["get_property","video-format"],"request_id":6}'
+        '{"command":["get_property","width"],"request_id":7}'
+        '{"command":["get_property","height"],"request_id":8}'
+        '{"command":["get_property","container-fps"],"request_id":9}'
+        '{"command":["get_property","video-bitrate"],"request_id":10}'
+        '{"command":["get_property","audio-codec-name"],"request_id":11}'
+        '{"command":["get_property","audio-bitrate"],"request_id":12}'
+        '{"command":["get_property","audio-params/samplerate"],"request_id":13}'
+        '{"command":["get_property","audio-params/hr-channels"],"request_id":14}'
     )
     # media-title is asked for on the live path too: what changes under a live stream is not
     # its clock, it is WHICH TRACK the queue is on, and that is exactly what this detects.
+    # The media facts stay on the live path for the same reason in reverse: what a live
+    # stream loses is its CLOCK, not its codec, and "what am I actually receiving" is if
+    # anything the more useful question on a broadcast than on a file.
     if ((live)); then
-        want=2
+        want=11
         reqs=('{"command":["get_property","pause"],"request_id":4}'
-              '{"command":["get_property","media-title"],"request_id":5}')
+              '{"command":["get_property","media-title"],"request_id":5}'
+              "${reqs[@]:5}")
     fi
     while IFS="$US" read -r rid val; do
         seen=$((seen + 1))
@@ -2618,9 +2773,18 @@ fetch_play_times() {
         3) raw_pct="$val"; got=$((got + 1)) ;;
         4) raw_pause="$val"; got=$((got + 1)) ;;
         5) raw_title="$val"; got=$((got + 1)) ;;
+        6) PM_VCODEC="$val"; got=$((got + 1)) ;;
+        7) PM_W="$val"; got=$((got + 1)) ;;
+        8) PM_H="$val"; got=$((got + 1)) ;;
+        9) PM_FPS="$val"; got=$((got + 1)) ;;
+        10) PM_VBR="$val"; got=$((got + 1)) ;;
+        11) PM_ACODEC="$val"; got=$((got + 1)) ;;
+        12) PM_ABR="$val"; got=$((got + 1)) ;;
+        13) PM_SR="$val"; got=$((got + 1)) ;;
+        14) PM_CH="$val"; got=$((got + 1)) ;;
         *) ;;                                  # an async event; not one of ours
         esac
-        ((got >= want || seen >= 12)) && break
+        ((got >= want || seen >= 30)) && break
     done < <(printf '%s\n' "${reqs[@]}" |
         "${NC_UNIX[@]}" "$CURRENT_PLAY_SOCK" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null)
@@ -2635,6 +2799,7 @@ fetch_play_times() {
     if [[ -n "$raw_title" && "$raw_title" != "null" && "$raw_title" != "$CURRENT_PLAY_MPV_TITLE" ]]; then
         refresh_player_record "$raw_title"
     fi
+    pm_normalise
     # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
     if ((live)); then return 0; fi
     if [[ -n "$raw_pos" && "$raw_pos" != "null" ]]; then
@@ -2902,12 +3067,17 @@ chapter_span() {
     return 0
 }
 
-# print_details <width> <index> — the details section under the list: a rail, the FULL
-# title wrapped over as many lines as it needs, and one dim metadata line. This is the half
-# of a result a single row cannot show: the rows spend their width on titles and a duration
-# rail, and the full title, channel, view count and video id live here for the SELECTED row
-# only. Recovering the full title is the reason the block exists — it is the one field a row
-# can never show whole — so it is wrapped, not elided, and takes the height it needs.
+# print_details <width> <index> — the details section under the list, for the SELECTED row
+# only: one dim metadata line (source position, channel, duration, views, id), then — when
+# this row is the one PLAYING — what is actually decoding, then up to two lines of
+# description. This is the half of a result a single row cannot show: the rows spend their
+# width on titles and a duration rail, and everything else lives here.
+#
+# The three lines answer three different questions, in the order a reader asks them: WHAT is
+# this (the meta line, from the search envelope), HOW is it reaching me (the media line,
+# from the mpv socket), and WHAT IS IT ABOUT (the description, from the same envelope as the
+# first). Only the middle one can be absent on a row that has everything else, because it is
+# the only one whose source is a running process rather than a fetched record.
 #
 # DETAIL_MEASURE=1 runs the identical code path and reports DETAIL_LINES without drawing,
 # mirroring HINT_MEASURE / print_hints. The measure mode is not a convenience: the block
@@ -2983,6 +3153,36 @@ print_details() {
     truncate_disp "$meta" $((width - 2))
     ((DETAIL_MEASURE)) || printf '  %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     DETAIL_LINES=$((DETAIL_LINES + 1))
+    # WHAT IS ACTUALLY DECODING — codec, geometry, bitrate, sample rate — and it prints for
+    # the PLAYING row only, because that is the only row it can be true of. Every fact on
+    # this line comes off the mpv socket (fetch_play_times' batch), so it exists exactly
+    # while a player has this item open; under any other row it would be a caption from a
+    # different track, which is the failure the meta line's own rules keep avoiding.
+    #
+    # Not from the engine, and that is the point. The player's record does carry `selected`
+    # ("251 - audio only (medium)") — but that is the format string the engine ASKED FOR,
+    # the request rather than the answer, and it says nothing about what the decoder ended
+    # up with. mpv is the only party that knows, and it was already being asked.
+    #
+    # THE ROW IS MATCHED BY URL, not by index — the same normaliser and the same {engine,
+    # url} pair chapter_span uses, for the same reasons (a re-sort, a filter or a page turn
+    # moves the index and not the url). handle_key drops a `t=` segment, so a CHAPTER row
+    # matches the item the player holds without a case of its own: the whole item is what is
+    # decoding, whichever chapter the playhead is inside.
+    if [[ -n "$CURRENT_PLAY_ID" && -n "$CURRENT_PLAY_URL" &&
+          "${R_ENGINE[$i]:-}" == "$CURRENT_PLAY_ENGINE" ]]; then
+        local pkey
+        handle_key "$CURRENT_PLAY_URL"; pkey="$HANDLE_KEY"
+        handle_key "${urls[$i]}"
+        if [[ -n "$pkey" && "$pkey" == "$HANDLE_KEY" ]]; then
+            media_line
+            if [[ -n "$MEDIA_LINE" ]]; then
+                truncate_disp "$MEDIA_LINE" $((width - 2))
+                ((DETAIL_MEASURE)) || printf '  %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+                DETAIL_LINES=$((DETAIL_LINES + 1))
+            fi
+        fi
+    fi
     # THE DESCRIPTION, and it is the only line here that is not already on the row in some
     # form. It arrives with the search envelope — both engines had it in the response they
     # were already making and threw it away — so it costs no request: the block used to
@@ -3198,6 +3398,12 @@ clear_play_state() {
     RES_CPU=""
     RES_MEM=""
     RES_TICK=0
+    # And the media facts, third in the same argument: a codec line under a row nothing is
+    # playing describes a decoder that has exited. fetch_play_times resets them per tick too,
+    # but only while it still runs — a stopped player stops the ticks, so the clear has to be
+    # here as well or the last reading outlives the process it came from.
+    PM_VCODEC=""; PM_W=""; PM_H=""; PM_FPS=""; PM_VBR=""
+    PM_ACODEC=""; PM_ABR=""; PM_SR=""; PM_CH=""
 }
 
 # The detached player owns its own lifecycle, so uting only learns of its death by asking.
