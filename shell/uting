@@ -1153,6 +1153,66 @@ init_colors() {
         set_theme
     fi
 }
+
+# ── 音源胶囊：屏上唯一一处颜色不属于主题的地方 ────────────────────────────────────────
+# 状态行第一段过去是裸的 `ne` / `yt` / `bili` —— 决定每一个其他段落含义的那一段，
+# 却和它右边的计数、排序、模式印成同一个灰。胶囊给它一格底色与左右各半格空气：
+# 一个词读成一个物件，而不是一串短语的第一个词。
+#
+# **字仍然是 `ne` 而不是 `NetEase`。** 那个 token 是 `--engine` 收的词、也是行按自己的
+# `engine` 字段路由时用的词；屏上换成品牌全名，等于让读者在两套词汇之间做翻译，而它换来的
+# 只是宽度：状态段从 39 格涨到 46，行内右贴的门槛（`st_w + 29`）从 68 列推到 75 列，
+# 于是一台 72 列的终端从此多花一行 chrome、少一行结果。带底色的 token 是 41 格 / 70 列。
+#
+# **底色是身份，不是状态 —— 这就是它与被删掉的 `C_GREEN`/`C_YELLOW` 的区别。**
+# 「一次运行只说一套主题、色相只有一个强调色」那条正本（本文档「chrome 一次运行只说一套主题」）
+# 管的是**状态**色相：播放绿、暂停黄和强调色抢的是同一份工作（"这一处要你看"），
+# 所以它们退场、由字形接手。品牌底色答的是另一个问题（"这些行是谁家的"），
+# 它自带前景与背景两端、不与任何 chrome 元素争同一条视线，也从不随主题变 ——
+# 它是外部服务的标识，不是我们调色板的一员。这是一个**例外**，按例外记账。
+#
+# 三档，按各自的主题已经许诺过的东西发：
+#   mono      不发底色。mono 的承诺就是零色相，一块红疤是在替用户改他刚做的选择。
+#   minimal   ANSI-16 的底色索引（41/45）。minimal 的性质是"红是什么由用户终端说"，
+#             一个索引正好是这句话；它刻意不发 RGB，所以在真彩终端上也走这一档。
+#   其余主题  真彩下发品牌自己的 RGB，否则退回同一个 ANSI-16 索引 —— 与强调色同一条阶梯。
+#
+# **未知引擎没有胶囊，退回裸 token。** 引擎是 `scan_engines` 探测出来的，这个文件不持有源
+# 清单（本文档「引擎发现」）；一张写死的品牌表只能认识它写下的那几个，所以第四个引擎丢进来
+# 时必须是"没有底色"，而不是"随便给一个颜色"。混源歌单（`PLAYLIST_ENGINES` 是
+# `unique | join("+")`，`ne+yt`）走同一条出口：一块底色压在两个品牌上是一句假话。
+#
+# 段落是 PLAIN TEXT 加一个颜色，**不是一串带转义的字符串** —— `disp_w` 的契约是"量纯文本，
+# 颜色在打印时施加"，而状态段两条路径（行内右贴那一串、`print_hints` 那条回退行）都要量它。
+# 把 SGR 焙进段落里，那 20 个字节会被算成 20 格，右贴的 CHA 就落错列。所以颜色走
+# `PILL_MARK` 这条自己的通道，两条路径共用同一份纯文本。
+#
+# **为什么不做成 `HINT_PILL` 这样一个按调用生效的全局**（`HINT_SEP` / `HINT_KEY_COLOR` 的形状）：
+# 那样的全局只能表达"第一个 item 带底色"，也就是把底色钉在一个**位置**上。这个文件在同一个
+# 打包器的另一头已经拒绝过这件事 —— `nav_items` 那段注释写着"按 index 往成品数组里插，
+# index 就是位置，于是每加一个键都会挪动它"。底色是**那一个段落自己的**属性，
+# 所以它跟着段落走，不跟着调用走。
+PILL_MARK=$'\x1f'
+SOURCE_SEG=""
+source_seg() {
+    local eng=$1 rgb="" a16=""
+    SOURCE_SEG="$eng"
+    ((COLORS_ON)) || return 0
+    [[ "$THEME" == "mono" ]] && return 0
+    case "$eng" in
+    yt)   rgb='190;30;30';   a16=41 ;;
+    bili) rgb='230;100;140'; a16=45 ;;
+    ne)   rgb='180;20;20';   a16=41 ;;
+    *) return 0 ;;
+    esac
+    local sgr
+    if ((COLORTERM_TC)) && [[ "$THEME" != "minimal" ]]; then
+        printf -v sgr '\033[48;2;%sm\033[38;2;255;255;255m' "$rgb"
+    else
+        printf -v sgr '\033[%d;97m' "$a16"
+    fi
+    SOURCE_SEG="${PILL_MARK}${sgr}${PILL_MARK} $eng "
+}
 init_sync() {
     case "${YT_SYNC:-auto}" in
     0 | off) SYNC_ON=0 ;;
@@ -2536,7 +2596,7 @@ print_hints() {
     local width=$1 first_p=$2 cont_p=$3
     shift 3
     HINT_LINES=0
-    local item key label out="" out_w=0 iw ind_w first=1
+    local item key label pill out="" out_w=0 iw ind_w first=1
     local kc=${HINT_KEY_COLOR:-$C_BOLD}
     local sep=${HINT_SEP:-"  "} sep_w
     disp_w "$sep"
@@ -2545,6 +2605,17 @@ print_hints() {
     ind_w=$DISP_W
     out_w=$ind_w
     for item in "$@"; do
+        # A PILL item carries its own ground on a channel of its own: PILL_MARK, the SGR,
+        # PILL_MARK, then the text. The text is what gets measured — the whole reason the
+        # colour is not simply baked into the string (source_seg's note). A pill is always a
+        # plain field, never a key/label pair: the ground is what makes it a thing, and a
+        # label hanging off a coloured box reads as a caption on a button.
+        pill=""
+        if [[ "$item" == "$PILL_MARK"* ]]; then
+            item=${item#"$PILL_MARK"}
+            pill=${item%%"$PILL_MARK"*}
+            item=${item#*"$PILL_MARK"}
+        fi
         key=${item%%$'\t'*}
         label=""
         [[ "$item" == *$'\t'* ]] && label=${item#*$'\t'}
@@ -2571,7 +2642,13 @@ print_hints() {
             out+="${C_DIM}${sep}${C_RESET}"
             out_w=$((out_w + sep_w))
         fi
-        if [[ -n "$label" ]]; then
+        if [[ -n "$pill" ]]; then
+            # C_ROW_END, not C_RESET, on BOTH ends: a ground has to be closed with a real
+            # \033[0m (C_RESET is the empty string with colours off), and it has to be
+            # OPENED against one too — the caller wraps this line in C_DIM, and dim applied
+            # to the pill's own white would print grey text on a brand ground.
+            out+="${C_ROW_END}${pill}${key}${C_ROW_END}"
+        elif [[ -n "$label" ]]; then
             out+="${kc}${key}${C_RESET} ${C_DIM}${label}${C_RESET}"
         else
             out+="${kc}${key}${C_RESET}"
@@ -4019,7 +4096,8 @@ display_list_menu() {
     # The source leads, for the reason `engine=` did: with more than one installed it is the
     # field that changes what every other segment means.
     if stored_rows; then
-        st_items=("${PLAYLIST_ENGINES:-?}" "$NUM_ENTRIES $st_unit")
+        source_seg "${PLAYLIST_ENGINES:-?}"
+        st_items=("$SOURCE_SEG" "$NUM_ENTRIES $st_unit")
         # P8, and the only screen it can be said on: the search row a part list was opened
         # from prints the COLLECTION's duration — the only number that endpoint returns —
         # while Enter on that row plays part 1. Neither number is wrong, and nothing on the
@@ -4034,7 +4112,8 @@ display_list_menu() {
         view_count) st_sort="$S_SORT_VIEWS" ;;
         duration) st_sort="$S_SORT_DUR" ;;
         esac
-        st_items=("$ENGINE" "$NUM_ENTRIES $st_unit" "$st_sort")
+        source_seg "$ENGINE"
+        st_items=("$SOURCE_SEG" "$NUM_ENTRIES $st_unit" "$st_sort")
         # The auth segment sits next to the source because it qualifies it: same source,
         # different capability depending on whether playback will send cookies. It says
         # WHETHER, not which browser — "chrome" as a bare segment names a program, not a
@@ -4101,11 +4180,35 @@ display_list_menu() {
     # It falls back to a line of its own rather than eliding: a status the reader has to
     # guess at is worse than one more chrome line, and print_hints already knows how to pack
     # it. The floor is LAYOUT_MIN_FIELD cells of query.
-    local st_line="" st_w=0 st_inline=0 t_head_w q_room
+    # TWO strings out of one pass: the one that gets PRINTED (a pill carries its ground) and
+    # the one that gets MEASURED (plain text, the only thing disp_w promises to be right
+    # about). Building them together is what keeps them from disagreeing about the
+    # separators; measuring the printed one instead would count ~20 bytes of SGR as ~20
+    # cells and land the right-flush CHA that many columns off.
+    local st_line="" st_plain="" st_w=0 st_inline=0 t_head_w q_room st_pill
     for p in ${st_items[@]+"${st_items[@]}"}; do
-        if [[ -n "$st_line" ]]; then st_line="$st_line $GL_SEP $p"; else st_line="$p"; fi
+        st_pill=""
+        if [[ "$p" == "$PILL_MARK"* ]]; then
+            p=${p#"$PILL_MARK"}
+            st_pill=${p%%"$PILL_MARK"*}
+            p=${p#*"$PILL_MARK"}
+        fi
+        if [[ -n "$st_plain" ]]; then
+            st_line="$st_line $GL_SEP "
+            st_plain="$st_plain $GL_SEP "
+        fi
+        st_plain="$st_plain$p"
+        # The dim is re-armed after the ground closes: the printf below opens the whole
+        # status with one C_DIM, and the pill's own \033[0m ends that run as well as its
+        # ground. C_ROW_END on the way IN for the mirror reason — dim over the pill's white
+        # is grey text on a brand ground.
+        if [[ -n "$st_pill" ]]; then
+            st_line="$st_line${C_ROW_END}${st_pill}${p}${C_ROW_END}${C_DIM}"
+        else
+            st_line="$st_line$p"
+        fi
     done
-    disp_w "$st_line"; st_w=$DISP_W
+    disp_w "$st_plain"; st_w=$DISP_W
     local head_field="query"
     stored_rows && head_field="$LIST_SOURCE"
     disp_w "${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="; t_head_w=$DISP_W
