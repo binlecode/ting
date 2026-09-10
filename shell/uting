@@ -1738,6 +1738,12 @@ GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 # the rest of the chrome under YT_AMBIG_WIDE; they are named rather than inlined for the
 # reason every other glyph here is — YT_ASCII=1 has to be able to reach them.
 GL_GE="≥"; GL_LE="≤"
+# The position readout's brackets. Lenticular rather than ASCII square brackets because this
+# badge sits directly against a title that is usually CJK, and a Wide bracket is the pair that
+# does not read as punctuation belonging to the title. They are East-Asian WIDE (U+3010/U+3011),
+# not Ambiguous — two cells in every terminal, under YT_AMBIG_WIDE or not — so they need no
+# CW table entry: char_w's default of 2 is already exact for them.
+GL_TIME_L="【"; GL_TIME_R="】"
 # The resource readout's two labels (UT_RESOURCE): geometric squares from the same family as
 # the rails' stroke language — ▣ an abstract chip, ▤ a filled "storage cell". Both are
 # East-Asian Ambiguous, so they are tabled in CW_AMBIG below, not hardcoded as one cell.
@@ -1766,6 +1772,7 @@ init_glyphs() {
         GL_BAR_THUMB="#"; GL_BAR_TRACK="|"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_GE=">="; GL_LE="<="
+        GL_TIME_L="["; GL_TIME_R="]"
         GL_CPU="cpu"; GL_RAM="ram"
         GL_SPIN=("|" "/" "-" "\\")
     fi
@@ -4272,7 +4279,16 @@ display_list_menu() {
         local b_head="$p_icon $p_label: "
         # The tail is a POSITION readout, not a duration: elapsed / total, the same pairing
         # the bar on the next line draws, so the two cannot disagree about where the track
-        # is — one says how much, the other says where. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
+        # is — one says how much, the other says where.
+        #
+        # It is BRACKETED and pressed against the title rather than floated off it behind a
+        # GL_SEP. The banner is one row of four fields separated by that same dot, and while
+        # the readout was one of them the eye had to count dots to find out which segment was
+        # the clock; a bracket pair says "this belongs to the thing on my left" in one glyph
+        # and takes the dot off the row. It also buys a cell: the bracketed form measures 15
+        # against the old 16, so the elision budget below gets slightly MORE title, not less.
+        # This is what frees the bar on the next line to run edge to edge with no numbers
+        # parked at its ends. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
         # second while the list is up — so the banner costs no IPC of its own and is at most
         # one second stale, the resolution it is drawn at anyway.
         #
@@ -4283,15 +4299,18 @@ display_list_menu() {
         # never changes SHAPE a second into playback — it is short_dur and fmt_sec spelling
         # the same number (see CURRENT_PLAY_DURATION's note in play_selected).
         #
-        # Live keeps its own form (elapsed GL_SEP LIVE, no slash): mpv's clock
+        # Live keeps its own form (elapsed, a space, GL_LIVE — no slash): mpv's clock
         # describes the broadcast, not this listen, so there is no total to divide by — the
-        # same fact fetch_play_times encodes by returning early for live.
-        local b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
+        # same fact fetch_play_times encodes by returning early for live, and by seeding
+        # PT_TOTAL with GL_LIVE rather than a number. The separator inside the brackets goes
+        # with it: "00:42 / ● LIVE" reads as a ratio, which is the one thing the pair is not,
+        # and the badge is short enough that a space alone divides it.
+        local b_tail=" ${GL_TIME_L}${CURRENT_PLAY_DURATION}${GL_TIME_R}"
         if [[ -n "$PT_CUR" ]]; then
             if ((CURRENT_PLAY_IS_LIVE)); then
-                b_tail=" $GL_SEP $PT_CUR $GL_SEP ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
+                b_tail=" ${GL_TIME_L}${PT_CUR} ${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
             else
-                b_tail=" $GL_SEP $PT_CUR / ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
+                b_tail=" ${GL_TIME_L}${PT_CUR}/${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
             fi
         fi
         # The player's footprint (UT_RESOURCE): the pair fetch_play_res cached on the same
@@ -4362,16 +4381,27 @@ display_list_menu() {
     # ── The progress bar, on a line of its own ──────────────────────────────────────────
     # It used to BE the boundary rail under the key block: one line doing two jobs, full
     # width because a boundary is, and six lines away from the banner whose readout it drew.
-    # Now it is a bar and nothing else, directly under the banner and indented into the same
-    # two-cell gutter the rows use, so banner and bar read as one block. Width is
-    # right_edge - 2: two cells of indent, and then the same right column the duration
-    # rail lands on, so the two edges cannot drift apart (the plan's I-1).
+    # Now it is a bar AND the one horizontal rule on the screen — which is why it is the only
+    # line here that does not respect the row gutter. It used to be indented two cells and cut
+    # to right_edge so its ends lined up with the duration rail; that made it read as another
+    # FIELD in the list's column grid, one more thing measured against the same margins. A
+    # divider is not a field. It runs from column 0 straight past the scrollbar gutter, so the
+    # band above it and the rows below it are separated by a line that is visibly wider than
+    # either, and no reader has to decide whether its ends mean something.
+    #
+    # nav_cols - 1, not nav_cols: writing the terminal's LAST column leaves the cursor in the
+    # deferred-wrap state, and a terminal that resolves that as a real newline spends a row the
+    # reflow never charged for — the same class of fault as a field that measures one cell
+    # over. One cell of air on the right costs nothing visually and cannot wrap.
+    #
+    # This is also what pays for the badge on the banner above: with elapsed/total bracketed up
+    # there, the rail carries no numbers at either end and is pure track for its whole length.
     #
     # The first second draws 0% rather than nothing. PT_PCT is empty until the first tick
     # lands, and a line that appeared a second after Enter would push every row down by one
     # at exactly the moment the user is reading them.
     if ((bar_h)); then
-        local bar_w=$((right_edge - 2)) bar_a="" bar_b=""
+        local bar_w=$((nav_cols - 1)) bar_a="" bar_b=""
         # In a chapter list the bar carries a span as well: where the chapter UNDER THE
         # CURSOR sits in the whole item, and how long it is. The cursor's, not the playing
         # one's — the playing chapter is already said by its own row, and a bar repeating it
@@ -4384,7 +4414,7 @@ display_list_menu() {
             bar_b=$(( CHAP_END_SEC * bar_w / PT_DUR_SEC - 1 ))
         fi
         render_prog_bar "${PT_PCT:-0}" "$bar_w" "$bar_a" "$bar_b"
-        printf '  %s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
+        printf '%s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
         chrome_h=$((chrome_h + 1))
     fi
 
