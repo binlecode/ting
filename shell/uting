@@ -2173,9 +2173,11 @@ LAYOUT_MIN=24
 LAYOUT_MIN_FIELD=12
 
 # An UNDROPPABLE text budget's floor: what such a budget is clamped UP to, so a pane too
-# narrow to hold everything beside the text elides the text rather than wrapping the row. It
-# is also what truncate_disp's contract leans on — no caller reaches its budget-cannot-hold-
-# the-mark branch, because every caller clamps to at least this.
+# narrow to hold everything beside the text elides the text rather than wrapping the row.
+# Four sites spend it — three clamps on core titles (result row, confirm target, playlist
+# pick), and the banner's final drop rung for key tail. It is also what truncate_disp's
+# contract leans on — no caller reaches its budget-cannot-hold-the-mark branch, because
+# every caller clamps to at least this.
 LAYOUT_MIN_BUDGET=8
 
 # The cursor's resting row, charged by every budget that ends in rows: filling the last line
@@ -4331,7 +4333,7 @@ display_list_menu() {
             b_res=""; res_w=0
             title_room=$((nav_cols - head_w - tail_w))
         fi
-        if ((title_room < 8)); then
+        if ((title_room < LAYOUT_MIN_BUDGET)); then
             b_tail=""; tail_w=0
             title_room=$((nav_cols - head_w))
         fi
@@ -4720,7 +4722,7 @@ display_list_menu() {
             # CONSTRUCTION — the jump below only repairs measurement drift, it does not
             # license overflow.
             row_w=$(( right_edge - pfx_w - 2 - rail_w ))
-            ((row_w < 12)) && row_w=12
+            ((row_w < LAYOUT_MIN_BUDGET)) && row_w=$LAYOUT_MIN_BUDGET
             truncate_disp "${R_TITLE[$i]}" "$row_w"
             disp="$TRUNC_TEXT"
             # The rail is placed with CHA (\033[<n>G, cursor horizontal absolute), NOT with
