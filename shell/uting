@@ -725,6 +725,12 @@ COLOR_MODE="auto"
 THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
 BG_MODE="auto"           # YT_BG override: auto | light | dark (accent hue selection)
 BG="dark"
+# The background's ACTUAL colour, when the terminal was willing to say (detect_bg's OSC 11
+# reply). Empty is the normal case, not an error: YT_BG=light|dark answers before the query
+# runs, $COLORFGBG answers with a verdict and no colour, and tmux and dumb terminals are not
+# asked at all. Everything downstream must work without it — it sharpens an answer, it does
+# not enable one.
+BG_R=""; BG_G=""; BG_B=""
 [[ -n "${YT_THEME:-}" ]] && THEME="$YT_THEME"
 [[ -n "${YT_BG:-}" ]] && BG_MODE="$YT_BG"
 IMAGE_MODE="${UT_IMAGE:-auto}"   # auto | on | off — the focused row's cover art
@@ -958,10 +964,13 @@ resolve_nc_unix || die "requires a unix-socket netcat: 'nc' with -U support, or 
 # --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
 # off under tmux (see display_menu).
 C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''
-# The playing row's ground, and it is NOT part of the palette above: reverse video is an
-# ATTRIBUTE, not a hue, so it is set unconditionally and survives --color never / NO_COLOR /
-# a pipe. A terminal with colour turned off still has to be able to say which row is
-# playing, and a screen that cannot is worse than one without an accent.
+# The playing row's ground. Reverse video is an ATTRIBUTE, not a hue, so THIS value is set
+# unconditionally and survives --color never / NO_COLOR / a pipe: a terminal with colour
+# turned off still has to be able to say which row is playing, and a screen that cannot is
+# worse than one without an accent. It is the FLOOR, not the finish — set_theme replaces it
+# with a tint of the accent wherever a tint can actually be drawn (row_hl_from_accent), and
+# resets it back to this on every theme switch so a cycle out of a 24-bit theme cannot leave
+# a ground behind that the new theme never asked for.
 #
 # C_ROW_END is its own reset for the same reason: C_RESET is the EMPTY STRING when colours
 # are off, so ending the row with it would leave the ground running to the bottom of the
@@ -990,6 +999,53 @@ accent_minimal() {
         C_CYAN=$'\033[36m'; C_MARK=$'\033[1;36m'
     fi
 }
+# The playing row's ground, DERIVED from the accent rather than declared beside it. The
+# palette has exactly one colour in it, and that is the whole design (ARCHITECTURE.md「人机面」);
+# a ground written as its own constant would mean a second colour per theme per background —
+# fourteen values to keep in step with seven, and nothing at all for `custom`, whose accent
+# only exists in the user's config. Mixing is the only form that answers all three.
+#
+# WHY REVERSE VIDEO WASN'T ENOUGH. It is the highest-contrast mark a terminal can make, which
+# is exactly the complaint: an inverted row is a slab, it flips the text to the background
+# colour, and it is louder than the fact it reports — the playing row is not more important
+# than the row the reader is pointing at. A tint says the same thing at the strength the fact
+# deserves and leaves the text alone. Reverse stays as the floor for terminals that cannot
+# draw a tint at all, where "loud" beats "absent".
+#
+# The mix runs FROM THE BACKGROUND TOWARD THE ACCENT — a short step off the ground the row is
+# already sitting on. Mixing from an assumed black instead is what the first cut did, and two
+# themes came out invisible under it: nord's accent is a desaturated ice blue, so 30% of it is
+# (40,57,62) against nord's own #2e3440 (46,52,64) — the same luminance, a ground you cannot
+# see; gruvbox dark landed within five points of #282828 the same way. A percentage of the
+# accent alone cannot know that, because it never looks at what it is drawn on.
+#
+# So look. detect_bg already ASKS the terminal for its background (OSC 11) and today keeps
+# only the light/dark verdict; BG_R/G/B keep the colour from that same reply, and this mixes
+# against it. Nord becomes (73,94,107) against (46,52,64) — plainly a different ground, still
+# plainly a tint. No new query, no new dependency; the answer was already on the wire.
+#
+# When the terminal did not answer (tmux, dumb, YT_BG forced, $COLORFGBG), the assumed
+# black-or-white is the SAME expression with an assumed background, not a second code path:
+# mixing from black is exactly "k% of the accent", which is where this started.
+#
+# Two constants and not one because the eye is not symmetric about them: dark text on a pale
+# ground shows a tint at a lower mix than pale text on a dark one, so the light rung is
+# gentler. Both are percentages, so `custom` and any theme added later get a ground for free —
+# which is the point, given the palette holds exactly one colour per theme by design.
+ROW_HL_MIX_DARK=30
+ROW_HL_MIX_LIGHT=18
+row_hl_from_accent() {
+    local r=$1 g=$2 b=$3 zr zg zb k
+    if [[ "$BG" == light ]]; then
+        zr=255; zg=255; zb=255; k=$ROW_HL_MIX_LIGHT
+    else
+        zr=0; zg=0; zb=0; k=$ROW_HL_MIX_DARK
+    fi
+    if [[ -n "$BG_R" ]]; then zr=$BG_R; zg=$BG_G; zb=$BG_B; fi
+    printf -v C_ROW_HL '\033[48;2;%d;%d;%dm' \
+        $((zr + (r - zr) * k / 100)) $((zg + (g - zg) * k / 100)) $((zb + (b - zb) * k / 100))
+}
+
 # One accent spec → C_CYAN/C_MARK. Value syntax is config's UT_ACCENT; the spec reaching here
 # has already passed accent_gate, so this parses rather than validates. Split with ANCHORED
 # strips (${v%%…} / ${v#…}) — ${v//…/} is quadratic on bash 3.2 and the portability contract
@@ -1013,6 +1069,7 @@ accent_from_spec() {
         r=$((16#${hex:2:2})); g=$((16#${hex:4:2})); b=$((16#${hex:6:2}))
         printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$r" "$g" "$b"
         printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$r" "$g" "$b"
+        row_hl_from_accent "$r" "$g" "$b"
     elif [[ -n "$idx" ]]; then
         C_CYAN=$'\033['"$idx"m
         C_MARK=$'\033[1;'"$idx"m
@@ -1021,6 +1078,11 @@ accent_from_spec() {
     fi
 }
 set_theme() {
+    # Back to the floor before anything is resolved. The t key re-enters this function on a
+    # live screen, and a theme with no tint of its own (minimal and mono by design, and every
+    # theme at all on a terminal that cannot draw 24-bit) must not inherit the ground the
+    # PREVIOUS theme installed — that would be one theme's colour surviving into another's.
+    C_ROW_HL=$'\033[7m'
     # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
     # same minimalist filter as minimal: ONE signature accent, gray hierarchy for
     # everything else. Hexes are the official palettes; light/dark
@@ -1069,6 +1131,7 @@ set_theme() {
         if ((COLORTERM_TC)); then
             printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
             printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
+            row_hl_from_accent "$acc_r" "$acc_g" "$acc_b"
         else
             C_CYAN=$'\033['"$a16"m
             C_MARK=$'\033[1;'"$a16"m
@@ -1519,6 +1582,11 @@ detect_bg() {
                 if (( ${#gg} == 4 )); then g8=$((g8 / 257)); fi
                 if (( ${#bb} == 4 )); then b8=$((b8 / 257)); fi
                 if ((r8 + g8 + b8 > 384)); then BG=light; else BG=dark; fi  # mid-gray boundary
+                # Keep the colour, not just the verdict. It costs nothing — the query has
+                # already been paid for — and it is the difference between a row ground mixed
+                # against a GUESS at the background and one mixed against the background
+                # (row_hl_from_accent).
+                BG_R=$r8; BG_G=$g8; BG_B=$b8
             fi
         fi
     fi
@@ -1723,12 +1791,26 @@ GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
-# The CURSOR's marker, and it is its own name even though it is the same glyph as GL_PLAY
-# today. They are two different facts — one says "you are pointing here", the other says
-# "the player is playing this" — and now that a row can carry both at once, a single name
-# shared between them would have to be split before either could ever change shape. That
-# split is exactly the coupling this pass exists to remove.
-GL_CURSOR="▶"
+# The CURSOR's marker. It was ▶ — the same glyph as GL_PLAY — and the name was split off
+# first precisely so this could change without touching the player's: they are two different
+# facts ("you are pointing here" versus "the player is playing this") and a row can carry
+# both at once. With one glyph doing both, the overlap row said the same shape twice and the
+# reader had to consult the ground to tell which triangle meant what.
+#
+# A BAR, not an arrow, and the difference is what the mark points AT. A triangle is a
+# pointer: it aims at the first cell of the title, which makes it a decoration on that cell.
+# The cursor is not selecting a cell, it is selecting a ROW — so the mark that says so is a
+# vertical stroke standing beside the whole line, in the accent, the way a margin rule marks
+# a paragraph. It is also quieter: ▶ is a filled triangle competing with the playing row's
+# own ▶ two lines away, and ▎ has no second reading anywhere on the screen.
+#
+# U+258E is East-Asian AMBIGUOUS, so it goes in CW_AMBIG with the rest of the chrome and is
+# worth CW_AMBIG_W cells — NOT in CW_NARROW pinned to one. The block-elements row is split by
+# EAW exactly where the box-drawing row is (U+2580..U+2595 Ambiguous, U+2596..U+259F Neutral,
+# which is why the spinner's quadrants sit in CW_NARROW and this does not). Pinned to one it
+# would measure 1 and draw 2 under YT_AMBIG_WIDE=1 — the `╸` trap, in the one slot whose
+# width every title on the screen is laid out against.
+GL_CURSOR="▎"
 # The scrollbar: thumb and track. BOTH are East-Asian Ambiguous (U+2588, U+2502) — so the
 # gutter is CW_AMBIG_W cells wide, not one, and the width it takes off the rows has to be
 # read from that variable rather than written as 2.
@@ -2253,7 +2335,7 @@ layout_cols() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤█│▎' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -3876,7 +3958,7 @@ load_rows() {
 # List View: result rows + Now-Playing status banner
 display_list_menu() {
     local page=$1 start end i n disp status_extra p row_w rail rail_w iw
-    local pfx_w mark num pi pk pstart gcol gut vis th_len th_top vmax
+    local pfx_w mark mark_w mark_on mark_off num pi pk pstart gcol gut vis th_len th_top vmax
     # One size read per redraw, shared by the banner (title elision), the result rows and the
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
@@ -4647,15 +4729,28 @@ display_list_menu() {
         # literals ("> 1. " / "  1. "), so their width was 4 + <digits> and a page that
         # reached two digits started every 1-digit title one cell left of the rows around it —
         # ragged in the one column the eye scans down. Now the number is right-aligned in a
-        # fixed sub-field of iw - 2 cells (digits of the largest index + 1 for the dot), the
-        # marker slot is a constant 2, and one space separates the field from the title, so
+        # fixed sub-field of iw - mark_w cells (digits of the largest index + 1 for the dot),
+        # the marker slot is mark_w, and one space separates the field from the title, so
         # iw + 1 cells of prefix on every row whatever the page. Width comes from NUM_ENTRIES,
         # not from the page, so it does not move as you page.
-        iw=$(( ${#NUM_ENTRIES} + 3 ))
-        # The prefix's real width: the 2-cell cursor slot, plus the number field and its one
+        #
+        # THE MARKER SLOT IS MEASURED, NOT ASSUMED. It was the literal 2, from when the marker
+        # was ASCII-safe by luck; ▎ is East-Asian Ambiguous, so under YT_AMBIG_WIDE=1 it draws
+        # two cells and a hardcoded slot would start the cursor row's title one cell right of
+        # every other row's — ragged on the one column the eye scans down, and on the single
+        # row the reader is looking at. Asking the width layer costs one disp_w per redraw (a
+        # one-character string, not per row) and is exact in every mode: CW_AMBIG_W + 1 for ▎,
+        # and still 2 for the ASCII ">" under YT_ASCII=1, which a CW_AMBIG_W + 1 written out
+        # by hand would have got wrong. Both prefixes are built from it here, once, so the
+        # filled slot and the empty one cannot disagree about how wide the column is.
+        disp_w "$GL_CURSOR"; mark_w=$((DISP_W + 1))
+        printf -v mark_on '%s%*s' "$GL_CURSOR" $((mark_w - DISP_W)) ''
+        printf -v mark_off '%*s' "$mark_w" ''
+        iw=$(( ${#NUM_ENTRIES} + 1 + mark_w ))
+        # The prefix's real width: the cursor slot, plus the number field and its one
         # separating space only when the numbers are on. One expression, used both to size
         # the title and to lay the prefix out, so the two cannot drift.
-        pfx_w=2
+        pfx_w=$mark_w
         ((ROW_INDEX)) && pfx_w=$((iw + 1))
         # ── The scrollbar, one cell per visible row in the last column ───────────────────
         # It is in BOTH modes, because both have a window and neither had any continuous way
@@ -4773,12 +4868,12 @@ display_list_menu() {
             # gap. Erasing the line before drawing it is the only order that covers a hole the
             # draw itself never touches.
             # ── The prefix, built once for all three forms below ──────────────────────
-            # The cursor slot is a constant 2 cells whether it is filled or not, so the title
+            # The cursor slot is mark_w cells whether it is filled or not, so the title
             # column never moves; the number field is the part that can vanish.
-            mark="  "
-            ((i == selected)) && mark="$GL_CURSOR "
+            mark="$mark_off"
+            ((i == selected)) && mark="$mark_on"
             num=""
-            ((ROW_INDEX)) && printf -v num '%*s ' $((iw - 2)) "$n."
+            ((ROW_INDEX)) && printf -v num '%*s ' $((iw - mark_w)) "$n."
             # ── The PLAYING row: ground first, then the jump ──────────────────────────
             # The order is the whole trick. \033[K after the title, with the reverse
             # attribute already set, is a back-colour erase: it carries the ground across the
