@@ -483,6 +483,22 @@ is_own_host() {
     return 1
 }
 
+# The audio-menu id a container handle carries, or "". A menu is `/audio/am<digits>` and
+# nothing else on this site is, so unlike target_id there is no query-string spelling to fall
+# back to: the prefix is the whole grammar.
+container_id() {
+    local u="${1%%#*}" seg
+    u="${u%%\?*}"
+    u="${u%/}"
+    seg="${u##*/}"
+    case "$u" in
+    */audio/am[0-9]*) ;;
+    *) seg="" ;;
+    esac
+    [[ "$seg" =~ ^am[0-9]+$ ]] || seg=""
+    printf '%s' "${seg#am}"
+}
+
 normalize_target() {
     local t=$1 host
     case "$t" in
@@ -505,10 +521,20 @@ normalize_target() {
             die "'$t' is not a Bilibili handle (expected a BV id, an av id, or a URL)"
         TARGET_URL="https://www.bilibili.com/video/$t"
         ;;
+    am[0-9]*)
+        die "'$t' is an audio menu — use --items to list its tracks"
+        ;;
     *)
         die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
         ;;
     esac
+
+    local menu_id
+    menu_id=$(container_id "$TARGET_URL")
+    if [[ -n "$menu_id" ]]; then
+        die "'$t' is an audio menu — use --items to list its tracks"
+    fi
+
     parse_start_seconds "$TARGET_URL"
 }
 
@@ -584,22 +610,6 @@ target_id() {
         [[ "$seg" =~ ^(BV[A-Za-z0-9]{10}|av[0-9]+)$ ]] || seg=""
     fi
     printf '%s' "$seg"
-}
-
-# The audio-menu id a container handle carries, or "". A menu is `/audio/am<digits>` and
-# nothing else on this site is, so unlike target_id there is no query-string spelling to fall
-# back to: the prefix is the whole grammar.
-container_id() {
-    local u="${1%%#*}" seg
-    u="${u%%\?*}"
-    u="${u%/}"
-    seg="${u##*/}"
-    case "$u" in
-    */audio/am[0-9]*) ;;
-    *) seg="" ;;
-    esac
-    [[ "$seg" =~ ^am[0-9]+$ ]] || seg=""
-    printf '%s' "${seg#am}"
 }
 
 # --items' OWN handle grammar, BESIDE normalize_target rather than inside it. The two answer

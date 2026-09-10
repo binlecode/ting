@@ -2805,6 +2805,19 @@ if ((DETACH)) && ((! IS_HANDLE)); then
     die "--detach requires a video id or URL"
 fi
 
+# Positional arguments belong to a new playback launch; no lifecycle or control verb accepts
+# them. Reject stray arguments early rather than silently ignoring them — a caller typing
+# `ut-play --status -- <player-id>` or `ut-play --stop -- <player-id>` has the wrong syntax.
+if [[ -n "$ACTION" ]] && [[ "$QUERY" == *[![:space:]]* ]]; then
+    if [[ "$ACTION" == "status" ]]; then
+        die "--status takes no positional arguments (to query detached players, run 'ut-play --status [-j]')"
+    elif [[ "$ACTION" == "enqueue" ]]; then
+        die "--enqueue takes its items from stdin, not from the command line"
+    else
+        die "$ACTION_FLAG takes no positional arguments (to address a player, use --id ID)"
+    fi
+fi
+
 # A bare invocation (no handle, no lifecycle action) is a usage error (ARCHITECTURE.md「调用形状」). Report it before
 # the heavier mpv dependency check so the message is about the missing input, not a missing
 # player. Searching lives in yt-search; interactive browsing in uting.

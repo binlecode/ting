@@ -112,6 +112,7 @@ yt-resolve  --auth -j                              # 已证 · cookie 决策：�
 | 句柄属于**别的**站点 | host allowlist：一个引擎一个站，否则 `engine` 字段会说谎 |
 | `bili-resolve --transcript` / `ne-resolve --parts` | 能力靠「没有那个动词」声明 |
 | `bili-resolve --items -- BV…` / `yt-resolve --items -- <11 位 id>` | 一个单曲句柄不是一个容器 |
+| `bili-resolve -- <audio/am URL 或 am 裸号>` | 歌单不是单曲，流解析与元数据动词拒收并指路 `--items` |
 | `ne-resolve --sub-lang` | 一首歌一条歌词，没有可挑的东西（「字幕」） |
 | `ne-resolve -- <非 song 路径的本站 URL>` | 这个站每一种资源都是 `?id=N`，只读 query 会把 `/artist?id=6452` 解成**歌曲** 6452 |
 
@@ -651,6 +652,10 @@ VIP 专辑导进歌单就是一排 30 秒试听，等于把搜索端已经挡掉
 门放行这个形态，yt-dlp 的 `BilibiliAudioIE` 接手；条目的 `id` 也就是解析那条 URL 时信封里的那个
 `id`（实测 `au2478206` → `"2478206"`），所以从这份清单存下去的记录，和直接解析它的信封指的是同
 一首。
+
+**音频歌单（`am`）句柄在主文法中显式拒收**：`am` 裸号或 `/audio/am<id>` 链接在流解析、`--info` 与
+`--parts` 门控中退 1，并提示改用 `--items`。这杜绝了上游 `yt-dlp` 对专辑 URL 输出 `status:"ok"` 但
+`stream_urls: []` 的无用空信封，将单曲解析与容器展开的边界彻底锁死。
 
 **不可播的条目在信封之前就丢掉**，判据与搜索行同一句（ARCH-cli-contract.md「数据契约」）：`url`/`id`
 非空，且**要么有 duration，要么说得出为什么没有**（`live_status` 非空）。YouTube 侧这一格是活的 ——

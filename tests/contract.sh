@@ -291,6 +291,8 @@ report "ut-play two actions"      1 "$(rc shell/ut-play --status --stop)"
 report "ut-play selector alone"   1 "$(rc shell/ut-play --status --id X)"
 report "ut-play -d + action"      1 "$(rc shell/ut-play -d --stop)"
 report "ut-play -- <query>"       1 "$(rc shell/ut-play -- "a query")"
+report "ut-play --status rejects a handle" 1 "$(rc shell/ut-play --status -- URL)"
+report "ut-play --stop rejects a handle"   1 "$(rc shell/ut-play --stop -- URL)"
 # The gating wrapper is gone, so these three are the checks that it took its gate with it
 # rather than dropping it: an unknown long flag must not reach getopts as a bare `-`, and
 # the two verbs that moved to the engine must name the engine instead of half-working.
@@ -745,6 +747,10 @@ report "resolve rejects -n"       1 "$(rc shell/yt-resolve -n 5 -- "$MEDIA_ID")"
 report "transcript rejects -f"    1 "$(rc shell/yt-resolve --transcript -f audio -- "$MEDIA_ID")"
 report "transcript rejects -d"    1 "$(rc shell/yt-resolve --transcript -d -- "$MEDIA_ID")"
 report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an id")"
+report "bili-resolve rejects audio menu URL" 1 \
+    "$(rc shell/bili-resolve -j -- "https://www.bilibili.com/audio/am10624")"
+report "bili-resolve rejects bare am id" 1 \
+    "$(rc shell/bili-resolve -j -- am10624)"
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"

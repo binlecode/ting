@@ -71,8 +71,8 @@ shell/bili-search -j -n 5 -- "周杰伦"                     # Bilibili 搜索
 shell/ne-search -j -n 5 -- "钢琴"                         # 网易云搜索
 shell/ne-resolve --transcript -j -- 1824020871           # 歌词字幕提取
 shell/ut-play -d -j --engine yt -- "URL"                  # 后台启动播放
-shell/ut-play --status -j -- <player-id>                  # 查询播放状态
-shell/ut-play --stop -j -- <player-id>                    # 停止播放
+shell/ut-play --status -j                                 # 查看全部播放状态
+shell/ut-play --stop -j --id <player-id>                  # 停止播放
 shell/ut-playlist --ls -j                                 # 查看歌单库
 shell/ut-history --ls -n 20 -j                            # 查看最近播放历史
 shell/uting --version                                     # 响应版本（不触发依赖门控）

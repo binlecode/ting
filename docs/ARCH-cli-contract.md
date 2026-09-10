@@ -123,7 +123,8 @@ ut-playlist --show chill -j | ut-play --enqueue -                # 已证 · 形
 
 **动作彼此排斥**，都退 1：`--status --stop`（两个动作）、`--status --id X`（只有选择器没有
 动作）、`-d --stop`（`-d` 是播放，不是动作）、`--queue -` 不带 `-d`（它本身就启动一个
-detached 播放器）。
+detached 播放器）、生命周期与控制动词附带未被消费的 positional 句柄（如 `--status -- <id>` 或
+`--stop -- <id>`，寻址播放器必须显式走 `--id`）。
 
 ---
 
@@ -600,11 +601,12 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         一份这个进程用不了的队列 payload（`--queue`/`--enqueue`：坏 JSON、三种 stdin 形状
         都不是、没有条目、url 里带空白、坏的引擎名）—— 在**父进程**里就拒了，
         所以一份畸形的队列永远到不了一个播放器，
-        `--queue` 而没有 `-d`、或配上一个动作、或 argv 上带了句柄、
+        `--queue` 而没有 `-d`、或配上一个动作、生命周期动词带了 positional 句柄、
         一个不认识的 --engine、一个 host 不是这个引擎的 URL（ARCH-engine.md「解析」 / 本文 「数据契约」）、
         --info / --transcript 取数失败（含 no_subtitles_available）、
         --quality 撞上 --info / --parts / --items / --transcript / --auth（它是流格式选择器，「命令规格」的 `<engine>-resolve` 一节）、
         一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）、
+        `bili-resolve` 流解析拿到 `am` 歌单句柄（指路 `--items`）、
         --items 拿到一个不是容器的句柄（一个单曲 id、一个无尾的列表、网易云的裸数字）、
         --items 与另一个动词同时给出（ARCH-engine.md「容器（`--items`）」）
    2+   传播上来的 yt-dlp / mpv / HTTP 失败（播放、resolve -j、**搜索**失败 ——
