@@ -78,6 +78,9 @@ yt-resolve  -j -f video -S 'res:720,fps' -- URL    # 实测 · -S 覆盖 tier
 yt-resolve  -j --info -- URL                       # 已证 · 只要元数据，什么都不解析
 yt-resolve  -j --transcript --sub-lang zh-Hans -- URL   # 已证 · yt 独有
 bili-resolve -j --parts -- BV1…                    # 已证 · bili 独有，一次 HTTP，不经 yt-dlp
+yt-resolve  -j --items -- PL…                      # 已证 · 三个引擎都有；容器 → 条目清单
+bili-resolve -j --items -- am10624                 # 已证 · 音频歌单，纯 HTTP
+ne-resolve  -j --items -- <album?id=N 的 URL>      # 已证 · 专辑一次请求，歌单两次以上
 ne-search   -j -n 20 -- 周杰伦                      # 已证 · 第三个信封；行带真的 access
 NE_INCLUDE_VIP=1 ne-search -j -n 20 -- 周杰伦       # 已证 · 连非 full 的行一起返回
 ne-resolve  --transcript -j -- <歌曲 id>            # 已证 · 同一个动词，底下是歌词
@@ -85,7 +88,7 @@ ne-resolve  -j -- <歌曲 id | song?id=N 的 URL>      # 已证 · 四种拼法�
 yt-resolve  --auth -j                              # 已证 · cookie 决策：无句柄、无请求、无 yt-dlp
 ```
 
-守着那四条只读动词的是 `every read-only verb reaches the host gate`：给一个没有引擎认领的句柄，
+守着那几条只读动词的是 `every read-only verb reaches the host gate`：给一个没有引擎认领的句柄，
 报回来的必须是 host 门那句话，不是 `unknown flag` —— 两种错法退的都是 1，所以钉的是**文案**。
 `--sub-lang` 跟着 `--transcript` 一起给，因为上面那行就是这么写的 —— 但**只对声明了它的引擎**：
 一条字幕轨和一次语言选择是两件能力，第二个长出 `--transcript` 的引擎只有前一件，
@@ -99,11 +102,16 @@ yt-resolve  --auth -j                              # 已证 · cookie 决策：�
 | `<engine>-search` + `-f` / `-S` / `--quality` | 搜索半边不解析任何格式，这些值它无从作用 |
 | `<engine>-search` + `-d` / `--detach` | 引擎不播放 |
 | `<engine>-resolve` + `-d` / `-n` | 同上；`-n` 是搜索半边的 |
-| `--info` / `--transcript` / `--parts` + `-f` / `-S` / `--quality` | 这三个动词都不解析流 |
+| `--info` / `--transcript` / `--parts` / `--items` + `-f` / `-S` / `--quality` | 这四个动词都不解析流 |
+| `--items` + 另一个动词 | 两个动词就是没说要哪个（老动词之间的"后者赢"是已发布行为，不动） |
+| `--items` + 零个或两个句柄 | 一次一个容器 |
+| `--items` + `RD…` / `UU…` / `LL` / `FL…` / 频道 URL | 没有尾的东西导不进来（下文「容器」） |
+| `ne-resolve --items -- <裸数字>` | 一个裸数字说不出自己是专辑、歌单还是歌 |
 | `--auth` + 句柄 / `-f` / `-J` | 它不接句柄也不发请求 |
 | `--parts` + 两个句柄 | 一次一个 |
 | 句柄属于**别的**站点 | host allowlist：一个引擎一个站，否则 `engine` 字段会说谎 |
 | `bili-resolve --transcript` / `ne-resolve --parts` | 能力靠「没有那个动词」声明 |
+| `bili-resolve --items -- BV…` / `yt-resolve --items -- <11 位 id>` | 一个单曲句柄不是一个容器 |
 | `ne-resolve --sub-lang` | 一首歌一条歌词，没有可挑的东西（「字幕」） |
 | `ne-resolve -- <非 song 路径的本站 URL>` | 这个站每一种资源都是 `?id=N`，只读 query 会把 `/artist?id=6452` 解成**歌曲** 6452 |
 
@@ -111,7 +119,7 @@ yt-resolve  --auth -j                              # 已证 · cookie 决策：�
 
 ```
 $ yt-resolve --nope
-yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info --transcript --auth)
+yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info --transcript --sub-lang --items --auth)
 ```
 
 那是唯一权威的枚举。两条更近的路都会骗人，而且都真骗过（2026-09-01）：**错误文案**——缺失
@@ -327,7 +335,7 @@ null，而那个键仍然在**（ARCH-cli-contract.md「数据契约」）。
 是 `tests/contract.sh` 那条不变式要跨**两种形状**断言的原因。
 
 **`kind` 今天三个引擎都印恒定的 `track`，而这是行模型的结果，不是占位。** 行模型是
-**一行结果就是一次可播调用**（ROADMAP.md「容器行」定下，2026-09-03）：不是一次可播调用的记录
+**一行结果就是一次可播调用**（2026-09-03 定下，容器那一半的答案在本文「容器（`--items`）」）：不是一次可播调用的记录
 在信封之前就被丢掉，所以留在信封里的行**没有别的值可印**。`access` 上 YouTube 也印恒定值，
 理由是站点事实：匿名抽取要么拿到完整时间轴要么什么都拿不到 —— 没有试听这种形态。
 B 站这一侧曾以为
@@ -395,7 +403,8 @@ agent 面的答案，再加一个 TUI 标记是重复而不是补充。
 **代价照旧是行数**：`-n 15` 可能答 14 行，与上面 `ketang` 那条同一句话。**刻意不多取**补偿
 （网易云的 `OVERFETCH` 是为它 57% 的可听率付的，那是双峰分布下的常态；容器行是少数查询才有的
 个例，为它给每一次搜索加一次请求，代价与收益不成比例）。
-**而容器不是被丢弃，是无人认领**：它要的是自己的动词与信封（ROADMAP.md「容器行」）。
+**而容器不是被丢弃，是无人认领**：它要的是自己的动词与信封 —— 那个动词现在有了，见本文
+「容器（`--items`）」。
 
 ## 先探后播 —— 登录、PO token 与客户端选择（**只在 `yt-resolve` 里**）
 
@@ -572,6 +581,97 @@ URL 的集合，不是这一个动词。
 **失败分类与 `--info` 相反：取数失败退 2。** `--parts` 的失败来自它**发起**的那次请求（网络 /
 一次 200 里没有 parts 记录）—— 一次工具失败，与抽取同类；而 `--info` 的"取数失败"是引擎对**已有**
 取数的再解释。单 P 视频不是错误：它列出 count 1，说这就是那一个 P。
+
+### 容器（`--items`）—— 三个引擎都有的动词
+
+`<engine>-resolve --items` 把一个**容器**展开成条目清单：YouTube 的播放列表与专辑、B 站音频区的
+歌单（`am`）、网易云的专辑与歌单。`items[]` 的元素**就是条目记录**，键名也就叫 `items` —— 所以
+`--items -j | ut-playlist --add NAME` 和 `| ut-play -d --queue -` 原样管进去，存储端与播放器
+**一行没改**。`--parts` 还需要 `jq '{items:.parts}'` 那层垫片，这个动词不需要；键名就是从这条缝
+上取的。
+
+**为什么这个动词长在解析端。** 三条路都摆过：
+
+| 备选 | 裁决 |
+|---|---|
+| 搜索端加分类参数（`--albums`） | 否。搜索是 query → 粗排摘要；展开容器是 handle → 深度提取，那是解析的职责 |
+| 存储端自己认 URL（`ut-playlist --import`） | 否。`ut-playlist` 是纯持久化，一点站点知识都不持有（ARCH-player.md「持久状态层」） |
+| 解析端加动词（`--items`，采纳） | 站点知识归引擎对（ARCHITECTURE.md「站点知识的边界」），而输出经 UNIX 管道直通存储与队列，两者零改动 |
+
+**URL 不变队列，动词才变。** 一条单曲 URL 上夹带的 `list=` 在流解析里继续被忽略（`yt-resolve` 的
+`dump_once` 一直带 `--no-playlist`）—— URL 自己不会变成一个队列。要整张清单，调用方**显式**调
+`--items`，那时 `list=` 才被读，因为这一次是它开口要的。（这条原是 ROADMAP 的「`list=` NO」，
+这个动词就是它那个"重开条件"的答案：所有权与数据契约都在本节。）
+
+**容器不是一行**（ARCH-cli-contract.md「数据契约」）：它没有自己的时长，有的是条数与游标，而这两样
+在一条为播放而生的搜索行上都没有地方放。所以容器要的是自己的信封，不是行模型上多一个 `kind`。
+
+**`count` 与 `total` 是两个数，差额同时覆盖两件事**：被上限截断，和被判据或访问过滤丢掉的行。
+信封**不为区分这两者加键** —— 两种情况下调用方能做的是同一件事（要个小一点的容器，或者接受少一些）。
+
+**上限是引擎内常量，不给 flag。** `-n` 在三个 resolve 里都是被拒的搜索标志，给它第二个含义就是动
+冻结面；起一个新 flag 名，则是为一个边角情况加一条契约。`ITEMS_MAX=500`；`count < total` 已经把
+"没取全"说清楚了。
+
+**三个站，三种取数、三种上游上限、三种"不存在"** —— 这张表是这个动词全部的站点知识
+（2026-09-10 实测）：
+
+| 站点 | 取数 | 上游上限（实测） | 容器不存在时（实测） |
+|---|---|---|---|
+| YouTube | `yt-dlp --flat-playlist -J --playlist-end 500`，一次进程；flat 条目自带 id/url/title/duration | 87 条 1.0s，12 条专辑 0.7s；4749 条的列表答 500，`total` 如实报 4749 | 坏 `PL` id：yt-dlp 退 1 印 `The playlist does not exist`；形状对但不存在的 `OLAK5uy_`：**退 0**，`id: null`，无 entries |
+| Bilibili | `menu/info`（标题与存在性）+ `song/of-menu`（条目），纯 HTTP，不经 yt-dlp | `ps` 上限 **100**（`ps=101` 答 `code 4511000`）；翻页有效，页与页 id 不重、`totalSize` 不动、越过末页答空数组 | HTTP 200 + `code: 0` + `msg: "success"` + **`data: null`** —— code 完全不答，只有形状答。`of-menu` 更不能拿来判：不存在的歌单与空歌单是同一份 body |
+| 网易云 | 专辑 `album/<id>` 一次到底；歌单 `playlist/detail` + `song/detail` 分批 | 一批 **100** 个 id（150 个能答，200 个在 HTTP 层就被拒：curl 16「HTTP2 framing layer」，两次一致） | body `code: 404`（HTTP 仍是 200） |
+
+所以**存在性判据三个站三样，而"不存在"的答案一样**：`{status:"error", engine, url, reason:"unavailable"}`，
+退 **2**。只读动词那条分法在这里不变 —— 句柄形状错在 argv 上就退 1（一个包也不发），发过包之后
+的失败一律 2，而 `4` 是生命周期/存储码，引擎从不发它。**空容器不是错误**：`count: 0`、`items: []`、
+退 0，与"单 P 视频列出 count 1"是同一条规矩。
+
+**网易云的歌单必须两次请求，而这一步省不掉**：`playlist/detail` 把 `trackIds` 给全（实测 1266 条），
+却只带十来条完整记录（实测 10 条）—— 只读第一份的实现会静悄悄地少给一千多首。记录取回来之后按
+**id 列表的顺序**重排：被导入的正是歌单自己的顺序，而 `song/detail` 对顺序不作承诺。
+
+**网易云的条目按 `fee` 过滤，与搜索行同一张表、同一个配置键**（`NE_INCLUDE_VIP`，「`kind` 与
+`access`」）：默认只留 `full`。理由是契约那句"存进 `ut-playlist` 的行必须能跑" —— 不滤的话，一张
+VIP 专辑导进歌单就是一排 30 秒试听，等于把搜索端已经挡掉的东西从另一扇门放进来。实测 2026-09-10：
+专辑 32311 九首全是 `fee: 1`，所以默认列出 **0** 条并在 `count` 里说清楚，这比九条听三十秒就停的
+行诚实。条目记录**不加 `access` 键**：留下来的行全是 `full`，键上没有信息。
+
+**YouTube 只认有界容器**：`PL…`（歌单）与 `OLAK5uy_…`（专辑）。`RD…`（Mix 电台）、`UU…`/`LL`/`FL…`
+（频道全部上传、赞过、收藏）和频道 URL 一律退 1 并说明理由 —— 它们没有尾，`total` 会是一句谎，而
+"取到哪算哪"等于让上限决定内容。裸 id **只查前缀不查长度**：实测的 `PLLdzS5ShOfOw` 在 `PL` 后只有
+11 个字符，新建的列表是 32 个 —— 长度不是这个站的不变量。
+
+**网易云只认 URL，裸数字退 1**：这个站每一种资源都是 `?id=N`，`song`/`album`/`playlist` 的 id 空间
+互不区分，一个裸数字说不出自己是谁 —— `ne-resolve` 拒非 song 路径 URL 用的就是这条理由。单曲动词
+收裸数字，只因为**那个**动词已经先决定了它是一首歌。
+
+**B 站只做音频区 `am`**：视频侧的容器（合集、收藏夹、UP 主页）各有自己的端点与分页形状，不是 `am`
+的变体，留在 ROADMAP。条目 URL 拼成 `https://www.bilibili.com/audio/au<id>`，今天就能播 —— host
+门放行这个形态，yt-dlp 的 `BilibiliAudioIE` 接手；条目的 `id` 也就是解析那条 URL 时信封里的那个
+`id`（实测 `au2478206` → `"2478206"`），所以从这份清单存下去的记录，和直接解析它的信封指的是同
+一首。
+
+**不可播的条目在信封之前就丢掉**，判据与搜索行同一句（ARCH-cli-contract.md「数据契约」）：`url`/`id`
+非空，且**要么有 duration，要么说得出为什么没有**（`live_status` 非空）。YouTube 侧这一格是活的 ——
+私密/已删条目以 `[Private video]` 标题、`duration: null`、无 `live_status` 到达，正好落在判据外侧，
+而一路直播因 `live_status` 留在里面；B 站与网易云的曲库里没有直播，所以那半个 arm 在两个引擎里
+不存在。**这条判据是拿输入证的，不是拿一张恰好带私密条目的真列表证的**：2026-09-10 抽的四张公开
+列表一条私密条目都没有，所以证据是把那几种形状喂给同一段 jq（`tests/contract.sh` 的容器信封检查
+配合一份手写混装记录），私密与已删被丢、直播留下、嵌套列表行被丢。
+
+**`-J` 吐出条目那一份上游 body**，与 `--parts -J` 先例一致：YouTube 是那份 flat 记录，B 站是
+`of-menu`，网易云是专辑响应或合并后的 `song/detail`（多页/多批时，各页的行合并进第一份 body 的
+那个键 —— 一个答得比 `-j` 还少的 `-J` 会是唯一一个"放宽反而丢东西"的输出模式）。只服务顶层
+`title` 与 `total` 的那次请求（`menu/info` / `playlist/detail`）不进 `-J`。
+
+**所以 `--items -J` 里的行是没过滤的**，这是这个动词上 `-J` 与 `-j` 唯一一处不是"同一批行、更多
+字段"的地方：判据与 `fee` 过滤都发生在信封的投影里，而 `-J` 就是投影之前的那份 body。它与
+`<engine>-search -J`（那里 `-J` 是同一批行的全字段版本）不同，与 `--parts -J` / `--transcript -J`
+（那里 `-J` 也是上游记录）相同。要"能播的那些"，问 `-j`。
+
+**这一版只交付 agent 面，`uting` 不加键**：横切规范只要求"人有按键则 agent 有动词"，不要求反向。
+"在 TUI 里打开一个容器"要先回答入口在哪（没有一行搜索结果可以按上去），另议。
 
 ### 起播偏移（`start_seconds`）—— 一个键，两种来源
 

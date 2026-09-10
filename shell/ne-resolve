@@ -111,6 +111,37 @@ LYRIC_ENDPOINT="https://music.163.com/api/song/lyric"
 SITE_REFERER="https://music.163.com"
 SITE_COOKIE="os=pc"
 
+# THE CONTAINER ENDPOINTS — --items' transport, the same plain GET the lyric endpoint uses and
+# for the same reason: no weapi, no eapi, no signature, so openssl stays the SIBLING's
+# dependency and never becomes this file's.
+#
+#   album/<id>        ONE request answers the whole album: `.album.name`, `.album.size` and a
+#                     complete `.songs[]` carrying id, name, dt (MILLISECONDS) and fee.
+#                     Measured 2026-09-10 on album 32311: code 200, 9 songs.
+#   playlist/detail   TWO requests, because this one is TRUNCATED BY DESIGN: measured on
+#                     playlist 24381616, `.playlist.trackCount` and `.playlist.trackIds[]` are
+#                     both 1266 while `.playlist.tracks[]` holds only 10 full records. The ids
+#                     are the complete, ordered list; the records have to be asked for.
+#   song/detail       those records, in batches — `c=[{"id":N},…]`.
+#
+# The id goes in album/<id>'s PATH, which is why the grammar below validates it as digits
+# before it is interpolated: everything else in this file reaches curl through
+# --data-urlencode, and a path segment cannot.
+ALBUM_ENDPOINT="https://interface3.music.163.com/api/v1/album"
+PLAYLIST_ENDPOINT="https://music.163.com/api/v6/playlist/detail"
+DETAIL_ENDPOINT="https://music.163.com/api/v3/song/detail"
+
+# A batch is 100 ids and the ceiling is five of them. 100 is measured, not chosen: 150 ids
+# answer code 200, 200 ids are refused at the HTTP layer (curl 16, "Error in the HTTP2 framing
+# layer", twice from two runs) because the query grows past what this host will take on a GET.
+# So the ceiling costs at most six requests — one for the container, five for its records.
+#
+# Neither number is a flag: `-n` is a search flag this engine refuses, and a second spelling of
+# it would be a whole contract for one edge case. `count` below `total` is how a caller learns
+# it was truncated. ARCH-engine.md「容器（--items）」.
+ITEMS_BATCH=100
+ITEMS_MAX=500
+
 # Cookies (login) are ON by default (browser: chrome), the same posture the other two engines
 # take, and for the same reason: on this site an account is what unlocks the higher stream
 # tiers (`higher`, `exhigh`, and above them the VIP-only `lossless`/`hires`). Public tracks
@@ -180,7 +211,8 @@ if [[ -n "${NE_COOKIE_BROWSER:-}" && "$NE_COOKIE_BROWSER" != "none" ]]; then
     fi
 fi
 
-ACTION="stream"      # stream | info | transcript | auth
+ACTION="stream"      # stream | info | transcript | items | auth
+VERB_FLAG=""         # the verb flag as typed — the one-verb-per-invocation gate reads it
 # The `-f` default, cross-engine: a user who listens rather than watches says so once.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
@@ -192,6 +224,9 @@ TARGET=""            # the handle as the caller typed it
 TARGET_URL=""        # the canonical song URL it normalises to
 TARGET_ID=""         # the numeric song id inside it — the lyric endpoint's input
 TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_start_seconds
+CONTAINER_KIND=""    # album | playlist — which endpoint pair --items will spend
+CONTAINER_ID=""      # the container's numeric id
+CONTAINER_URL=""     # the canonical container URL it normalises to
 FMT=""               # the yt-dlp format string the mode resolves to
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
@@ -239,6 +274,21 @@ validate_enum() {
         fi
     done
     return 1
+}
+
+# ONE VERB PER INVOCATION — enforced for every pair that includes --items, and only those.
+# The older verbs keep their last-one-wins behaviour: it is what has shipped, and turning an
+# exit 0 into an exit 1 for `--info --transcript` is a contract change nobody asked for
+# (CLAUDE.md 红线 4). A caller who names two verbs has not said what it wants, and the gate
+# model answers that by refusing rather than by guessing (ARCH-cli-contract.md「门模型」).
+set_action() {
+    local action=$1 flag=$2
+    if [[ -n "$VERB_FLAG" && "$VERB_FLAG" != "$flag" ]] &&
+        { [[ "$flag" == "--items" ]] || [[ "$VERB_FLAG" == "--items" ]]; }; then
+        die "$VERB_FLAG and $flag are two verbs — pass one"
+    fi
+    VERB_FLAG="$flag"
+    ACTION="$action"
 }
 
 require_cmd() {
@@ -547,6 +597,65 @@ parse_start_seconds() {
     TARGET_START=${v%%.*}
 }
 
+# Which CONTAINER a URL's path names — "album", "playlist", or "" for neither. The path is
+# what answers, exactly as url_is_song_path answers for a song: on this site every resource is
+# `?id=N`, so the number says nothing about what it identifies. That is also why --items takes
+# no bare number (see normalize_container).
+url_container_kind() {
+    local u=$1
+    u="${u%%\?*}"
+    u="${u%%#*}"
+    u="${u%/}"
+    case "$u" in
+    */album) printf 'album' ;;
+    */playlist) printf 'playlist' ;;
+    *) printf '' ;;
+    esac
+}
+
+# --items' OWN handle grammar, BESIDE normalize_target rather than inside it: normalize_target
+# refuses every non-song path, which is the right answer for a verb that resolves one song and
+# the wrong one for a verb whose whole subject is albums and playlists.
+#
+# A BARE NUMBER IS REFUSED HERE, and that is this site's own doing: `song`, `album` and
+# `playlist` ids share no namespace and a bare number cannot say which it is. normalize_target
+# accepts one only because THAT verb has already decided it means a song.
+#
+# The HOST gate fires first: an off-site URL is the same usage error at every verb and must be
+# reported before this engine's opinion about what a container looks like. tests/contract.sh
+# reads that ordering off every read-only verb.
+normalize_container() {
+    local t host kind id
+    t=$(strip_hash_route "$1")
+    case "$t" in
+    http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: ut-play --engine NAME)"
+        ;;
+    music.163.com/* | y.music.163.com/*)
+        t="https://$t"
+        ;;
+    [0-9]*)
+        die "'$1' is a bare number, and on this site a number does not say what it identifies — --items takes an album or playlist URL (music.163.com/album?id=N or /playlist?id=N)"
+        ;;
+    *)
+        die "'$1' is not a NetEase container URL — --items takes music.163.com/album?id=N or /playlist?id=N"
+        ;;
+    esac
+
+    kind=$(url_container_kind "$t")
+    [[ -n "$kind" ]] ||
+        die "'$1' is not an album or playlist URL — every resource on this site is ?id=N, so the path has to say which one (to resolve one song, drop --items)"
+    id=$(url_song_id "$t")
+    [[ "$id" =~ ^[0-9]+$ ]] ||
+        die "'$1' carries no id — a NetEase container handle is .../album?id=N or .../playlist?id=N"
+
+    CONTAINER_KIND="$kind"
+    CONTAINER_ID="$id"
+    CONTAINER_URL="https://music.163.com/$kind?id=$id"
+}
+
 # ==============================================================================
 # 3. STREAM RESOLUTION
 # ==============================================================================
@@ -841,7 +950,9 @@ fetch_lyric_once() {
 
 # HTTP status + body code -> the suite's shared reason enum. Separate from
 # classify_yt_dlp_error above, which reads an extractor's prose: this one reads two numbers.
-classify_lyric_error() {
+# Shared by --transcript and --items, which is why it is named for the SITE and not for one
+# endpoint: the two numbers mean the same thing at every one of this host's addresses.
+classify_ne_error() {
     local rc=$1 http=$2 code=$3
     ((rc != 0)) && {
         echo "network"
@@ -855,7 +966,7 @@ classify_lyric_error() {
     case "$code" in
     -462 | -447 | 405) echo "network"; return ;;
     -460 | -2) echo "forbidden"; return ;;
-    -404 | -400) echo "unavailable"; return ;;
+    -404 | -400 | 404) echo "unavailable"; return ;;
     esac
     echo "unknown"
 }
@@ -913,7 +1024,7 @@ resolve_transcript() {
     local body="$SCRATCH_DIR/lyric.json"
 
     if ! fetch_lyric_once "$TARGET_ID" "$body"; then
-        transcript_fail "$(classify_lyric_error "$LYRIC_CURL_RC" "$LYRIC_HTTP" "$LYRIC_CODE")"
+        transcript_fail "$(classify_ne_error "$LYRIC_CURL_RC" "$LYRIC_HTTP" "$LYRIC_CODE")"
     fi
 
     # AN INSTRUMENTAL IS A MISS, AND IT TAKES TWO TESTS TO SAY SO — which is measured, not
@@ -968,7 +1079,242 @@ resolve_transcript() {
 }
 
 # ==============================================================================
-# 6. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
+# 6. THE ITEMS VERB (read-only: plain GETs, no yt-dlp, no state file)
+# ==============================================================================
+
+# A CONTAINER IS NOT A ROW. An album or a playlist holds tens to over a thousand tracks and has
+# no duration of its own; what it has is a track count and a cursor, and neither has anywhere to
+# live on a search row — which is why a container gets its own verb and its own envelope instead
+# of a `kind` on the row model. ARCH-engine.md「容器（--items）」.
+#
+# EVERY ITEM IS AN ITEM RECORD: `{engine, id, url, title, duration}` is what ut-playlist stores
+# and what ut-play --queue consumes, and the key is `items` because that is the name both of them
+# already read. So `--items -j` pipes into either with nothing renamed. Each record carries its
+# own `engine` and a complete playable url, because a record here is a CALL, not a reference.
+#
+# THE ROWS ARE FILTERED BY `fee` THE WAY SEARCH ROWS ARE, same table and same config key
+# (NE_INCLUDE_VIP): by default only `full` survives. The reason is the contract's own sentence —
+# a row stored in ut-playlist has to be playable — and without the filter one VIP album imported
+# into a playlist is a row of 30-second previews. Measured 2026-09-10: album 32311 is nine
+# tracks and every one of them is fee 1, so by default it lists ZERO items and says so in
+# `count`, which is the honest answer rather than nine rows that stop after the sample.
+#
+# The `fee -> access` map is COPIED from ne-search rather than shared: engine pairs share no
+# library, every executable carries its own copy (JQ_PRELUDE already does), and the shared fact
+# is the table in ARCH-engine.md「`kind` 与 `access`」. Items carry no `access` key — the rows
+# that survive are all `full`, so the key would hold no information.
+JQ_ACCESS='
+def ne_access:
+  if type != "number" then "full"
+  elif . == 1 then "preview"
+  elif . == 4 then "paywalled"
+  else "full"
+  end;
+def ne_secs:
+  if type != "number" then null else (. / 1000 | floor) end;
+'
+
+ITEMS_CURL_RC=0
+ITEMS_HTTP=""
+ITEMS_CODE=""
+
+# ONE transport for all three endpoints, because they answer the same way: curl exits 0, HTTP is
+# 200 and the body's own `code` is 200. Arguments reach curl as an ARRAY and every value the
+# caller supplies goes through --data-urlencode, so nothing in a handle or an id list can be read
+# as a further curl argument. NO RETRY, the same decision --transcript states: one request per
+# thing asked for, and spending another is the caller's call.
+items_http_get() {
+    local body=$1
+    shift
+    local cmd=(
+        curl -sS --compressed
+        --max-time 20 --retry 0
+        -o "$body" -w '%{http_code}'
+        -H "User-Agent: $NE_UA"
+        -H "Referer: $SITE_REFERER"
+        -H "Cookie: $SITE_COOKIE"
+        -G "$@"
+    )
+
+    ITEMS_CURL_RC=0
+    ITEMS_HTTP=$("${cmd[@]}" 2>/dev/null) || ITEMS_CURL_RC=$?
+    ITEMS_CODE=""
+    if [[ -s "$body" ]]; then
+        ITEMS_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || ITEMS_CODE=""
+    fi
+    ((ITEMS_CURL_RC == 0)) && [[ "$ITEMS_HTTP" == "200" && "$ITEMS_CODE" == "200" ]]
+}
+
+# Exit 2, never 1 and never 4: by the time a request has been made nothing here is the caller's
+# usage error, and 4 is the lifecycle/storage code an engine never emits. Same three-key envelope
+# --transcript's failure publishes, `reason` out of the shared enum.
+items_fail() {
+    local reason=$1
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$CONTAINER_URL" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, reason: $reason}'
+    else
+        echo "ne-resolve: could not list the items of $CONTAINER_URL ($reason)" >&2
+    fi
+    exit 2
+}
+
+# A row is an item only if it can be PLAYED and can say how long it is — an id that builds a url,
+# a positive duration, and an access this caller will actually be served. Same judgement a search
+# row passes (ARCH-cli-contract.md「数据契约」); nothing in this catalogue is live, so there is no
+# second way to explain a missing duration here.
+JQ_ITEM_FILTER='
+[ .[]
+  | select((.id | type) == "number" and .id > 0)
+  | select((.dt | type) == "number" and .dt > 0)
+  | select($vip or ((.fee | ne_access) == "full")) ]
+'
+
+# `count` is what survived and `total` is what the site SAYS the container holds. The gap covers
+# both truncation and filtered-out rows, and the envelope does not add a key to tell them apart:
+# the answer to either is the same, ask for a smaller container or accept less.
+JQ_ITEMS='
+{status: "ok", engine: $engine, id: $id, url: $url, title: $title,
+ count: ($rows | length),
+ total: $total,
+ items: [ $rows | to_entries[]
+          | .key as $i | .value as $r
+          | ($r.id | tostring) as $sid
+          | {n: ($i + 1), engine: $engine, id: $sid,
+             url: ("https://music.163.com/song?id=" + $sid),
+             title: ($r.name // null),
+             duration: ($r.dt | ne_secs),
+             duration_fmt: (($r.dt | ne_secs) | fmt_dur)} ]}
+'
+
+# The album path: ONE request, records included.
+items_album_rows() {
+    local body="$SCRATCH_DIR/album.json"
+    items_http_get "$body" "$ALBUM_ENDPOINT/$CONTAINER_ID" ||
+        items_fail "$(classify_ne_error "$ITEMS_CURL_RC" "$ITEMS_HTTP" "$ITEMS_CODE")"
+
+    ITEMS_TITLE=$(jq -r '.album.name // empty' "$body" 2>/dev/null) || ITEMS_TITLE=""
+    ITEMS_TOTAL=$(jq -r '.album.size // "null"' "$body" 2>/dev/null) || ITEMS_TOTAL="null"
+    [[ "$ITEMS_TOTAL" =~ ^[0-9]+$ ]] || ITEMS_TOTAL="null"
+    ITEMS_RAW=$(jq -c --argjson max "$ITEMS_MAX" '[(.songs // [])[]] | .[0:$max]' "$body" 2>/dev/null) ||
+        items_fail "unknown"
+    ITEMS_BODY="$body"
+    ITEMS_BODY_KEY="songs"
+}
+
+# The playlist path: the ids first, then their records in batches. The second request is not an
+# optimisation to skip — `.playlist.tracks[]` is truncated to a handful (measured: 10 of 1266),
+# so a caller served from it would silently get a fraction of the playlist it asked for.
+#
+# The records are put back in the ID list's order rather than the response's, because the
+# playlist's order is the thing being imported and this endpoint promises nothing about it.
+items_playlist_rows() {
+    local body="$SCRATCH_DIR/playlist.json"
+    items_http_get "$body" "$PLAYLIST_ENDPOINT" --data-urlencode "id=$CONTAINER_ID" ||
+        items_fail "$(classify_ne_error "$ITEMS_CURL_RC" "$ITEMS_HTTP" "$ITEMS_CODE")"
+
+    ITEMS_TITLE=$(jq -r '.playlist.name // empty' "$body" 2>/dev/null) || ITEMS_TITLE=""
+    ITEMS_TOTAL=$(jq -r '.playlist.trackCount // "null"' "$body" 2>/dev/null) || ITEMS_TOTAL="null"
+    [[ "$ITEMS_TOTAL" =~ ^[0-9]+$ ]] || ITEMS_TOTAL="null"
+
+    local ids n
+    ids=$(jq -c --argjson max "$ITEMS_MAX" '[(.playlist.trackIds // [])[].id] | .[0:$max]' "$body" 2>/dev/null) ||
+        items_fail "unknown"
+    n=$(printf '%s' "$ids" | jq 'length' 2>/dev/null) || n=0
+
+    # An empty playlist is an ANSWER, not an error, so it never reaches the batch loop.
+    if ((n == 0)); then
+        ITEMS_RAW='[]'
+        ITEMS_BODY="$body"
+        ITEMS_BODY_KEY=""
+        return 0
+    fi
+
+    local batches=() batch_body c off=0 i=0
+    while ((off < n)); do
+        c=$(printf '%s' "$ids" | jq -c --argjson off "$off" --argjson size "$ITEMS_BATCH" \
+            '[.[$off:($off + $size)][] | {id: .}]' 2>/dev/null) || items_fail "unknown"
+        i=$((i + 1))
+        batch_body="$SCRATCH_DIR/detail-$i.json"
+        items_http_get "$batch_body" "$DETAIL_ENDPOINT" --data-urlencode "c=$c" ||
+            items_fail "$(classify_ne_error "$ITEMS_CURL_RC" "$ITEMS_HTTP" "$ITEMS_CODE")"
+        batches+=("$batch_body")
+        off=$((off + ITEMS_BATCH))
+    done
+
+    ITEMS_RAW=$(jq -c -s --argjson ids "$ids" '
+        ([ .[] | (.songs // [])[] ] | map({key: (.id | tostring), value: .}) | from_entries) as $byid
+        | [ $ids[] | $byid[(. | tostring)] // empty ]' "${batches[@]}" 2>/dev/null) ||
+        items_fail "unknown"
+    ITEMS_BODY="${batches[0]}"
+    ITEMS_BODY_KEY="songs"
+}
+
+ITEMS_TITLE=""
+ITEMS_TOTAL="null"
+ITEMS_RAW="[]"
+ITEMS_BODY=""
+ITEMS_BODY_KEY=""
+
+resolve_items() {
+    ensure_scratch
+
+    case "$CONTAINER_KIND" in
+    album) items_album_rows ;;
+    *) items_playlist_rows ;;
+    esac
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        # The body that CARRIED the records, at full fidelity — the album's own response, or the
+        # merged song/detail result for a playlist. The container request that served only the
+        # title and the count does not appear here, the same way --parts -J returns the body its
+        # parts came out of and nothing else.
+        if [[ -n "$ITEMS_BODY_KEY" ]]; then
+            jq -c --arg key "$ITEMS_BODY_KEY" --argjson rows "$ITEMS_RAW" '.[$key] = $rows' "$ITEMS_BODY" ||
+                items_fail "unknown"
+        else
+            jq -c '.' "$ITEMS_BODY" || items_fail "unknown"
+        fi
+        return 0
+    fi
+
+    local vip=false
+    ((NE_INCLUDE_VIP)) && vip=true
+
+    local rows env_json title_arg
+    rows=$(printf '%s' "$ITEMS_RAW" | jq -c --argjson vip "$vip" "$JQ_ACCESS $JQ_ITEM_FILTER" 2>/dev/null) ||
+        items_fail "unknown"
+    title_arg="null"
+    [[ -n "$ITEMS_TITLE" ]] && title_arg=$(jq -nc --arg t "$ITEMS_TITLE" '$t')
+    env_json=$(jq -nc --argjson rows "$rows" --arg engine "$ENGINE_NAME" --arg id "$CONTAINER_ID" \
+        --arg url "$CONTAINER_URL" --argjson title "$title_arg" --argjson total "$ITEMS_TOTAL" \
+        "$JQ_PRELUDE $JQ_ACCESS $JQ_ITEMS" 2>/dev/null) ||
+        items_fail "unknown"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$env_json"
+        return 0
+    fi
+
+    # Prose, in the vocabulary --info and ut-playlist --show already speak: the title, a dashed
+    # summary line, then one line per track.
+    local title count total_txt
+    title=$(printf '%s' "$env_json" | jq -r '.title // "(untitled)"')
+    count=$(printf '%s' "$env_json" | jq -r '.count')
+    total_txt=$(printf '%s' "$env_json" | jq -r '.total // "?"')
+
+    if [[ -n "$MUSIC_CHAR" ]]; then
+        printf '%s %s\n' "$MUSIC_CHAR" "$title"
+    else
+        printf '%s\n' "$title"
+    fi
+    printf '  - items: %s   total: %s\n' "$count" "$total_txt"
+    printf '%s' "$env_json" | jq -r '.items[] | "  \(.n). \(.title // "")  \(.duration_fmt // "")"'
+    return 0
+}
+
+# ==============================================================================
+# 7. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
 # ==============================================================================
 
 # Report the cookie DECISION this engine made at startup: which browser profile playback will
@@ -1003,7 +1349,7 @@ resolve_auth() {
 }
 
 # ==============================================================================
-# 7. CLI
+# 8. CLI
 # ==============================================================================
 
 print_usage() {
@@ -1014,6 +1360,7 @@ Usage:
   ne-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <song id | URL>
   ne-resolve --info [-j|-J] -- <song id | URL>
   ne-resolve --transcript [-j|-J] -- <song id | URL>
+  ne-resolve --items [-j|-J] -- <album URL | playlist URL>
   ne-resolve --auth [-j]
 
 The handle is a NetEase song URL or the bare numeric song id (what `ne-search -j` returns as
@@ -1037,6 +1384,12 @@ Options:
   --info   Metadata only (title, artist, album) — nothing is resolved
   --transcript  The song's lyrics as clean text, ready to drop into a prompt. One plain GET
            to the site's lyric endpoint — no yt-dlp, no credential, no encryption
+  --items  List the tracks of an album or a playlist — plain GETs, no yt-dlp. Takes a URL
+           and NOT a bare number: song, album and playlist ids share no namespace here, so a
+           number cannot say what it identifies. Every element is an item record, so the list
+           pipes into ut-playlist --add and ut-play --queue unmapped. Rows are filtered by
+           access exactly as search rows are (see NE_INCLUDE_VIP), because a stored row has
+           to be playable. At most 500 tracks
   --auth   Report the cookie decision: which browser profile playback will read, and whether
            it exists here. No network, no handle. Says cookies are SENT, not that they are
            accepted — an expired login still reports "cookie"
@@ -1067,11 +1420,22 @@ Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segm
   ("纯音乐，请欣赏") as well as by its documented `nolyric` flag, because measured 2026-09-02
   the flag fires on almost none of them.
 
+Items JSON (--items -j): {status,engine,id,url,title,count,total,
+                          items:[{n,engine,id,url,title,duration,duration_fmt}]}
+  count is what survived; total is what the site says the container holds. They differ when
+  the container is longer than the cap and when rows were filtered out by access, and the
+  envelope does not say which — the answer to either is the same.
+  An album is ONE request. A playlist is two or more: the site returns all of a playlist's
+  track ids but only a handful of full records, so the rest are fetched in batches of 100 and
+  put back in the playlist's own order.
+  -J returns the body the records came out of — the album response, or the merged batches. Its
+  rows are NOT filtered: filtering happens in the projection, and -J is what came before it.
+
 Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
   auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
 
-There is no --parts: one song id is one file here. The site's many-item forms (an album, a
-playlist) live behind their own URL shapes and are not in this engine's first version.
+There is no --parts: one song id is one file here. The site's many-item forms — an album, a
+playlist — live behind their own URL shapes, and --items is the verb that reads those.
 
 Much of this catalogue is VIP-only — 43% of rows across the ten queries measured — and a
 VIP-only track resolves to a 30-second sample rather than failing. `ne-search` filters those
@@ -1127,15 +1491,19 @@ while (($#)); do
         shift
         ;;
     --info)
-        ACTION="info"
+        set_action info --info
         shift
         ;;
     --transcript | --subtitles)
-        ACTION="transcript"
+        set_action transcript "$1"
+        shift
+        ;;
+    --items)
+        set_action items --items
         shift
         ;;
     --auth)
-        ACTION="auth"
+        set_action auth --auth
         shift
         ;;
     # Named rather than swept up by the unknown-flag arm: a caller reaching for a language
@@ -1208,7 +1576,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "ne-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --auth)" >&2
+        echo "ne-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --items --auth)" >&2
         exit 1
         ;;
     *)
@@ -1228,12 +1596,22 @@ if [[ "$ACTION" == "auth" ]]; then
         exit 1
     fi
 else
+    # --items wants a CONTAINER, so it says so — and it never says "id", because a bare number
+    # is exactly what it refuses (see normalize_container).
     if ((${#positional[@]} == 0)); then
-        echo "ne-resolve: a song id or URL is required (see 'ne-resolve -h')" >&2
+        if [[ "$ACTION" == "items" ]]; then
+            echo "ne-resolve: an album or playlist URL is required (see 'ne-resolve -h')" >&2
+        else
+            echo "ne-resolve: a song id or URL is required (see 'ne-resolve -h')" >&2
+        fi
         exit 1
     fi
     if ((${#positional[@]} > 1)); then
-        echo "ne-resolve: takes exactly one song id or URL (got ${#positional[@]})" >&2
+        if [[ "$ACTION" == "items" ]]; then
+            echo "ne-resolve: takes exactly one album or playlist URL (got ${#positional[@]})" >&2
+        else
+            echo "ne-resolve: takes exactly one song id or URL (got ${#positional[@]})" >&2
+        fi
         exit 1
     fi
     TARGET="${positional[0]}"
@@ -1263,6 +1641,17 @@ fi
 if [[ "$ACTION" == "auth" ]]; then
     [[ "$OUTPUT_MODE" == "json" ]] && require_deps jq
     resolve_auth
+    exit 0
+fi
+
+# --items has its own handle grammar and its own transport: normalize_target refuses every
+# non-song path, which is the right answer for the verb that resolves one song and the wrong
+# one for the verb whose subject is albums and playlists. curl fetches and jq parses, so the
+# extractor is not this verb's dependency either — the same lazy gate --transcript gets.
+if [[ "$ACTION" == "items" ]]; then
+    normalize_container "$TARGET"
+    require_deps curl jq
+    resolve_items
     exit 0
 fi
 

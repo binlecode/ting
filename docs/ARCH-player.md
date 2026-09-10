@@ -15,7 +15,8 @@
 | CLI 动词语法、公开退出码与对外信封规范 | [`ARCH-cli-contract.md`](ARCH-cli-contract.md) |
 | 交互式用户操作界面、热键监听与终端列表渲染 | [`ARCH-tui.md`](ARCH-tui.md) |
 | MPD / MPRIS 跨平台守护进程或外部网络播放协议 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| `list=` 参数自动入队、plain 降采样等已否决路线 | [`ROADMAP.md`](ROADMAP.md) |
+| plain 降采样等已否决路线 | [`ROADMAP.md`](ROADMAP.md) |
+| 容器（歌单/专辑）展开成条目清单 —— 队列的上游 | [`ARCH-engine.md`](ARCH-engine.md) |
 
 ### 一张图：播放器生命周期与存储系统架构
 

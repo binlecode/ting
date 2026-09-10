@@ -15,7 +15,7 @@
 | 各音源站点提取实现、URL 解析规则与鉴权加密 | [`ARCH-engine.md`](ARCH-engine.md) |
 | mpv IPC 运行时管理、队列轮换与持久化数据存储 | [`ARCH-player.md`](ARCH-player.md) |
 | 套件定位、非目标、可替代点与整体架构决策 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| 跨引擎搜索、`list=` 队列等未定或已否决提案 | [`ROADMAP.md`](ROADMAP.md) |
+| 跨引擎搜索等未定或已否决提案 | [`ROADMAP.md`](ROADMAP.md) |
 
 ### 一张图：CLI 契约拓扑与信封通道
 
@@ -193,10 +193,12 @@ detached 播放器）。
 - **动词面只列它"有"的那些**（共享标志在 `usage()`；`-l` 散文是**默认**输出模式）：`--info`（每个引擎都有）、
   `--auth`（每个引擎都有）、`--transcript`（`yt-resolve` 与 `ne-resolve`；**伴随的 `--sub-lang` 只在
   `yt-resolve`** —— 一条字幕轨和一次语言选择是两件能力，ARCH-engine.md「字幕」）、
-  `--parts`（只有 `bili-resolve`，ARCHITECTURE.md「站点知识的边界」 同一条能力规矩）—— 以及流格式选择器 `--quality TIER`
+  `--parts`（只有 `bili-resolve`，ARCHITECTURE.md「站点知识的边界」 同一条能力规矩）、
+  `--items`（每个引擎都有 —— 容器展开，各站的容器形态与请求数在 ARCH-engine.md「容器（`--items`）」）
+  —— 以及流格式选择器 `--quality TIER`
   （`auto|low|medium|high`，每个引擎都有）。
 - **`--quality` 是流格式选择器，只配 `resolve_stream` 用。** 它撞上 `--info` / `--parts` /
-  `--transcript` 就退出 1（门语直说"它选择流格式，不适用于那个动词"）；它也不配 `--auth`。
+  `--items` / `--transcript` 就退出 1（门语直说"它选择流格式，不适用于那个动词"）；它也不配 `--auth`。
   档位的含义在引擎内部解析：`quality_sort_for_tier(mode, tier)` 把 (mode, tier) 映射成
   一段 yt-dlp `--format-sort` 串（`audio` 模式下是 `abr` 排序，`video` 下是 `res` 排序 ——
   二维，因为 audio 档位对 `res:` 一无所知），那张表**只住在引擎里**；
@@ -366,7 +368,8 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
   而一行为播放而生的记录放不下它们（`duration`/`view_count`/`channel` 在容器上同时无意义）。
   把频道、专辑、歌单、艺人全压进 `collection` 一个值，等于让调用方回头看 url 去分辨
   **有界的专辑**与**无界的创作者目录** —— 那是把站点知识挪回调用方，正是引擎接缝要消掉的东西
-  （决定与被否掉的替代方案：ROADMAP.md「容器行」，2026-09-03）。
+  （决定与被否掉的替代方案：2026-09-03；容器自己那个动词落地于
+  ARCH-engine.md「容器（`--items`）」）。
   **枚举因此收窄为两值**（0.5.7）：`collection` 无人认领，且不会有人认领 —— 一个不是行的
   东西不需要行上的一个值。收窄是**冻结面上的一次刻意动作**，与丢掉容器行那次功能改动分开做，
   这也是它没有在同一次里顺手发生的原因；对调用方不破坏，因为**没有任何引擎发过这个值**。
@@ -374,6 +377,30 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
   `-j`/`-J` 两种形状的不变量来断言，判据是**站点无关**的两句：`url`/`id` 非空，且
   **要么有 `duration`，要么说得出为什么没有**（`live_status` 非空 —— 一路直播就是这一格）。
   一个容器行两样都没有，而检查文件因此不必知道 `/channel/` 长什么样。
+
+容器信封（`<engine>-resolve --items -j -- <容器句柄>`）—— **行模型之外的第二种形状**，
+也是上面那句"容器要自己的信封"的落地：
+
+```json
+{"status":"ok","engine":"bili","id":"10624","url":"https://www.bilibili.com/audio/am10624",
+ "title":"新曲推荐","count":16,"total":16,
+ "items":[{"n":1,"engine":"bili","id":"2478206",
+           "url":"https://www.bilibili.com/audio/au2478206","title":"…",
+           "duration":112,"duration_fmt":"00h:01m:52s"}]}
+```
+
+- **`items[]` 的元素就是条目记录**，与 `--parts` 的 `parts[]` 同形再加一个 `id` —— 正是
+  `ut-playlist` 存的、`ut-play --queue` 吃的那份 `{engine, url, id?, title?, duration?}`。
+  每条自带 `engine` 与完整可播 `url`：**一条记录是一次调用，不是一个引用**。键名叫 `items`
+  是接缝设计而不是口味 —— 那是两个消费方本来就认的键，所以这条管道两边零改动。
+- **不放 `artist` / `channel` / `uploader`**：`ut-playlist` 刻意不存会过期的作者类字段（见下），
+  而这个信封的去处就是存储与队列。要作者名走 `-J`。
+- **`count` 是这次返回的条数，`total` 是站方声明的总数**（站方不声明时为 `null`）。两者的差同时
+  覆盖"被上限截断"与"被过滤掉"，信封不为区分它们加键；这也是 `--status` 里 `len` 与 `upcoming`
+  分开的同一条规矩。
+- **`duration_fmt` 由 `JQ_PRELUDE` 的 `fmt_dur` 导出**，与搜索行、`--parts` 同一个格式。
+- 失败是 `{status, engine, url, reason}` + 退 2，`reason` 只取共享枚举；空容器是 `count: 0` +
+  退 0。三个站怎么说"这个容器不存在"各不相同，见 ARCH-engine.md「容器（`--items`）」的实测表。
 
 解析信封（`<engine>-resolve -j -f MODE -- <handle>`）：
 这就是播放器用来表达"我在放什么"的全部词汇，每一个键都在承重：
@@ -576,13 +603,17 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         `--queue` 而没有 `-d`、或配上一个动作、或 argv 上带了句柄、
         一个不认识的 --engine、一个 host 不是这个引擎的 URL（ARCH-engine.md「解析」 / 本文 「数据契约」）、
         --info / --transcript 取数失败（含 no_subtitles_available）、
-        --quality 撞上 --info / --parts / --transcript / --auth（它是流格式选择器，「命令规格」的 `<engine>-resolve` 一节）、
-        一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）
+        --quality 撞上 --info / --parts / --items / --transcript / --auth（它是流格式选择器，「命令规格」的 `<engine>-resolve` 一节）、
+        一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）、
+        --items 拿到一个不是容器的句柄（一个单曲 id、一个无尾的列表、网易云的裸数字）、
+        --items 与另一个动词同时给出（ARCH-engine.md「容器（`--items`）」）
    2+   传播上来的 yt-dlp / mpv / HTTP 失败（播放、resolve -j、**搜索**失败 ——
         搜索即使 yt-dlp 退出 1 也报 2，好让一次工具失败永远不会与 1 混淆）。
         --parts 的取数失败同样落在这里（网络 / 记录里没有 parts —— 一次工具失败，
         与 --info 的"取数失败退 1"不同：--parts 的失败来自它**发起的那次请求**，
         --info 的失败来自引擎对已有取数的再解释，见 「数据契约」）。
+        --items 的取数失败同理落在这里，包括"容器不存在"（三个站三种说法，
+        ARCH-engine.md「容器（`--items`）」）；一个**空**容器不是失败，它退 0。
         一个引擎解析不了的句柄落在**这里**，不是落在 1：播放器判断不了一个 id 的形状，
         所以"坏 id"是一个抽取结果（ARCHITECTURE.md「端到端控制流」）。
    4    --set-volume / --pause / --resume / --seek / --seek-to / --enqueue / --next /

@@ -720,6 +720,19 @@ BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
 # that shape, and it is the input that separates the two implementations.
 NE_LYRIC="1824020871"
 NE_SILENT="478507889"
+# The container fixtures, one per site, each chosen for what it can prove:
+#   YT_LIST    a long-lived public playlist, well under the 500 ceiling, so count==total.
+#   BILI_MENU  the audio menu yt-dlp's own extractor is tested against (16 tracks).
+#   NE_LIST    an official chart, 99 tracks — the number matters: this site returns ALL of a
+#              playlist's ids and only a handful of full records, so a `count` that reaches
+#              `total` here is the batch path having completed the truncated first response.
+#              It needs NE_INCLUDE_VIP=1, because a chart is mostly VIP-only and the default
+#              filter is doing its job when it drops those.
+# No count is asserted as a literal: these are living catalogues, and a red that is someone
+# adding a track is a red nobody can act on.
+YT_LIST="PLLdzS5ShOfOw"
+BILI_MENU="am10624"
+NE_LIST="https://music.163.com/playlist?id=19723756"
 
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
@@ -767,6 +780,30 @@ report "yt --parts is usage"        1 "$(rc shell/yt-resolve --parts)"
 # enumerating parts resolves no stream. Same rule --info is already held to above.
 report "bili --parts takes ONE handle" 1 \
     "$(rc shell/bili-resolve --parts -- "$BILI_ID" "$BILI_ID")"
+
+# --items is the one read-only verb EVERY engine has, so presence is not the discriminator —
+# the per-engine GRAMMAR is, and each of these three refusals is a different site's reason.
+# All of it is offline: a handle is judged before a request is spent, which is itself the
+# claim (a container verb that had to ask the site whether a handle was a container would
+# cost a request per typo).
+report "--items refuses a video id"     0 \
+    "$(err_has 'not a bounded container' shell/yt-resolve --items -- "$MEDIA_ID")"
+# A mix and a channel's uploads are REFUSED BY NAME rather than half-read: they have no last
+# item, so `total` would be a lie and the ceiling would decide the contents.
+report "--items refuses an endless list" 0 \
+    "$(err_has 'no last item' shell/yt-resolve --items -- RDdQw4w9WgXcQ)"
+report "--items refuses a BV id"        0 \
+    "$(err_has 'not a Bilibili audio menu' shell/bili-resolve --items -- "$BILI_ID")"
+# The third site's own reason, and it is not fussiness: `song`, `album` and `playlist` ids
+# share no namespace here, so a bare number cannot say what it identifies. The song verb
+# accepts one only because it has already decided what it means.
+report "--items refuses a bare number"  0 \
+    "$(err_has 'does not say what it identifies' shell/ne-resolve --items -- "$NE_LYRIC")"
+report "--items refuses a song URL"     0 \
+    "$(err_has 'not an album or playlist' shell/ne-resolve --items -- "https://music.163.com/song?id=$NE_LYRIC")"
+# The cross-engine half of this — one verb per invocation, a handle required, exactly one —
+# is stated over every DISCOVERED engine, and it lives in the discovery section below where
+# $ENGINES exists.
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
 # "the tool failed, retry later" and retry a name that will never exist.
@@ -980,6 +1017,22 @@ for n in $ENGINES; do
     [ "$(rc "shell/$n-search" --quality high -- q)" = 1 ] && _qdash=$((_qdash + 1))
 done
 report "every search half refuses --quality" "$NENG" "$_qdash"
+# --items' cross-engine obligations, stated over every discovered engine because the verb is
+# on all of them (unlike --parts and --transcript, which are capabilities of one site each):
+# a handle is required, exactly one is taken, and two verbs in one invocation is a caller who
+# has not said what it wants — refused rather than resolved by picking the last one
+# (ARCH-cli-contract.md「门模型」). Engine #4 is covered the day it lands.
+#
+# The two-verb claim is the MESSAGE, not the code: an absent verb, a missing handle and this
+# all exit 1, so a count of exit codes could not tell them apart.
+_items_gate=0
+for n in $ENGINES; do
+    [ "$(rc "shell/$n-resolve" --items)" = 1 ] &&
+        [ "$(rc "shell/$n-resolve" --items -- x y)" = 1 ] &&
+        [ "$(err_has 'two verbs' "shell/$n-resolve" --items --info -- x)" = 0 ] &&
+        _items_gate=$((_items_gate + 1))
+done
+report "every --items refuses no handle, two handles, two verbs" "$NENG" "$_items_gate"
 
 # THE READ-ONLY RESOLVE VERBS ARE HELD TO THE SAME RULE, and this replaces three lines that
 # named ONE engine's ONE verb: `--info` — the verb EVERY engine has — had no coverage at all.
@@ -1011,7 +1064,7 @@ _ro_verb_has() {
 _ro=0
 _ro_n=0
 for n in $ENGINES; do
-    for _v in --info --transcript --parts; do
+    for _v in --info --transcript --parts --items; do
         _ro_verb_has "$n" "$_v" || continue
         for _bad in "-f audio" "-S abr" "--quality low"; do
             _ro_n=$((_ro_n + 1))
@@ -1050,7 +1103,7 @@ report "every read-only resolve verb refuses a format flag" "$_ro_n" "$_ro"
 _ro_host=0
 _ro_host_n=0
 for n in $ENGINES; do
-    for _v in --info --transcript --parts; do
+    for _v in --info --transcript --parts --items; do
         _ro_verb_has "$n" "$_v" || continue
         # The companion flag rides along where the documented line has one — and whether
         # THIS engine has it is discovered, never tabled. --sub-lang is --transcript's and
@@ -1304,6 +1357,27 @@ report "…parsed, not refused"             0 \
 # records are NOT calls. 1, not 4 — so the pair really is reading the fixture's shape.
 report "…and a record with no url is 1"   1 \
     "$(rc_in '[{"engine":"bili"}]' shell/ut-play --enqueue - -j)"
+
+# THE SAME CLAIM FOR --items, and the difference is the one field name that matters: a part
+# list needs `jq '{items:.parts}'` to reach either of these two commands, and a container's
+# envelope needs NOTHING — it is already keyed `items`, which is why 3.1 of the plan that
+# built it chose that name. This fixture is a real capture (`bili-resolve --items -j --
+# am10624`, 2026-09-10), cut to three rows; hermetic for the same reason the part list above
+# is, and the live half asserts the engines still EMIT this shape.
+ITEMS_FIXTURE='{"status":"ok","engine":"bili","id":"10624","url":"https://www.bilibili.com/audio/am10624","title":"新曲推荐","count":3,"total":16,"items":[{"n":1,"engine":"bili","id":"2478206","url":"https://www.bilibili.com/audio/au2478206","title":"【Mitchie M】Nechusho No!No! (feat. 初音未来 & MEIKO)","duration":112,"duration_fmt":"00h:01m:52s"},{"n":2,"engine":"bili","id":"2445151","url":"https://www.bilibili.com/audio/au2445151","title":"【洛天依原创】双星伴生","duration":197,"duration_fmt":"00h:03m:17s"},{"n":3,"engine":"bili","id":"2435107","url":"https://www.bilibili.com/audio/au2435107","title":"【小柔】寄り酔い（cover）","duration":216,"duration_fmt":"00h:03m:36s"}]}'
+
+report "an item list adds to a playlist, unmapped" 0 \
+    "$(jq_in '.status=="ok" and .added==3 and .count==3' "$ITEMS_FIXTURE" shell/ut-playlist --add items -j)"
+report "…and every stored row is a call"  0 \
+    "$(jq_ok '(.items|length)==3 and all(.items[];
+                 .engine=="bili"
+                 and (.url|startswith("https://www.bilibili.com/audio/au"))
+                 and (.id|type)=="string"
+                 and (.title|type)=="string" and (.title|length)>0
+                 and (.duration|type)=="number")' shell/ut-playlist --show items -j)"
+report "an item list enqueues"            4 "$(rc_in "$ITEMS_FIXTURE" shell/ut-play --enqueue - -j)"
+report "…parsed, not refused"             0 \
+    "$(jq_in '.status=="not_playing"' "$ITEMS_FIXTURE" shell/ut-play --enqueue - -j)"
 
 # --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
 # verb over. Under the dead proxy this verb reaches its transport and fails with 2; a
@@ -1669,6 +1743,13 @@ spawn ne-vip       env NE_INCLUDE_VIP=1 shell/ne-search -j -n 20 -- 周杰伦
 spawn ne-trans     shell/ne-resolve --transcript -j -- "$NE_LYRIC"
 spawn ne-notrans   shell/ne-resolve --transcript -j -- "$NE_SILENT"
 spawn ne-novip     shell/ne-search  -j -n 20 -- 周杰伦
+spawn yt-items     shell/yt-resolve   --items -j -- "$YT_LIST"
+spawn bili-items   shell/bili-resolve --items -j -- "$BILI_MENU"
+spawn ne-items     env NE_INCLUDE_VIP=1 shell/ne-resolve --items -j -- "$NE_LIST"
+spawn ne-items-def shell/ne-resolve   --items -j -- "$NE_LIST"
+spawn yt-nolist    shell/yt-resolve   --items -j -- PLzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+spawn bili-nomenu  shell/bili-resolve --items -j -- am999999999
+spawn ne-nolist    shell/ne-resolve   --items -j -- "https://music.163.com/album?id=999999999"
 for n in $ENGINES; do
     spawn_once "net-j-$n" env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/"$n"-search -j -n 2 -- lofi
     spawn_once "net-t-$n" env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/"$n"-search    -n 2 -- lofi
@@ -1797,6 +1878,73 @@ NE_NOLYR=$(out ne-notrans); NE_NOLYR_ST=$(src ne-notrans)
 report "an instrumental is a miss, not empty words" 0 \
     "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NE_NOLYR")"
 report "…and it exits 1, like the other engine's" 1 "$NE_NOLYR_ST"
+
+echo "── --items: a container is not a row ─────────────────────────────"
+# ONE ENVELOPE OVER THREE SITES, and the shape is the claim: whatever a container is called
+# there, what comes back is `{id, url, title, count, total, items[]}` and every element is an
+# item record — an engine to route to, a playable url of its own, a title and a duration. The
+# offline half already proved such a list feeds ut-playlist and ut-play with no field renamed;
+# this half is what proves the engines still EMIT it.
+#
+# `count == total` is asserted where the container fits under the ceiling, because that is the
+# only place it CAN be: it is the statement that nothing was silently dropped. The counts
+# themselves are never literals — see the fixtures.
+_items_ok=0
+for _slot in yt-items bili-items ne-items; do
+    [ "$(jqv '.status=="ok" and (.id|type)=="string" and (.url|type)=="string"
+              and (.title|type)=="string"
+              and (.count|type)=="number" and (.total|type)=="number"
+              and .count==.total and .count>10
+              and (.items|length)==.count
+              and ([.items[].n]==[range(1; (.count+1))])
+              and all(.items[];
+                      (.engine|type)=="string" and (.engine|length)>0
+                      and (.url|type)=="string" and (.url|startswith("http"))
+                      and (.id|type)=="string" and (.id|length)>0
+                      and (.duration|type)=="number" and .duration>0
+                      and (.duration_fmt|test("h:[0-9][0-9]m:[0-9][0-9]s$")))' "$(out $_slot)")" = 0 ] &&
+        _items_ok=$((_items_ok + 1))
+done
+report "every --items envelope is a list of calls" 3 "$_items_ok"
+# Each site's own id spelling, checked once: an item's url has to be the one that RESOLVES,
+# and the three engines build it three different ways. A record that named the container, or
+# that carried the site's collection query along, would pass every check above.
+report "yt items are watch urls, no list="   0 \
+    "$(jqv 'all(.items[]; (.url|test("^https://www\\.youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}$")))' "$(out yt-items)")"
+report "bili items are au urls"              0 \
+    "$(jqv 'all(.items[]; (.url|test("^https://www\\.bilibili\\.com/audio/au[0-9]+$")))' "$(out bili-items)")"
+report "ne items are song urls"              0 \
+    "$(jqv 'all(.items[]; (.url|test("^https://music\\.163\\.com/song\\?id=[0-9]+$")))' "$(out ne-items)")"
+# THE FILTER, on the site that has one. Default drops every row a caller would not actually be
+# served, and `total` does NOT move when it does — that is the whole reason the envelope
+# carries both numbers. A chart is the input that separates the two: it is mostly VIP-only, so
+# an implementation that forgot the filter comes back with the same count as the VIP run.
+report "ne --items filters by access, and total stands" 0 \
+    "$(jqv '.status=="ok" and .count<.total and .total>10' "$(out ne-items-def)")"
+# The two runs COMPARED, which is the half a single envelope cannot state: the filter is what
+# separates them, so more rows with the same `total` is the filter having been the only
+# difference. Read as numbers rather than through jq, because the two envelopes are two
+# documents and jqv takes one.
+_ne_all=$(printf '%s' "$(out ne-items)" | jq -r '.count // 0' 2>/dev/null) || _ne_all=0
+_ne_def=$(printf '%s' "$(out ne-items-def)" | jq -r '.count // 0' 2>/dev/null) || _ne_def=0
+_ne_tot_all=$(printf '%s' "$(out ne-items)" | jq -r '.total // 0' 2>/dev/null) || _ne_tot_all=0
+_ne_tot_def=$(printf '%s' "$(out ne-items-def)" | jq -r '.total // 0' 2>/dev/null) || _ne_tot_def=0
+_ne_more=no
+[ "${_ne_all:-0}" -gt "${_ne_def:-0}" ] && [ "${_ne_tot_all:-0}" = "${_ne_tot_def:-0}" ] && _ne_more=yes
+report "…and asking for VIP rows returns more, same total" yes "$_ne_more"
+# A CONTAINER THAT IS NOT THERE IS A STATEMENT ABOUT THE HANDLE, over all three sites — and it
+# is exit 2 with a reason, never 1: by the time a request has been spent the caller's argv was
+# fine. It is also the one thing each site says most differently (measured 2026-09-10: yt-dlp
+# exits 1 saying "does not exist", Bilibili answers HTTP 200 / code 0 / data null, NetEase a
+# body code of 404), so an engine reading only the exit code or only the HTTP status gets it
+# wrong on two of the three.
+_items_gone=0
+for _slot in yt-nolist bili-nomenu ne-nolist; do
+    [ "$(src $_slot)" = 2 ] &&
+        [ "$(jqv '.status=="error" and .reason=="unavailable"' "$(out $_slot)")" = 0 ] &&
+        _items_gone=$((_items_gone + 1))
+done
+report "a missing container is 2 + unavailable, everywhere" 3 "$_items_gone"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
 # The second engine's envelopes. The SEARCH is the one the live half already made — a key

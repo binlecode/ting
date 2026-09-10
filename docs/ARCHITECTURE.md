@@ -204,7 +204,8 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
   因为 `ytsearch` 没有 scope 选择器，而另外两个引擎是靠选定范围躲开的）。容器归**它自己的
   动词与信封**，不是行上 `kind` 的一个值：一个枚举值装不下"有界的专辑"与"无界的创作者目录"
   的差别，装进去等于让调用方回头看 url —— 把站点知识挪回了调用方。
-  （ROADMAP.md「容器行」、ARCH-cli-contract.md「数据契约」、ARCH-engine.md「`kind` 与 `access`」）
+  容器展开成清单的动词是 `<engine>-resolve --items`，三个引擎都有。
+  （ARCH-engine.md「容器（`--items`）」与「`kind` 与 `access`」、ARCH-cli-contract.md「数据契约」）
 - **`access` 是引擎算的，不是 UI 猜的**：站点给得出信号就算（网易云的 `fee`），
   给不出就恒印默认值 —— 两种都是合法状态，而**恒印默认值必须是实测结论，不是占位**。
   （ARCH-engine.md「`kind` 与 `access`」、ARCH-cli-contract.md「数据契约」）

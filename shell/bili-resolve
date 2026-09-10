@@ -144,6 +144,36 @@ VIEW_ENDPOINT="https://api.bilibili.com/x/web-interface/view"
 PAGELIST_ENDPOINT="https://api.bilibili.com/x/player/pagelist"
 VIEW_REFERER="https://www.bilibili.com/"
 
+# THE AUDIO-MENU ENDPOINTS — the container verb's transport, and this file's third and last
+# hand-built request. Two endpoints, one GET each per page:
+#
+#   menu/info      the menu's own record: `.data.title`, and — the reason it is called at all
+#                  — whether the menu EXISTS. Measured 2026-09-10: an am id nobody ever
+#                  created answers HTTP 200, `code: 0`, `msg: "success"` and `data: null`. So
+#                  the body code is no answer here and the id is judged by the SHAPE of what
+#                  came back.
+#   song/of-menu   the tracks: `.data.totalSize` and `.data.data[]{id,title,duration}`, with
+#                  duration already in seconds. It cannot stand in for that existence check:
+#                  a menu that does not exist answers `code: 0` with `totalSize: 0` and an
+#                  empty array — the same body an existing EMPTY menu returns.
+#
+# Both live under the `music-service-c` host, which ignores Accept-Encoding and answers gzip
+# whatever is asked: a curl without --compressed gets binary (measured). Every curl in this
+# file already carries it; it is written down because this is the first request that would
+# have broken without it.
+#
+# UNPREFIXED, like the parts endpoints above and for the same reason.
+MENU_INFO_ENDPOINT="https://www.bilibili.com/audio/music-service-c/web/menu/info"
+OF_MENU_ENDPOINT="https://www.bilibili.com/audio/music-service-c/web/song/of-menu"
+
+# A page is 100 because the SERVER says so — ps=100 answers, ps=101 answers code 4511000 and
+# no data (measured) — and the ceiling is five of them. Neither is a flag: `-n` is a search
+# flag this engine refuses, and a second spelling of it would be a whole contract for one edge
+# case. A caller learns it was truncated from the envelope, where `count` below `total` says
+# so. ARCH-engine.md「容器（--items）」.
+ITEMS_PAGE=100
+ITEMS_MAX=500
+
 # Cookies (login) are ON by default (browser: chrome). On this site they buy AUDIO QUALITY
 # rather than access: an account — more so a premium one — is offered Hi-Res / Dolby /
 # lossless renditions that an anonymous client is not, and this suite's main use is
@@ -208,7 +238,8 @@ if [[ -n "${BILI_COOKIE_BROWSER:-}" && "$BILI_COOKIE_BROWSER" != "none" ]]; then
     fi
 fi
 
-ACTION="stream"      # stream | info | parts | auth
+ACTION="stream"      # stream | info | parts | items | auth
+VERB_FLAG=""         # the verb flag as typed — the one-verb-per-invocation gate reads it
 # The `-f` default, cross-engine: a user who listens rather than watches says so once.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
@@ -219,6 +250,8 @@ OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
 TARGET_URL=""        # the watch URL it normalises to
 TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_start_seconds
+CONTAINER_ID=""      # the am id --items resolves to, digits only
+CONTAINER_URL=""     # the canonical menu URL those digits normalise to
 FMT=""               # the yt-dlp format string the mode resolves to
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
@@ -266,6 +299,21 @@ validate_enum() {
         fi
     done
     return 1
+}
+
+# ONE VERB PER INVOCATION — enforced for every pair that includes --items, and only those.
+# The older verbs keep their last-one-wins behaviour: it is what has shipped, and turning an
+# exit 0 into an exit 1 for `--info --parts` is a contract change nobody asked for (CLAUDE.md
+# 红线 4). A caller who names two verbs has not said what it wants, and the gate model answers
+# that by refusing rather than by guessing (ARCH-cli-contract.md「门模型」).
+set_action() {
+    local action=$1 flag=$2
+    if [[ -n "$VERB_FLAG" && "$VERB_FLAG" != "$flag" ]] &&
+        { [[ "$flag" == "--items" ]] || [[ "$VERB_FLAG" == "--items" ]]; }; then
+        die "$VERB_FLAG and $flag are two verbs — pass one"
+    fi
+    VERB_FLAG="$flag"
+    ACTION="$action"
 }
 
 require_cmd() {
@@ -536,6 +584,53 @@ target_id() {
         [[ "$seg" =~ ^(BV[A-Za-z0-9]{10}|av[0-9]+)$ ]] || seg=""
     fi
     printf '%s' "$seg"
+}
+
+# The audio-menu id a container handle carries, or "". A menu is `/audio/am<digits>` and
+# nothing else on this site is, so unlike target_id there is no query-string spelling to fall
+# back to: the prefix is the whole grammar.
+container_id() {
+    local u="${1%%#*}" seg
+    u="${u%%\?*}"
+    u="${u%/}"
+    seg="${u##*/}"
+    case "$u" in
+    */audio/am[0-9]*) ;;
+    *) seg="" ;;
+    esac
+    [[ "$seg" =~ ^am[0-9]+$ ]] || seg=""
+    printf '%s' "${seg#am}"
+}
+
+# --items' OWN handle grammar, BESIDE normalize_target rather than inside it. The two answer
+# different questions — one wants a video, the other a menu — and merging them would teach the
+# stream verb to accept a container it can only answer with an empty stream list.
+#
+# What they do share is the HOST gate, and it fires first here too: an off-site URL is the same
+# usage error at every verb and must be reported before this engine's opinion about what a
+# container looks like. tests/contract.sh reads that ordering off every read-only verb.
+normalize_container() {
+    local t=$1 host id=""
+    case "$t" in
+    http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
+        id=$(container_id "$t")
+        ;;
+    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
+        id=$(container_id "https://$t")
+        ;;
+    am[0-9]*)
+        [[ "$t" =~ ^am[0-9]+$ ]] ||
+            die "'$t' is not an audio menu id (expected am followed by digits)"
+        id="${t#am}"
+        ;;
+    esac
+    [[ -n "$id" ]] ||
+        die "'$t' is not a Bilibili audio menu — --items takes an am id or a bilibili.com/audio/am<id> URL (for the parts of one video, that is --parts)"
+    CONTAINER_ID="$id"
+    CONTAINER_URL="https://www.bilibili.com/audio/am$id"
 }
 
 # ==============================================================================
@@ -1077,7 +1172,208 @@ resolve_parts() {
 }
 
 # ==============================================================================
-# 6. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
+# 6. THE ITEMS VERB (read-only: HTTP only, no yt-dlp, no state file)
+# ==============================================================================
+
+# A CONTAINER IS NOT A ROW. An audio menu holds tens to hundreds of tracks and has no duration
+# of its own; what it has is a track count and a page cursor, and neither of those has anywhere
+# to live on a search row — so a container gets its own verb and its own envelope rather than a
+# `kind` on the row model. ARCH-engine.md「容器（--items）」.
+#
+# EVERY ITEM IS AN ITEM RECORD, the same claim --parts makes about its parts: `{engine, id, url,
+# title, duration}` is what ut-playlist stores and what ut-play --queue consumes, and the key is
+# `items` because that is the name both of them already read. So `--items -j` pipes into either
+# with nothing renamed and neither of them changed a line to accept it. Each record carries its
+# own `engine` and a complete playable url, because a record here is a CALL, not a reference.
+#
+# Item ids are the SITE's digits and the url is the `au` spelling of them — the pair that
+# resolving one of these tracks answers with (measured: `bili-resolve -j -- .../audio/au2478206`
+# reports id "2478206"). A record stored out of this envelope therefore names its track exactly
+# the way the resolve envelope for it does.
+#
+# yt-dlp HAS both of these endpoints (BilibiliAudioAlbumIE) and is still not used, for --parts'
+# reason plus one: it fetches a single page of 100 and never pages, so a menu longer than that
+# would come back silently short. Two GETs this file already knows how to make cost no python
+# start.
+
+# The transport, twin of fetch_view_once and writing the SAME three globals, so
+# classify_view_error reads either endpoint and no second error table grows here.
+fetch_menu_info_once() {
+    local id=$1 body=$2
+    local cmd=(
+        curl -sS --compressed
+        --max-time 15 --retry 0
+        -o "$body" -w '%{http_code}'
+        -G "$MENU_INFO_ENDPOINT"
+        -H "User-Agent: $BILI_UA"
+        -H "Referer: $VIEW_REFERER"
+        --data-urlencode "sid=$id"
+    )
+
+    VIEW_CURL_RC=0
+    VIEW_HTTP=$("${cmd[@]}" 2>/dev/null) || VIEW_CURL_RC=$?
+    VIEW_CODE=""
+    if [[ -s "$body" ]]; then
+        VIEW_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || VIEW_CODE=""
+    fi
+    ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
+}
+
+# One page of tracks. `pn` and `ps` go through --data-urlencode like the sid, not because a
+# number needs escaping but because the whole query is built one way here and an exception is
+# how the one that does need it gets missed.
+fetch_of_menu_once() {
+    local id=$1 pn=$2 ps=$3 body=$4
+    local cmd=(
+        curl -sS --compressed
+        --max-time 15 --retry 0
+        -o "$body" -w '%{http_code}'
+        -G "$OF_MENU_ENDPOINT"
+        -H "User-Agent: $BILI_UA"
+        -H "Referer: $VIEW_REFERER"
+        --data-urlencode "sid=$id"
+        --data-urlencode "pn=$pn"
+        --data-urlencode "ps=$ps"
+    )
+
+    VIEW_CURL_RC=0
+    VIEW_HTTP=$("${cmd[@]}" 2>/dev/null) || VIEW_CURL_RC=$?
+    VIEW_CODE=""
+    if [[ -s "$body" ]]; then
+        VIEW_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || VIEW_CODE=""
+    fi
+    ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
+}
+
+# Exit 2, never 1 and never 4: by the time a request has been made nothing here is the caller's
+# usage error, and 4 is the lifecycle/storage code an engine never emits. `reason` is the shared
+# enum (ARCH-cli-contract.md「数据契约」), same three-line envelope --parts publishes.
+items_fail() {
+    local reason=$1
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$CONTAINER_URL" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, reason: $reason}'
+    else
+        echo "bili-resolve: could not list the items of $CONTAINER_URL ($reason)" >&2
+    fi
+    exit 2
+}
+
+# Every page's rows, in order, cut to the ceiling. The cut is here rather than in the loop so
+# that -J and -j answer about the same rows.
+JQ_ITEM_ROWS='[ .[] | (.data.data // [])[] ] | .[0:$max]'
+
+# A row is an item only if it can be PLAYED and can say how long it is: an id that builds a url
+# and a numeric duration. Same judgement a search row passes (ARCH-cli-contract.md「数据契约」),
+# minus its live_status arm — nothing in the audio catalogue is live, so there is no second way
+# to explain a missing duration here.
+JQ_ITEM_FILTER='[ .[] | select((.id | type) == "number" and .id > 0
+                               and (.duration | type) == "number") ]'
+
+# `count` is what came back and `total` is what the site SAYS it holds, and the gap between them
+# is the whole reason a container needs its own envelope: it covers both truncation (the ceiling
+# above) and rows dropped by the filter, and the envelope does not add a key to tell those apart.
+JQ_ITEMS='
+{status: "ok", engine: $engine, id: $id, url: $url,
+ title: ($info[0].data.title // null),
+ count: ($rows | length),
+ total: $total,
+ items: [ $rows | to_entries[]
+          | .key as $i | .value as $r
+          | ($r.id | tostring) as $sid
+          | {n: ($i + 1), engine: $engine, id: $sid,
+             url: ("https://www.bilibili.com/audio/au" + $sid),
+             title: ($r.title // null),
+             duration: ($r.duration // null),
+             duration_fmt: (($r.duration | fmt_dur) // null)} ]}
+'
+
+resolve_items() {
+    ensure_scratch
+
+    local info="$SCRATCH_DIR/menu-info.json"
+    if ! fetch_menu_info_once "$CONTAINER_ID" "$info"; then
+        items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+    fi
+    # THE EXISTENCE CHECK, and it reads the shape because the code cannot answer it: an am id
+    # nobody created comes back 200 / code 0 / msg "success" / data null (measured 2026-09-10).
+    # Checked here rather than after the tracks, so a typo costs one request and is reported as
+    # a statement about the HANDLE instead of as an empty menu.
+    jq -e '(.data | type) == "object"' "$info" >/dev/null 2>&1 ||
+        items_fail "unavailable"
+
+    # Pages are spent only while there is reason to: a short page is the last page, `total` says
+    # when the list is complete, and the ceiling stops a very long menu. A page past the end
+    # answers code 0 with an empty array (measured), so the loop cannot run away on a site that
+    # keeps saying yes.
+    local pages=() page pn=1 on_page=0 accum=0 total="null"
+    while :; do
+        page="$SCRATCH_DIR/of-menu-$pn.json"
+        if ! fetch_of_menu_once "$CONTAINER_ID" "$pn" "$ITEMS_PAGE" "$page"; then
+            items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+        fi
+        pages+=("$page")
+        on_page=$(jq -r '(.data.data // []) | length' "$page" 2>/dev/null) || on_page=0
+        [[ "$on_page" =~ ^[0-9]+$ ]] || on_page=0
+        if ((pn == 1)); then
+            total=$(jq -r '.data.totalSize // "null"' "$page" 2>/dev/null) || total="null"
+            [[ "$total" =~ ^[0-9]+$ ]] || total="null"
+        fi
+        accum=$((accum + on_page))
+        ((on_page < ITEMS_PAGE)) && break
+        ((accum >= ITEMS_MAX)) && break
+        [[ "$total" != "null" ]] && ((accum >= total)) && break
+        pn=$((pn + 1))
+    done
+
+    local raw_rows
+    raw_rows=$(jq -c -s --argjson max "$ITEMS_MAX" "$JQ_ITEM_ROWS" "${pages[@]}" 2>/dev/null) ||
+        items_fail "unknown"
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        # The body that CARRIES the items, at full fidelity — the same rule --parts -J follows,
+        # and the reason menu/info's body does not appear here: it serves only the top-level
+        # title. When more than one page was spent, every page's rows replace page one's
+        # `.data.data`, because a -J that answered about less than -j would be the one output
+        # mode that loses information by widening.
+        jq -c --argjson rows "$raw_rows" '.data.data = $rows' "${pages[0]}" ||
+            items_fail "unknown"
+        return 0
+    fi
+
+    local rows env_json
+    rows=$(printf '%s' "$raw_rows" | jq -c "$JQ_ITEM_FILTER" 2>/dev/null) ||
+        items_fail "unknown"
+    env_json=$(jq -nc --slurpfile info "$info" --argjson rows "$rows" \
+        --arg engine "$ENGINE_NAME" --arg id "$CONTAINER_ID" --arg url "$CONTAINER_URL" \
+        --argjson total "$total" "$JQ_PRELUDE $JQ_ITEMS" 2>/dev/null) ||
+        items_fail "unknown"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$env_json"
+        return 0
+    fi
+
+    # Prose, in the vocabulary --parts and ut-playlist --show already speak: the title, a dashed
+    # summary line, then one line per track. An EMPTY menu prints its title and a count of 0 —
+    # that is an answer, the same way a single-part video is an answer to --parts.
+    local title count total_txt
+    title=$(printf '%s' "$env_json" | jq -r '.title // "(untitled)"')
+    count=$(printf '%s' "$env_json" | jq -r '.count')
+    total_txt=$(printf '%s' "$env_json" | jq -r '.total // "?"')
+
+    if [[ -n "$MUSIC_CHAR" ]]; then
+        printf '%s %s\n' "$MUSIC_CHAR" "$title"
+    else
+        printf '%s\n' "$title"
+    fi
+    printf '  - items: %s   total: %s\n' "$count" "$total_txt"
+    printf '%s' "$env_json" | jq -r '.items[] | "  \(.n). \(.title // "")  \(.duration_fmt // "")"'
+    return 0
+}
+
+# ==============================================================================
+# 7. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
 # ==============================================================================
 
 # Report the cookie DECISION this engine made at startup: which browser profile playback
@@ -1118,7 +1414,7 @@ resolve_auth() {
 }
 
 # ==============================================================================
-# 7. CLI
+# 8. CLI
 # ==============================================================================
 
 print_usage() {
@@ -1129,6 +1425,7 @@ Usage:
   bili-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <BV id | av id | URL>
   bili-resolve --info [-j|-J] -- <BV id | av id | URL>
   bili-resolve --parts [-j|-J] -- <BV id | av id | URL>
+  bili-resolve --items [-j|-J] -- <am id | audio menu URL>
   bili-resolve --auth [-j]
 
 The handle is a Bilibili URL, a BV id (what `bili-search -j` returns as results[].id), or
@@ -1147,6 +1444,11 @@ Options:
            (a second one only when the preferred endpoint refuses; see `title` below).
            Every element is an item record, so the list pipes into ut-playlist --add and
            ut-play --queue unmapped. A single-part video lists one part, not an error
+  --items  List the tracks of an audio menu (am id, or /audio/am<id>) — HTTP only, no
+           yt-dlp. Every element is an item record, so the list pipes into
+           ut-playlist --add and ut-play --queue unmapped. Pages of 100 up to 500 tracks;
+           count below total means the menu is longer than that, or held rows this engine
+           could not play. An empty menu lists 0 items and is not an error
   --auth   Report the cookie decision: which browser profile playback will read, and
            whether it exists here. No network, no handle. Says cookies are SENT, not
            that they are accepted — an expired login still reports "cookie"
@@ -1176,6 +1478,15 @@ Parts JSON (--parts -j): {status,engine,id,title,url,count,total_duration,
   The verb needs an id, so a b23.tv short link (a redirect) is refused — pass the BV id.
   There is no --parts on yt-resolve: one id there is one file, and its many-item form is a
   playlist under its own URL. A caller probes for the verb by invoking it with no handle.
+
+Items JSON (--items -j): {status,engine,id,url,title,count,total,
+                          items:[{n,engine,id,url,title,duration,duration_fmt}]}
+  count is what came back; total is what the site says the menu holds. They differ when the
+  menu is longer than the ceiling or when a row was not playable, and the envelope does not
+  say which — the fix for either is the same, ask for less or accept less.
+  -J returns the of-menu body that carried the rows, every page of it merged into one.
+  A container is NOT a search row: a menu has no duration, and its track count and cursor
+  have nowhere to live on a row. That is why this verb exists instead of a `kind`.
 
 Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
   auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
@@ -1241,15 +1552,19 @@ while (($#)); do
         shift
         ;;
     --info)
-        ACTION="info"
+        set_action info --info
         shift
         ;;
     --parts)
-        ACTION="parts"
+        set_action parts --parts
+        shift
+        ;;
+    --items)
+        set_action items --items
         shift
         ;;
     --auth)
-        ACTION="auth"
+        set_action auth --auth
         shift
         ;;
     # Named rather than swept up by the unknown-flag arm: a caller reaching for captions is
@@ -1315,7 +1630,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --parts --auth)" >&2
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --parts --items --auth)" >&2
         exit 1
         ;;
     *)
@@ -1335,12 +1650,22 @@ if [[ "$ACTION" == "auth" ]]; then
         exit 1
     fi
 else
+    # --items wants a CONTAINER, so it says so: a caller handed the "BV id" sentence while
+    # asking for a menu would go looking for the wrong handle.
     if ((${#positional[@]} == 0)); then
-        echo "bili-resolve: a BV id, av id or URL is required (see 'bili-resolve -h')" >&2
+        if [[ "$ACTION" == "items" ]]; then
+            echo "bili-resolve: an am id or an audio menu URL is required (see 'bili-resolve -h')" >&2
+        else
+            echo "bili-resolve: a BV id, av id or URL is required (see 'bili-resolve -h')" >&2
+        fi
         exit 1
     fi
     if ((${#positional[@]} > 1)); then
-        echo "bili-resolve: takes exactly one BV id, av id or URL (got ${#positional[@]})" >&2
+        if [[ "$ACTION" == "items" ]]; then
+            echo "bili-resolve: takes exactly one am id or audio menu URL (got ${#positional[@]})" >&2
+        else
+            echo "bili-resolve: takes exactly one BV id, av id or URL (got ${#positional[@]})" >&2
+        fi
         exit 1
     fi
     TARGET="${positional[0]}"
@@ -1370,6 +1695,18 @@ fi
 if [[ "$ACTION" == "auth" ]]; then
     [[ "$OUTPUT_MODE" == "json" ]] && require_deps jq
     resolve_auth
+    exit 0
+fi
+
+# --items has its own grammar and its own transport, and it is dispatched BEFORE
+# normalize_target for both reasons: a menu handle is not a video handle, and the stream
+# verb's grammar would either refuse it or hand it to an extractor that answers with an
+# empty stream list. curl fetches and jq parses, so the extractor is not this verb's
+# dependency either — the same lazy gate --parts and --auth already get.
+if [[ "$ACTION" == "items" ]]; then
+    normalize_container "$TARGET"
+    require_deps curl jq
+    resolve_items
     exit 0
 fi
 
