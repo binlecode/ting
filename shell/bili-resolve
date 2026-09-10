@@ -50,7 +50,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
-# AS-BUILT-cli-contract.md「配置面」 for the keys.
+# ARCH-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -282,7 +282,7 @@ require_deps() {
 
 # The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". Each engine
 # carries its own copy — they are independent executables sharing no library — and the
-# shared fact is the FORMAT, stated once in docs/AS-BUILT-engine.md「搜索子系统」.
+# shared fact is the FORMAT, stated once in docs/ARCH-engine.md「搜索子系统」.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def strip_t:
@@ -304,7 +304,7 @@ def fmt_dur:
 
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording. The ENUM
-# is the shared fact and lives in AS-BUILT-cli-contract.md「数据契约」 No member may be added here that
+# is the shared fact and lives in ARCH-cli-contract.md「数据契约」 No member may be added here that
 # the enum does not already have; `unknown` is the conservative default.
 #
 # The site-specific half is the last two patterns. HTTP 412 and the body code -352 are how
@@ -377,7 +377,7 @@ format_for_mode() {
 # as format_for_mode: a caller sends a canonical TIER, and the yt-dlp sort string exists
 # only here. auto (or any pair this table maps to "") sends no --format-sort — the default
 # format table already picks the best. -S is the expert escape and EXPLICITLY wins: both
-# given, the caller's own sort replaces this table's (AS-BUILT-engine.md「解析」).
+# given, the caller's own sort replaces this table's (ARCH-engine.md「解析」).
 quality_sort_for_tier() {
     local mode=$1 tier=$2
     case "$mode" in
@@ -556,7 +556,7 @@ dump_once() {
     local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
     if [[ -n "$FORMAT_SORT" ]]; then
         # -S is the expert escape and explicitly wins over the tier: both given, the
-        # caller's own sort replaces the table's (AS-BUILT-engine.md「解析」).
+        # caller's own sort replaces the table's (ARCH-engine.md「解析」).
         cmd+=(--format-sort "$FORMAT_SORT")
     else
         local sort
@@ -593,7 +593,7 @@ def safe_headers:
 | sort_by(if .vcodec == "none" then 1 else 0 end)
 '
 
-# The resolve envelope (AS-BUILT-cli-contract.md「数据契约」) — the same one yt-resolve emits, key for
+# The resolve envelope (ARCH-cli-contract.md「数据契约」) — the same one yt-resolve emits, key for
 # key, because the player must not be able to tell which engine answered. `format` is the
 # format STRING this engine SENT; the player records it verbatim and never reads it, and
 # `selected` is what yt-dlp answered with ("1080P 高清+30280 - audio only"). Same two
@@ -799,7 +799,7 @@ resolve_info() {
 # ONE video number can be MANY playable files here — `?p=N` — and that is this site's own
 # shape, not a suite-wide one: on the sibling site an id is a file and its many-item form is
 # a playlist under a different URL. So the verb exists on this engine and never on that one.
-# An engine states a capability by HAVING the verb (AS-BUILT-cli-contract.md「命令规格」), which is the
+# An engine states a capability by HAVING the verb (ARCH-cli-contract.md「命令规格」), which is the
 # same way this file states the absence of captions by having no --transcript.
 #
 # The search half cannot answer this and must not try: its response carries no part count at
@@ -879,7 +879,7 @@ fetch_pagelist_once() {
     ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
 }
 
-# HTTP status + body code -> the suite's shared reason enum (AS-BUILT-cli-contract.md「数据契约」). The
+# HTTP status + body code -> the suite's shared reason enum (ARCH-cli-contract.md「数据契约」). The
 # same two tables bili-search classifies with, because they describe the same host — and
 # separate from `classify_yt_dlp_error` above, which reads an extractor's prose. The
 # distinction that earns the table its lines: a bogus id answers HTTP 200 / code -400
@@ -924,7 +924,7 @@ classify_view_error() {
 
 # The error envelope --info already publishes, minus the fields a part list has no opinion
 # on. Exit 2, never 1: nothing here is the caller's usage error by the time a request has
-# been made, and the taxonomy reserves 1 for the ones decided from argv (AS-BUILT-cli-contract.md「退出码」).
+# been made, and the taxonomy reserves 1 for the ones decided from argv (ARCH-cli-contract.md「退出码」).
 parts_fail() {
     local reason=$1
     if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
@@ -1194,7 +1194,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
+  config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   BILI_COOKIE_BROWSER      Browser profile cookies are read from (default: chrome;
                            "none" for anonymous). On this site login buys audio QUALITY —
                            an account is offered renditions an anonymous client is not.
@@ -1272,7 +1272,7 @@ while (($#)); do
         [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
         # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
-        # before it calls an engine (AS-BUILT-cli-contract.md「命令规格」).
+        # before it calls an engine (ARCH-cli-contract.md「命令规格」).
         validate_enum "$2" audio video fast ascii viz ||
             die "-f must be one of: audio, video, fast, ascii, viz"
         PLAYBACK_MODE="$2"
@@ -1295,7 +1295,7 @@ while (($#)); do
         shift 2
         ;;
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
-    # a caller holding the wrong verb is told which one it wants (AS-BUILT-cli-contract.md「门模型」).
+    # a caller holding the wrong verb is told which one it wants (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
         echo "bili-resolve: $1 is a playback flag — use ut-play for playback" >&2
         exit 1
@@ -1327,7 +1327,7 @@ done
 
 # --auth asks about the ENGINE, not about a handle, so it is the one verb here that takes
 # no positional — and a handle passed with it is rejected rather than ignored, the same way
-# -f next to --info is (AS-BUILT-cli-contract.md「门模型」).
+# -f next to --info is (ARCH-cli-contract.md「门模型」).
 TARGET=""
 if [[ "$ACTION" == "auth" ]]; then
     if ((${#positional[@]} > 0)); then
@@ -1354,7 +1354,7 @@ if ! validate_enum "$COLOR_MODE" auto always never; then
 fi
 # -f / -S pick a FORMAT, and only stream resolution resolves one. Next to --info they
 # would be accepted and quietly do nothing, which is precisely what a gating layer exists
-# to reject rather than ignore (AS-BUILT-cli-contract.md「门模型」).
+# to reject rather than ignore (ARCH-cli-contract.md「门模型」).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
 fi

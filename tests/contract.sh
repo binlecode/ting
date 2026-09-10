@@ -8,7 +8,7 @@
 # record for a player that died unasked, --version, the non-TTY refusal, the failure
 # taxonomy — 1 is usage, 2 is a tool that failed, and the two engines' envelopes agreeing
 # key for key — and the documented PIPELINES between commands, run rather than printed
-# (AS-BUILT-cli-contract.md「调用面」; the one that launches a player is playback.sh's).
+# (ARCH-cli-contract.md「调用面」; the one that launches a player is playback.sh's).
 #
 # This replaced a skill that carried the same commands as prose for an agent to copy out by
 # hand. That version rotted silently: it listed a resident socket server as a check (it hangs
@@ -306,7 +306,7 @@ report "--stop --all exit"  0 "$(rc shell/ut-play --stop --all -j)"
 report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d ' ')"
 # --stop treats an empty set as idempotent success; --set-volume must NOT — there is no
 # volume it could have set, so this is the did-not-take-effect class (4), and the envelope
-# names the why so a caller can tell it from ambiguity (AS-BUILT-cli-contract.md「数据契约」与「退出码」).
+# names the why so a caller can tell it from ambiguity (ARCH-cli-contract.md「数据契约」与「退出码」).
 report "idle --set-volume is 4"   4 "$(rc shell/ut-play --set-volume 50 -j)"
 report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-volume 50 -j)"
 # Every socket verb answers the empty set the way --set-volume does — ONE taxonomy, not one
@@ -378,7 +378,7 @@ report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' s
 # The three shapes the verb takes, each proved by the SAME rejection: a payload that parses
 # reaches the player check (4), one that does not is usage (1). A search envelope is accepted
 # because a search result does not carry `engine` — that field is on the envelope, so only
-# taking the whole thing can label an item with its source (AS-BUILT-cli-contract.md「数据契约」).
+# taking the whole thing can label an item with its source (ARCH-cli-contract.md「数据契约」).
 report "a --show envelope parses" 4 "$(rc_in '{"status":"playlist","items":[{"engine":"yt","url":"x"}]}' shell/ut-play --enqueue - -j)"
 report "a search envelope parses" 4 "$(rc_in '{"status":"ok","engine":"yt","results":[{"url":"x"}]}' shell/ut-play --enqueue - -j)"
 report "a shapeless object is 1"  1 "$(rc_in '{"status":"ok"}' shell/ut-play --enqueue -)"
@@ -391,7 +391,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
-# like too (docs/AS-BUILT-player.md「状态机」). These checks own the boundary that keeps the tombstone
+# like too (docs/ARCH-player.md「状态机」). These checks own the boundary that keeps the tombstone
 # list an error record rather than the listening history ARCHITECTURE.md「定位与设计目标」 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
 # must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
@@ -446,7 +446,7 @@ PL=shell/ut-playlist
 ENV_JSON='{"status":"ok","engine":"yt","query":"q","count":2,"results":[{"id":"a1","title":"One","url":"https://www.youtube.com/watch?v=a1","channel":"c","duration":213,"duration_fmt":"00h:03m:33s","view_count":5,"live_status":"not_live"},{"id":"a2","title":"Two","url":"https://www.youtube.com/watch?v=a2","channel":"c","duration":null,"duration_fmt":null,"view_count":null,"live_status":"is_live"}]}'
 
 report "empty store: ok, exit 0"      0 "$(jq_ok '.status=="ok" and .count==0 and .playlists==[]' $PL --ls -j)"
-# ── AS-BUILT-cli-contract.md「调用面」's first pipeline, RUN rather than printed:
+# ── ARCH-cli-contract.md「调用面」's first pipeline, RUN rather than printed:
 #     yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill
 # That block is the one place the suite documents commands COMPOSING, and until now nothing
 # executed a line of it: the storage side had checks, the pipeline did not, so a flag
@@ -486,7 +486,7 @@ report "…with reason exists"            0 "$(jq_ok '.reason=="exists"' $PL --r
 # one list into another is.
 $PL --show mellow -j | $PL --add copy -j >/dev/null 2>&1
 report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -j)"
-# ── AS-BUILT-cli-contract.md「调用面」's last pipeline, minus the player it needs:
+# ── ARCH-cli-contract.md「调用面」's last pipeline, minus the player it needs:
 #     ut-playlist --show chill -j | ut-play --enqueue -
 # "a --show envelope parses" further up proves ut-play accepts the SHAPE, but it is a
 # hand-written object and so cannot notice --show drifting away from it. This one can: a real
@@ -584,7 +584,7 @@ report "-n bounds what is printed"     0 "$(jq_ok '.count==1 and .items[0].id=="
 # THE CLAIM THE ROW SHAPE EXISTS FOR: a listening is a CALL, so --ls drops into --add with no
 # field mapping in between. If the two envelopes ever drift, this is what says so.
 #
-# The argv is AS-BUILT-cli-contract.md「调用面」's third pipeline verbatim — `-n 20` on the left, no
+# The argv is ARCH-cli-contract.md「调用面」's third pipeline verbatim — `-n 20` on the left, no
 # `-j` on the right — for the reason the playlist section states at its own first pipeline:
 # that block documents commands COMPOSING, and a documented composition nothing runs is a
 # claim that reports green by default. Both halves here are the real commands; nothing offline
@@ -742,7 +742,7 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # sentence there would advertise a `c` key that cannot work. `--sub-lang` is the opposite —
 # the verb it belongs to IS here, but the CAPABILITY behind it is not: one lyric per song, tagged
 # with no language, so there is nothing to choose between and the flag is refused rather than
-# accepted and ignored (AS-BUILT-engine.md「字幕」).
+# accepted and ignored (ARCH-engine.md「字幕」).
 report "ne-resolve has no --parts"  1 "$(rc shell/ne-resolve --parts -- "$NE_LYRIC")"
 report "ne-resolve has no --sub-lang" 1 \
     "$(rc shell/ne-resolve --transcript --sub-lang zh-Hans -- "$NE_LYRIC")"
@@ -752,11 +752,11 @@ report "ne-resolve has no --sub-lang" 1 \
 # exists on one engine and must never appear on the other.
 #
 # THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
-# without spending a request (AS-BUILT-engine.md「接口」): it invokes `--parts` with NO
+# without spending a request (ARCH-engine.md「接口」): it invokes `--parts` with NO
 # handle. The engine that has the verb answers with a usage error about the missing handle;
 # the engine that
 # does not falls into the unknown-flag arm every gate in this suite shares
-# (AS-BUILT-cli-contract.md「门模型」). BOTH exit 1 — which is exactly why the exit code cannot be the
+# (ARCH-cli-contract.md「门模型」). BOTH exit 1 — which is exactly why the exit code cannot be the
 # probe, and why what these two pin is the stderr WORDING. An engine that grew --parts and
 # a `c` key that reads the wrong side of this pair are each caught by one of them alone.
 report "bili-resolve has --parts"  1 "$(err_has 'unknown flag' shell/bili-resolve --parts)"
@@ -774,7 +774,7 @@ report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA
 report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
 # The quality tier is validated at the door, before any dependency gate: a mistyped tier
 # is a usage error, and a legal one still falls into the gates the handle and the engine
-# own — the tier must not change what a wrong verb is worth (AS-BUILT-cli-contract.md「命令规格」).
+# own — the tier must not change what a wrong verb is worth (ARCH-cli-contract.md「命令规格」).
 report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra -- "$MEDIA_ID")"
 report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
 report "ut-play --quality keeps the engine gate" 1 \
@@ -816,7 +816,7 @@ report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_ke
 # config the audio path never reads — which is the shape a mode-blind `case` arrives in.
 report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
 
-# ── AS-BUILT-player.md「终端可视化」's five worked calls, each run once. The PICTURE those
+# ── ARCH-player.md「终端可视化」's five worked calls, each run once. The PICTURE those
 # lines are about needs a real resolve and a real tty, so it stays 实测 in that doc — a
 # foreground blocking play with no --length is not time this suite spends, and bounding it
 # would take a stand-in it does not keep. What CAN be held here is the half that rots
@@ -884,7 +884,7 @@ for _m in ascii viz; do
     # The fourth arm, and the only one that comes from the ENVIRONMENT rather than argv: tct
     # draws in half blocks (U+2584), so under a C locale the pane used to fill with mojibake
     # or stay empty with nothing said. Refusing was chosen over degrading to an ASCII canvas
-    # (AS-BUILT-player.md「终端可视化」), which makes it checkable at all — the degraded picture
+    # (ARCH-player.md「终端可视化」), which makes it checkable at all — the degraded picture
     # would have been another 「实测」 row. Message again, not exit code: every gate here is 1.
     #
     # LC_ALL=C rather than an unset environment: `env -u` is not portable to the 3.2 floor's
@@ -908,7 +908,7 @@ for _m in ascii viz; do
     report "uting refuses -f $_m, naming the modes" yes "$_mhit"
 done
 
-# ── THE ORDER OF `uting`'s TWO GATES, and AS-BUILT-tui.md「调用面」's worked calls, which are
+# ── THE ORDER OF `uting`'s TWO GATES, and ARCH-tui.md「调用面」's worked calls, which are
 # the same check from two sides. That doc states the order as a fact — the flag gate answers
 # first, the TTY gate second — and both gates exit 1, so the order can only be pinned by
 # feeding the SAME stdin twice and reading two different messages. The `-f viz` arm of the
@@ -1031,7 +1031,7 @@ report "every read-only resolve verb refuses a format flag" "$_ro_n" "$_ro"
 # to be the HOST gate's refusal, and that is the claim: the verb parsed, the argv cleared the
 # flag gate, and only the site was wrong.
 #
-# It exists because AS-BUILT-engine.md「调用面」 prints these exact argv as the way to CALL an
+# It exists because ARCH-engine.md「调用面」 prints these exact argv as the way to CALL an
 # engine, and nothing held them. `-j` ahead of the verb, `--` before the handle, a companion
 # flag in its documented place — reorder any of it and the example goes silently wrong, because
 # an absent verb and a refused host both exit 1 and a caller reading the number cannot tell
@@ -1131,7 +1131,7 @@ for n in $ENGINES; do
 done
 report "an unknown browser is anonymous" "$NENG" "$_bogus"
 
-# A flag that cannot act is REJECTED, not ignored (AS-BUILT-cli-contract.md「门模型」). --auth asks
+# A flag that cannot act is REJECTED, not ignored (ARCH-cli-contract.md「门模型」). --auth asks
 # about the engine, so a handle is a usage error; -f selects a stream format and --auth
 # resolves no stream; -J returns the raw yt-dlp record and --auth runs no yt-dlp.
 for _bad in "--auth -- HANDLE" "--auth -f video" "--auth -J"; do
@@ -1411,7 +1411,7 @@ for _spec in zzz 40 99 0xd65d0 0xd65d0e/40 0xD65D0E/9; do
         "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
 done
 # The three legal spellings pass the door. 0x, not #RRGGBB: a # cannot survive this config
-# format's comment strip at all (AS-BUILT-tui.md「为什么是 0x 而不是 #RRGGBB」), so the syntax
+# format's comment strip at all (ARCH-tui.md「为什么是 0x 而不是 #RRGGBB」), so the syntax
 # a user would reach for first is the one that must not silently read back as empty.
 for _spec in 0xd65d0e 33 97 0xd65d0e/33 0xD65D0E/97; do
     printf 'YT_THEME=custom\nUT_ACCENT=%s\n' "$_spec" > "$CFG"
@@ -1445,7 +1445,7 @@ report "a bad accent is caught under a non-custom theme" accent \
 printf 'UT_THEME_CYCLE=custom\nUT_ACCENT=0xd65d0e/33\n' > "$CFG"
 report "a cycle of just custom reaches the TTY gate" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
 report "--theme custom is accepted" tty "$(uting_gate shell/uting --theme custom q)"
-# AS-BUILT-tui.md「调用面」's custom line, run verbatim rather than printed.
+# ARCH-tui.md「调用面」's custom line, run verbatim rather than printed.
 report "…with an accent on it, as the doc prints it" tty \
     "$(uting_gate UT_ACCENT=0xd65d0e/33 shell/uting --theme custom "lofi hip hop")"
 # --theme takes ONE name. The membership test is an exact compare over the name list, not a
@@ -1720,7 +1720,7 @@ YT_S=$(out search-yt)
 YT_SJ=$(out searchJ-yt)
 # `<=10`, not `==10`: `-n` says how many to FETCH and never how many come back — -m/-M have
 # always shortened it, and since the container gate the row count can drop by one on a query
-# whose page holds a channel (AS-BUILT-engine.md「kind 与 access」). The ceiling-is-honoured
+# whose page holds a channel (ARCH-engine.md「kind 与 access」). The ceiling-is-honoured
 # claim is the cap-/dflt- pair above, which is where it belongs; asserting an exact count here
 # only ever held because `lofi`'s top ten happen to be all videos, and would have gone red on
 # a YouTube ranking change rather than on a bug of ours.
@@ -1760,7 +1760,7 @@ report "dead id keeps its reason" 0 \
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (AS-BUILT-cli-contract.md「门模型」).
+# to confuse a flag-shaped token with (ARCH-cli-contract.md「门模型」).
 # Asserted POSITIVELY, on the query the engine echoes back. The old form folded stderr into
 # the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
 # yt-search that did not run at all — satisfied it. It was also the one live call in this file
@@ -1824,7 +1824,7 @@ report "search result keys agree" \
 # a real implementation has already been wrong, and neither is caught by the parity check
 # above (two engines agree on a key set they are both missing, and it only ever reads -j).
 #
-#   · `kind`/`access` are the ENGINE'S JUDGEMENT about a row (AS-BUILT-cli-contract.md「数据契约」), which
+#   · `kind`/`access` are the ENGINE'S JUDGEMENT about a row (ARCH-cli-contract.md「数据契约」), which
 #     is why they are injected before the lean projection rather than inside it: an engine
 #     that adds them to the projection alone hands the caller who asked for MORE data (-J) an
 #     envelope missing two required fields, and every -j check in this file stays green.
@@ -1873,7 +1873,7 @@ done
 #
 # Two claims, and the second is the one with teeth. Presence is the cheap half: the key must
 # be there on every row of both shapes, string or null, which is the suite's standing rule
-# for a field an engine may not know (AS-BUILT-cli-contract.md「数据契约」). BOTH shapes,
+# for a field an engine may not know (ARCH-cli-contract.md「数据契约」). BOTH shapes,
 # because `kind`/`access` were wrong in exactly this way once — projected into -j alone, so
 # the caller who asked for MORE data got LESS, and every -j check stayed green.
 #
@@ -2017,7 +2017,7 @@ SELECTED_IS_AN_ANSWER='(.selected|type)=="string" and (.selected|length)>0
 report "yt resolve selected is an answer"   0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$YT_R")"
 report "bili resolve selected is an answer" 0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$BILI_R")"
 # --info gets the same parity treatment: it is the third envelope both engines publish
-# (AS-BUILT-cli-contract.md「数据契约」), and nothing else here would notice a field renamed on one
+# (ARCH-cli-contract.md「数据契约」), and nothing else here would notice a field renamed on one
 # side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
 # two ERROR envelopes agree on their keys too.
 report "info -j is ok and named" 0 \
@@ -2034,7 +2034,7 @@ report "bili-search -j is one line" 1 "$(lines "$BILI_S")"
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
 # the assertion is that what leaves the engine is a NUMBER — never the raw string.
 #
-# `null` is ALLOWED and is not a miss: AS-BUILT-engine.md「搜索子系统」and AS-BUILT-cli-contract.md「数据契约」make duration/duration_fmt null together when the
+# `null` is ALLOWED and is not a miss: ARCH-engine.md「搜索子系统」and ARCH-cli-contract.md「数据契约」make duration/duration_fmt null together when the
 # row has no duration, and this endpoint does return such rows intermittently (observed: one
 # null among five, on a result set the site swapped in between two identical requests). An
 # earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
@@ -2134,7 +2134,7 @@ echo "── failure taxonomy: 2 is a tool failure, never 1 ──────�
 # A SEARCH THAT COULD NOT REACH ITS SITE STILL ANSWERS IN JSON. The exit code is the easy
 # half and was never the whole promise: `-j` says a caller gets {status:"error", …, reason}
 # and branches on the reason, so an empty stdout beside a bare 2 is a broken contract wearing
-# a correct number (AS-BUILT-cli-contract.md「数据契约」).
+# a correct number (ARCH-cli-contract.md「数据契约」).
 #
 # STATED OVER EVERY DISCOVERED ENGINE, and that is not tidiness — it is the whole finding.
 # This check drove yt-search alone, where the failure path prints from the top level and is
@@ -2334,7 +2334,7 @@ else
     report "survives 62x20 and 26x24" 1 "$alive"
 
     # A store is a room with a door, not a one-way trip — and the door is the key that opened
-    # it (AS-BUILT-tui.md). `h` REPLACES the rows with the log (`history='` on the title
+    # it (ARCH-tui.md). `h` REPLACES the rows with the log (`history='` on the title
     # line, where a search says `query='`) and `h` again puts the search back; until it did, the
     # only exits from that room were retyping a query and quitting. Both halves are asserted:
     # an `h` that quietly did nothing would leave the search on screen and make the return
@@ -2896,7 +2896,7 @@ else
     # and tests/drive.sh drives it while capture-pane proves it. There is likewise no check
     # here for an out-of-range number — a build with no bound test lands `selected` past the
     # end, the renderer clamps it, and the TUI lives, so nothing this file may assert on can
-    # tell the two apart. AS-BUILT-tui.md says so where a reader will look for it.
+    # tell the two apart. ARCH-tui.md says so where a reader will look for it.
     tmux send-keys -t "$TS" 0
     tmux send-keys -t "$TS" 8
     tmux send-keys -t "$TS" j

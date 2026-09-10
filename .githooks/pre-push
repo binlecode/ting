@@ -6,7 +6,7 @@
 #
 #   BLOCK  a non-fast-forward (force) push to main, and deleting main
 #   BLOCK  a syntax error in any script under shell/ (the last gate before it is public)
-#   WARN   pushing a v* tag (VERSION must match it; semver policy opens AS-BUILT-cli-contract.md)
+#   WARN   pushing a v* tag (VERSION must match it; semver policy opens ARCH-cli-contract.md)
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 set -euo pipefail

@@ -78,7 +78,7 @@ fi
 # default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
 # IS the locale probe) and YT_ASCII (it falls back through the legacy alias YT_TUI_ASCII).
 #
-# The key list is AS-BUILT-cli-contract.md「配置面」. This block is duplicated VERBATIM in all ten
+# The key list is ARCH-cli-contract.md「配置面」. This block is duplicated VERBATIM in all ten
 # entry points: ten independent executables share no library, and a byte-for-byte copy is
 # greppable for drift where a sourced file would invert the dependency direction the VERSION
 # data file exists to keep straight.
@@ -132,7 +132,7 @@ SELF="${BASH_SOURCE[0]}"
 # and only by that name — it carries no table of sites, no URL sniffing, and no idea what a
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
-# Per-call override: --engine. AS-BUILT-cli-contract.md「命令规格」
+# Per-call override: --engine. ARCH-cli-contract.md「命令规格」
 
 # THE LISTENING LOG, on by default; `UT_HISTORY=0` turns it off. A history that ships off is
 # not a history — nobody finds the knob that has to be found before the feature has ever
@@ -140,7 +140,7 @@ SELF="${BASH_SOURCE[0]}"
 # file, on this machine, with a --clear verb of its own. The reopen condition is a SHARED
 # account, where "what this login listened to" stops being one person's record.
 # The writing happens here (the child is the only process that knows a track ended and why);
-# the storing is ut-history's, called by name like an engine. AS-BUILT-cli-contract.md「配置面」
+# the storing is ut-history's, called by name like an engine. ARCH-cli-contract.md「配置面」
 
 MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
@@ -156,7 +156,7 @@ MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar
 # STDERR, so filtering stderr never touches the progress bar. audio is immune (--no-video → no
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
-# (does NOT stop CoreText). See AS-BUILT-player.md「终端噪声压制」.
+# (does NOT stop CoreText). See ARCH-player.md「终端噪声压制」.
 MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
@@ -243,7 +243,7 @@ Long-only flags: --engine --detach --status --stop --set-volume --pause --resume
                  --seek-to --queue --enqueue --next --id --all --json --list --color
                  --volume  (--help and --version also have short forms: -h, -V)
 
-Output contracts (one line of JSON each; the why behind each shape: AS-BUILT-cli-contract.md):
+Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-contract.md):
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -293,7 +293,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in \${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
+  config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: $UT_DEFAULT_ENGINE)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   UT_VIZ_STYLE         -f viz picture: bars (log-scaled spectrum) | wave (waveform)
@@ -490,7 +490,7 @@ resolve_media() {
 
     # -S and --quality are forwarded because format-sort is the engine's concept and the
     # caller may have overridden it; everything else the engine decides for itself. -S wins
-    # over --quality INSIDE the engine (AS-BUILT-player.md「模式 → 格式 → mpv」), so both are forwarded
+    # over --quality INSIDE the engine (ARCH-player.md「模式 → 格式 → mpv」), so both are forwarded
     # unchanged.
     local out rc=0
     out=$("$ENGINE_RESOLVE" -j -f "$mode" ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
@@ -528,7 +528,7 @@ resolve_media() {
     # Where the handle asked to start. Read as a NUMBER test rather than `// ""`, because
     # the answer 0 is real and different from "no offset": a link ending in ?t=0 says start
     # at the beginning, and `// ""` would throw that away along with null. The engine did
-    # the site-specific reading (AS-BUILT-engine.md「搜索子系统」) — here it is just a number.
+    # the site-specific reading (ARCH-engine.md「搜索子系统」) — here it is just a number.
     RESOLVED_START=$(printf '%s' "$out" | jq -r 'if (.start_seconds | type) == "number" then (.start_seconds | tostring) else "" end' 2>/dev/null) || RESOLVED_START=""
     RESOLVED_FORMAT=$(printf '%s' "$out" | jq -r '.format // ""' 2>/dev/null) || RESOLVED_FORMAT=""
     # The answer beside the request. Read for the same reason `format` is — so --status can
@@ -537,7 +537,7 @@ resolve_media() {
     RESOLVED_SELECTED=$(printf '%s' "$out" | jq -r '.selected // ""' 2>/dev/null) || RESOLVED_SELECTED=""
     RESOLVED_SELECTED_RES=$(printf '%s' "$out" | jq -r '.selected_resolution // ""' 2>/dev/null) || RESOLVED_SELECTED_RES=""
     # The anonymous-client fallback is now the ENGINE's decision, so `retried` is relayed
-    # rather than observed — but it is still the playback envelope's field (AS-BUILT-cli-contract.md「数据契约」).
+    # rather than observed — but it is still the playback envelope's field (ARCH-cli-contract.md「数据契约」).
     if printf '%s' "$out" | jq -e '.retried == true' >/dev/null 2>&1; then
         PLAYBACK_RETRIED=1
     fi
@@ -606,7 +606,7 @@ patch_player_meta() {
 # handed us direct URLs plus the headers they must be fetched with, so mpv is told
 # --no-ytdl and never makes an extraction of its own. That closes the asymmetry where the
 # LAST yt-dlp call in a play was one we did not make and could not classify — from here
-# there is exactly one extraction and we made it. docs/AS-BUILT-player.md「模式 → 格式 → mpv」.
+# there is exactly one extraction and we made it. docs/ARCH-player.md「模式 → 格式 → mpv」.
 #
 # The media comes from the RESOLVED_* globals rather than arguments because bash 3.2 arrays
 # do not survive command substitution; resolve_media sets them in place and every path into
@@ -656,7 +656,7 @@ run_mpv() {
     #
     # These land on mpv's argv and are therefore visible in `ps`. An engine must not return
     # a credential header (Cookie / Authorization) here; the YouTube engine returns only
-    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. AS-BUILT-cli-contract.md「数据契约」
+    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. ARCH-cli-contract.md「数据契约」
     if ((${#RESOLVED_HEADER_ARGS[@]})); then
         mpv_cmd+=("${RESOLVED_HEADER_ARGS[@]}")
     fi
@@ -682,7 +682,7 @@ run_mpv() {
     # unbounded growth in TMPDIR for exactly the long-lived players -d exists for). Silence
     # the cosmetic chatter there and keep error level, so the log stays small and still
     # explains a failure. These go AFTER the caller's mode options so they win (mpv: last
-    # flag wins). AS-BUILT-player.md「进程组模型」.
+    # flag wins). ARCH-player.md「进程组模型」.
     local detached_opts=()
     if [[ -n "${YT_DETACHED:-}" ]]; then
         detached_opts=(--no-term-osd-bar --msg-level=all=error)
@@ -772,7 +772,7 @@ play_viz_url() {
     # Asking the filter for `rows` pixels hands mpv a frame it then upscales 2x vertically,
     # which cost the visualiser half its vertical detail for nothing. `rows * 2` is 1:1 with
     # what the pane can actually show. Verified in a real 120x30 tmux pane, not reasoned:
-    # the glyph mpv emits is ▄. AS-BUILT-player.md「终端可视化」
+    # the glyph mpv emits is ▄. ARCH-player.md「终端可视化」
     size="${width}x$((height * 2))"
 
     # WHICH picture is taste, so it is a config key and not a flag (UT_VIZ_STYLE) — nobody
@@ -786,7 +786,7 @@ play_viz_url() {
     # collapses to a black smear even when rendered large and downscaled. showspectrum is
     # out for a second reason: its default slide=scroll ignores r= and runs at the audio
     # frame rate, which measured 202MB of escape sequences for 10s against 3MB here.
-    # AS-BUILT-player.md「终端可视化」
+    # ARCH-player.md「终端可视化」
     # One colour, and bars are fed a MONO downmix. Both filters draw every channel into the
     # same frame, and the overlap is additive: two channels in two colours came out white
     # wherever they agreed, which for a stereo mix is most of the picture. Downmixing before
@@ -855,7 +855,7 @@ play_url_directly() {
 # This is the PLAYER's half of that job and it only knows mpv. The yt-dlp wordings — video
 # unavailable, requested format, sign in to confirm — left with the extraction; they reach a
 # caller as the ENGINE's own reason, replayed here from the marker play_url_directly logs
-# rather than re-derived from prose. The ENUM is the shared fact (AS-BUILT-cli-contract.md「数据契约」),
+# rather than re-derived from prose. The ENUM is the shared fact (ARCH-cli-contract.md「数据契约」),
 # and no member may appear here that it does not already have. `unknown` is the conservative
 # default — we never guess a specific cause we didn't positively identify.
 classify_playback_error() {
@@ -878,7 +878,7 @@ classify_playback_error() {
     fi
     # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
     # `network` is the enum member that already means "try again later". Adding a
-    # `rate_limited` member instead would grow a contract three verbs publish (AS-BUILT-cli-contract.md「数据契约」) for no
+    # `rate_limited` member instead would grow a contract three verbs publish (ARCH-cli-contract.md「数据契约」) for no
     # branch a caller would take differently. It is grouped here rather than with `forbidden`
     # (403) deliberately — 403 means these credentials never work, 429 means not right now.
     if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests' <<<"$text"; then
@@ -1022,7 +1022,7 @@ ensure_state_dir() {
 
 # Live property read straight off a player's IPC socket. The state file's `volume` is only
 # what was recorded at launch or by the last --set-volume, so anything driving the socket
-# directly (uting's 9/0 keys — see AS-BUILT-player.md「运行时 IPC」) moves the real value without
+# directly (uting's 9/0 keys — see ARCH-player.md「运行时 IPC」) moves the real value without
 # telling us; mpv is the source of truth. `pause` and the playback position are worse still:
 # the state file has never held them at all.
 #
@@ -1030,7 +1030,7 @@ ensure_state_dir() {
 # not four calls: --status pays the same single round trip it always did (~10ms measured; a
 # healthy mpv closes as soon as the reader breaks, so the -w1 timeout is never reached).
 # Soft-gated on the socket client so --status keeps working with jq alone
-# (AS-BUILT-cli-contract.md「退出码」): no capable nc/ncat, no socket, no output, and the caller
+# (ARCH-cli-contract.md「退出码」): no capable nc/ncat, no socket, no output, and the caller
 # reports nulls.
 #
 # Emits one "<request_id><US><value>" line per answer, in whatever order mpv sent them —
@@ -1209,7 +1209,7 @@ media_json() {
 #
 # Nothing is written on success, so a normal finish leaves no trace here — this is an ERROR
 # record, and the listening log is the other side of that line, not a duplicate of it
-# (history_record, and AS-BUILT-player.md「状态机」's separation rule): failures only, bounded, in
+# (history_record, and ARCH-player.md「状态机」's separation rule): failures only, bounded, in
 # $TMPDIR, gone at the reboot, against every track and durable in the user-level store. A
 # player told to --stop reaches this line with rc 0 and writes nothing, which is the same
 # distinction from the other direction: a stop is not a failure.
@@ -1336,7 +1336,7 @@ detached_epitaph() {
     local rc=$1 reason ended_at
     [[ -n "${YT_DETACHED_LOG:-}" ]] || return 0
     ((rc == 0 || rc == 130)) && return 0
-    # Same taxonomy every other surface publishes (AS-BUILT-cli-contract.md「数据契约」) — the reason a caller branches on
+    # Same taxonomy every other surface publishes (ARCH-cli-contract.md「数据契约」) — the reason a caller branches on
     # must not depend on which verb produced it. The tail bound keeps a long mpv log from
     # becoming an argument the classifier has to grep in full.
     reason=$(classify_playback_error "$(tail -c 4000 "$YT_DETACHED_LOG" 2>/dev/null)" "$rc")
@@ -1502,7 +1502,7 @@ unlock_player_state() {
 # ------------------------------------------------------------------------------
 # A queue is a playlist BEING CONSUMED, so it belongs to the player and dies with it — a
 # queue that survived a restart would just be a playlist, and playlists belong to
-# ut-playlist (docs/AS-BUILT-player.md「持久状态层」与「队列」). It lives beside the socket and the log
+# ut-playlist (docs/ARCH-player.md「持久状态层」与「队列」). It lives beside the socket and the log
 # rather than under players/ because that directory's *.json glob IS the player-record
 # namespace: reap_dead_players walks it, and would read <id>.queue.json as a player whose
 # record it could not parse — and then delete it.
@@ -1815,7 +1815,7 @@ detach_play() {
     # all detached_epitaph needs to read back what mpv said before classifying its own death.
     # -S and --quality are forwarded like --volume so a format-sort override or a quality
     # tier isn't silently lost on the detached path; `--` guards a URL that begins with a
-    # dash. -S wins over --quality inside the engine (AS-BUILT-player.md「模式 → 格式 → mpv」).
+    # dash. -S wins over --quality inside the engine (ARCH-player.md「模式 → 格式 → mpv」).
     set -m
     YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" YT_PLAYER_ID="$id" \
         nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" \
@@ -1862,7 +1862,7 @@ detach_play() {
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
         # the state-dir layout (uting used to hardcode "$TMPDIR/uting-$(id -u)/mpv-$id.sock",
-        # duplicating a private path in a second script). AS-BUILT-player.md「运行时 IPC」.
+        # duplicating a private path in a second script). ARCH-player.md「运行时 IPC」.
         jq -nc \
             --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
             --arg started_at "$started_at" --arg sock "$sock" --arg log "$log" \
@@ -2256,7 +2256,7 @@ ipc_failed() {
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
-# status/reason carries the why. See AS-BUILT-cli-contract.md「数据契约」/AS-BUILT-cli-contract.md「退出码」.
+# status/reason carries the why. See ARCH-cli-contract.md「数据契约」/ARCH-cli-contract.md「退出码」.
 do_set_volume() {
     local n=$1 want_id=$2
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
@@ -2420,7 +2420,7 @@ do_next() {
 # ==============================================================================
 
 # The `-f` and `--volume` defaults, both cross-engine: set-once choices about how this user
-# listens, not about where the bytes came from. AS-BUILT-cli-contract.md「配置面」.
+# listens, not about where the bytes came from. ARCH-cli-contract.md「配置面」.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
 PLAY_QUALITY="$UT_PLAY_QUALITY" # --quality flag overrides; the engine maps (mode, tier)
@@ -2725,7 +2725,7 @@ fi
 
 # Flag combinations that used to be accepted and silently ignored. --id/--all only mean
 # something to the lifecycle verbs, -d is a launch rather than an action, and a detached
-# player has no terminal for the terminal-rendering modes to draw into (AS-BUILT-player.md「状态机」).
+# player has no terminal for the terminal-rendering modes to draw into (ARCH-player.md「状态机」).
 case "$ACTION" in
 stop | set-volume | pause | resume | seek | seek-to | enqueue | next) ;;
 *)
@@ -2761,7 +2761,7 @@ fi
 # nothing, answering with an envelope that looked like a success. That was the suite's only
 # silent trap: a caller (an agent especially) got no exit code, no message, and no picture, and
 # so had no way to learn it had asked for something that cannot work. Documented in
-# AS-BUILT-player.md as 「实测」 precisely because a trap that does not refuse cannot be checked;
+# ARCH-player.md as 「实测」 precisely because a trap that does not refuse cannot be checked;
 # refusing it is what makes it provable. Guarded on the PLAYBACK path only — with a lifecycle
 # verb, -f is not drawing anything and -j is the normal way to read the answer.
 if [[ "$OUTPUT_MODE" == "json" && -z "$ACTION" ]] &&
@@ -2882,7 +2882,7 @@ fi
 #
 # REFUSE rather than fall back, decided 2026-09-01. The two candidates were an ASCII canvas
 # (drop the half-block algo and shrink the filter to match) and this. Degrading loses the
-# vertical half of the resolution the doubled canvas exists to buy (AS-BUILT-player.md
+# vertical half of the resolution the doubled canvas exists to buy (ARCH-player.md
 # 「终端可视化」) and hands back a picture bad enough to read as a bug, which is worse than a
 # sentence saying what to change — and `--vo-tct-algo=plain`, the obvious lever, is already a
 # recorded NO in ROADMAP.md for exactly that reason. A refusal the caller can act on beats a
@@ -2932,6 +2932,6 @@ fi
 # Not a handle: nothing left to route. Search moved out to the engine (yt-search) when the
 # suite split into player + engines, and the core's old bare-query contract (`yt "query"` ->
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
-# docs/AS-BUILT-engine.md「搜索子系统」.
+# docs/ARCH-engine.md「搜索子系统」.
 # =-----------------------------------------------------------------------------
 die "'$QUERY' is not a video id or URL — run '${ENGINE}-search -- $QUERY' to search for it"

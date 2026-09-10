@@ -4,19 +4,19 @@
 # The seventh command, and the first one that owns state a user would be upset to lose.
 # It knows nothing about sites (no yt-dlp, no cookie, no host grammar) and nothing about
 # playback (no mpv, no lifecycle, no players/). It knows two things: the item record and
-# the file. docs/AS-BUILT-player.md「持久状态层」 (why this is user-level and how it locks),
-# docs/AS-BUILT-cli-contract.md「命令规格」 (the surface) and 「数据契约」 (the record).
+# the file. docs/ARCH-player.md「持久状态层」 (why this is user-level and how it locks),
+# docs/ARCH-cli-contract.md「命令规格」 (the surface) and 「数据契约」 (the record).
 #
 # WHY IT IS NOT PART OF THE PLAYER. `players/` lives in ${TMPDIR}/uting-$(id -u) and dies
 # with the reboot — correct for a running process, fatal for a list a user spent six months
 # building. This store is user-level and permanent; the queue (a playlist being consumed)
 # stays with the player. A queue that survives a reboot IS a playlist, which is the whole
-# reason these are two different things. AS-BUILT-player.md「状态机」.
+# reason these are two different things. ARCH-player.md「状态机」.
 #
 # ONE INPUT SHAPE: JSON on stdin, either a search envelope (`yt-search -j` verbatim) or a
 # bare array of items. Taking the envelope is correctness, not convenience — a search
 # RESULT carries no `engine` field, the envelope does, so only the whole package tags the
-# items with the engine that produced them. AS-BUILT-cli-contract.md「数据契约」.
+# items with the engine that produced them. ARCH-cli-contract.md「数据契约」.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
@@ -45,7 +45,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
-# AS-BUILT-cli-contract.md「配置面」 for the keys.
+# ARCH-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -95,7 +95,7 @@ ut_read_config "$UT_DEFAULTS"
 # suite's user surface is a terminal and its neighbours (yt-dlp, mpv) live there too — and
 # because a Linux port would not need a second layout. The override is not a convenience:
 # without it `tests/contract.sh` would write into the user's real playlists.
-# AS-BUILT-cli-contract.md「配置面」.
+# ARCH-cli-contract.md「配置面」.
 UT_STATE_DIR="${UT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/uting}"
 PLAYLISTS_DIR="$UT_STATE_DIR/playlists"
 
@@ -143,11 +143,11 @@ validate_enum() {
 # (forbidden|unavailable|…): nothing in a file store can be `format_unavailable`, and
 # widening a taxonomy three other readers branch on would be the wrong kind of sharing.
 # Members: not_found | exists | invalid_name | invalid_input | locked | corrupt.
-# AS-BUILT-cli-contract.md「数据契约」.
+# ARCH-cli-contract.md「数据契约」.
 #
 # WHICH CODE EACH REASON CARRIES, and why it is not all 1. The suite reserves 1 for "the
 # argv was wrong" and 4 for "the request was well formed and did not take effect"
-# (AS-BUILT-cli-contract.md「退出码」) — the split `ut-play` already makes when `--set-volume` finds no
+# (ARCH-cli-contract.md「退出码」) — the split `ut-play` already makes when `--set-volume` finds no
 # player (4) rather than calling the caller's flags bad. So:
 #
 #   1  invalid_name · invalid_input   the caller's own argv or stdin is malformed
@@ -308,7 +308,7 @@ def fmt_dur:
   end;
 '
 
-# Normalise whatever arrived on stdin into the item record (AS-BUILT-cli-contract.md「数据契约」): the
+# Normalise whatever arrived on stdin into the item record (ARCH-cli-contract.md「数据契约」): the
 # search envelope's own field names, minus the ones that expire (channel, view_count,
 # live_status), plus our timestamp. `engine` + `url` are exactly the two arguments of
 # `ut-play --engine E -- URL`, so a stored record IS a call.
@@ -481,7 +481,7 @@ do_rm() {
 
 # Deleting something that is already gone is not a failure — the caller asked for an end
 # state and the end state holds. Same rule as `ut-play --stop` on a player that already
-# exited (AS-BUILT-cli-contract.md「退出码」); `deleted` is the field that says which happened.
+# exited (ARCH-cli-contract.md「退出码」); `deleted` is the field that says which happened.
 do_del() {
     ensure_store
     local f deleted=false
@@ -636,7 +636,7 @@ while (($#)); do
     # The gate arms. ut-play and ut-playlist are one suffix apart, so the two most likely
     # wrong turns get a sentence naming the right verb rather than a bare unknown-flag
     # error — the same thing every other command in this suite does at its edges
-    # (AS-BUILT-cli-contract.md「门模型」).
+    # (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --all | --engine | -f)
         echo "ut-playlist: $1 is a playback flag — this command stores lists, use ut-play to play one" >&2
         exit 1
@@ -672,7 +672,7 @@ validate_enum "$COLOR_MODE" auto always never || die "--color must be one of: au
 
 # A selector with no action to select for. `ut-play` rejects the same shape (--id without
 # --stop/--set-volume); silently ignoring it would let a caller believe --add --index 3
-# inserted at a position. AS-BUILT-cli-contract.md「门模型」. Checked for EVERY verb — it used to live
+# inserted at a position. ARCH-cli-contract.md「门模型」. Checked for EVERY verb — it used to live
 # inside the name-taking branch, so `--ls --index 3` alone escaped it and exited 0.
 if [[ "$ACTION" == "rm" ]]; then
     [[ -n "$INDEX" ]] || { echo "ut-playlist: --rm requires --index N (0-based, from --show)" >&2; exit 1; }

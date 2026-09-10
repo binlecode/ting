@@ -1,46 +1,68 @@
-# AS-BUILT-player —— 播放器、队列与两个持久存储的实现
+# ARCH-player —— 播放器、队列与两个持久存储的实现
+
+**这份属于 `ARCH-*` 系列**，入口和全文档路由在 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 模块功能和结构
 
-`shell/ut-play`、`ut-playlist` 与 `ut-history` 的实现 why。开头两节定界（模块功能和结构 /
-接口），随后三章：播放子系统（模式→格式→mpv 的落点、终端噪声、错误分类、起播偏移）、
-detached 生命周期（进程组、状态机与死亡记录、运行时 IPC、队列）、两个持久存储。两个存储
-写在这里而不是另开一份，因为它们与生命周期是同一个故事 —— 围着一个播放器的那些状态。
-**代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
+**管什么**：**播放执行、脱离终端的后台生命周期、IPC 通信与两大持久存储** —— 核心执行者 `shell/ut-play`（模式映射、mpv 参数装配、错误分类、detached 进程组、状态机与墓碑记录）、播放队列消费，以及两个不认站点的持久存储：播放列表存储 `ut-playlist`（JSON 文件、互斥锁、原子写入）与收听日志 `ut-history`（JSONL、无锁 `O_APPEND`、防并发截断）。
+🔴 **播放器绝不接触站点知识**：不调 `yt-dlp`、不决定 Cookie、不拼音源 URL，全靠调用 `<engine>-resolve` 获得直链。
+
+**不管什么**（边界表，走错门会得到相反的建议）：
+
+| 事项 | 归哪 |
+|---|---|
+| 音源直链解析、请求头生成与音视频格式判定 | [`ARCH-engine.md`](ARCH-engine.md) |
+| CLI 动词语法、公开退出码与对外信封规范 | [`ARCH-cli-contract.md`](ARCH-cli-contract.md) |
+| 交互式用户操作界面、热键监听与终端列表渲染 | [`ARCH-tui.md`](ARCH-tui.md) |
+| MPD / MPRIS 跨平台守护进程或外部网络播放协议 | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| `list=` 参数自动入队、plain 降采样等已否决路线 | [`ROADMAP.md`](ROADMAP.md) |
+
+### 一张图：播放器生命周期与存储系统架构
 
 ```
-   调用方 ──► ut-play（父进程：门 → 路由；reap_dead_players 在每个动词进门时先扫一遍）
-               │ 播放路径                                   │ 生命周期动词
-               │  resolve_media → <engine>-resolve -j       │  --status --stop
-               │  run_mpv —— 唯一的 mpv 接缝                │  --set-volume --pause/--resume --seek/--seek-to
-               │  （mpv --no-ytdl <直链> + http_headers）    │  --enqueue --next
-               │                                            │  do_* ── 读 players/*.json · nc -U <sock> · 信号
-               ▼ -d / --queue（set -m：子进程成为进程组长）  ▼
-   ┌ detached 进程组 ──────────────────────────┐   ┌ $TMPDIR/uting-<uid>/ —— 运行时状态 ───────────┐
-   │ detached_child_loop（队列循环）           │   │ players/<id>.json        播放器记录（--status 读它）│
-   │   └─ mpv --input-ipc-server=<sock>        │◄─►│ players/dead/<id>.json   死亡记录（墓碑）          │
-   │      一首结束 → detached_epitaph          │   │ mpv-<id>.sock · mpv-<id>.log（有界）              │
-   │                → history_record           │   │ queue-<id>.json · lock-<id>/ · lock-queue-<id>/   │
-   └───────────────┬───────────────────────────┘   └───────────────────────────────────────────────────┘
-                   │ ut-history --record -（按名字调，与调引擎同一种方式；UT_HISTORY=0 关掉）
-                   ▼
-   ┌ $UT_STATE_DIR/ —— 持久存储（用户级；既不认站点也不认播放）──────────────────────────────┐
-   │ playlists/<name>.json    ut-playlist：mkdir 锁 + temp+mv，六个动词，stdin 只收 JSON       │
-   │ history/<YYYY-MM>.jsonl  ut-history：无锁 O_APPEND，一行 < 4096 字节，三个动词            │
-   │ 一条记录 = {engine, url, …} = 一次 ut-play --engine E -- URL 的调用 —— 所以两边互相能管进去 │
-   └────────────────────────────────────────────────────────────────────────────────────────────┘
+   调用方（CLI / Agent / uting）
+        |
+        v
+   +-----------------------------------------------------------------------------------------+
+   | ut-play（主进程：前置 reap_dead_players 墓碑清理 -> 参数校验 -> 动词路由）             |
+   |   [前台/后台播放调度]                                                                   |
+   |     调用 <engine>-resolve 获取直链 -> run_mpv（唯一 mpv 接缝）                          |
+   |   [生命周期控制动词]                                                                    |
+   |     --status / --stop / --pause / --resume / --seek / --set-volume / --enqueue / --next  |
+   |     do_* 动词实现: 读状态文件 -> UNIX Domain Socket (nc -U) 发送 JSON IPC / 发送进程信号 |
+   +----+----------------------------------------------------+-------------------------------+
+        | -d / --queue（后台脱离模式: set -m 创建独立进程组）| 交互控制
+        v                                                    v
+   +-------------------------------------------+   +-----------------------------------------+
+   | detached 独立进程组                       |   | 运行时临时目录: $TMPDIR/uting-<uid>/    |
+   |   detached_child_loop (队列消费主循环)    |   |   players/<id>.json     活动播放器状态  |
+   |     |                                     |   |   players/dead/<id>.json 死亡记录(墓碑) |
+   |     +-> mpv --input-ipc-server=<sock>     |<->|   mpv-<id>.sock         IPC 通信套接字  |
+   |           单曲播放结束 -> detached_epitaph|   |   queue-<id>.json       待播队列文件    |
+   |                        -> ut-history 记录 |   |   lock-<id>/            操作文件互斥锁  |
+   +----+--------------------------------------+   +-----------------------------------------+
+        |
+        v ut-history --record - (管道行写回，UT_HISTORY=0 可关闭)
+   +-----------------------------------------------------------------------------------------+
+   | 持久化存储层: $UT_STATE_DIR/（用户级数据，与站点及播放状态解耦）                       |
+   |   [ut-playlist 歌单库]                                                                  |
+   |     $UT_STATE_DIR/playlists/<name>.json (mkdir 互斥锁 + 临时文件原子替换原子覆盖)       |
+   |   [ut-history 收听日志]                                                                 |
+   |     $UT_STATE_DIR/history/<YYYY-MM>.jsonl (无锁 O_APPEND，单行强制限制 < 4096 字节)     |
+   |   存储数据模型: 一条记录 = {engine, url, title...} = 等价于一次 ut-play 完整可播调用    |
+   +-----------------------------------------------------------------------------------------+
 ```
 
 播放器拥有播放、detached 生命周期、队列与 `players/`，**不拥有任何站点知识** ——
 没有 yt-dlp 调用、没有 cookie 决定、没有格式字符串、没有 id 形状；站点那一半在
-`AS-BUILT-engine.md`。两个存储既不认站点也不认播放：一条记录是 `{engine, url, …}`，
+`ARCH-engine.md`。两个存储既不认站点也不认播放：一条记录是 `{engine, url, …}`，
 也就是一次**调用**，不是一个引用。
 
 ## 接口与 API
 
 `ut-play` 的动词面（播放、`-d` 生命周期、五个 socket 动词、三个队列动词）与两个存储的
 动词面，argv、信封与退出码由各命令的 `--help` 陈述、由 `tests/contract.sh` 证明；
-形状的 why 在 `AS-BUILT-cli-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
+形状的 why 在 `ARCH-cli-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
 那个 mpv socket 是契约的公开部分（「运行时 IPC」）。
 
 ### 调用面 —— 选项的乘积
@@ -125,7 +147,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 `--quality TIER` 是同一分界线的另一面：档位在**门口**校验（bogus 档退 1），然后**原样**转发
 给引擎 —— (mode, tier) → yt-dlp sort 的那张表是引擎自己的（`quality_sort_for_tier`），
 播放器只搬运档位、从不翻译它；`auto` 不发 sort，一个显式的 `-S` 压过 `--quality`
-（两条转发路径都原样过手，覆盖关系在引擎内部裁决，AS-BUILT-engine.md「解析」）。
+（两条转发路径都原样过手，覆盖关系在引擎内部裁决，ARCH-engine.md「解析」）。
 
 这张表**跨三个文件**，所以它在这里陈述一次 —— 没有任何一个文件单独说得出它：
 
@@ -155,9 +177,9 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 
 **请求头的值落在 mpv 的 argv 上，因此在 `ps` 里看得见。** 引擎**不得**在 `http_headers` 里
 返回任何凭据类的头（`Cookie`、`Authorization`）。这是一条**对引擎的契约**，在这里说一次，
-在 AS-BUILT-cli-contract.md「数据契约」说一次。**cookie 完全不是 mpv 的事**：mpv 自己抽取时 cookie
+在 ARCH-cli-contract.md「数据契约」说一次。**cookie 完全不是 mpv 的事**：mpv 自己抽取时 cookie
 要经 `--ytdl-raw-options` 传进去，而这里 cookie 的决定完全归发起 yt-dlp 调用的那个引擎
-（AS-BUILT-engine.md「先探后播」）—— 播放器没有 cookie 代码、不读 `YT_COOKIE_BROWSER`、
+（ARCH-engine.md「先探后播」）—— 播放器没有 cookie 代码、不读 `YT_COOKIE_BROWSER`、
 也没有任何一条能把它泄出去的路径。
 
 ### 终端噪声压制与视口保护
@@ -218,7 +240,7 @@ user+sys）：整张表都落在单核的 5–10%，所以**取舍从来不是 C
 
 三条输出路径：prose（默认）、`-j`（把闲话全部压掉，只发最后一行 JSON）、`-d`（后台，报
 "started"）。**播放器没有 `--get-url`** —— 只要流 URL 而不播，那就是 `<engine>-resolve -j`
-这次调用本身，不是播放器的一个动词（AS-BUILT-engine.md「解析」）。
+这次调用本身，不是播放器的一个动词（ARCH-engine.md「解析」）。
 
 **两个分类器，一份枚举，而播放器那个是小的那个。** 识别*一次抽取为什么失败*的那些措辞 ——
 视频不可用、请求的格式没有、需要登录确认 —— 只有引擎见得到，由它分类并报出 `reason`。播放器
@@ -226,7 +248,7 @@ user+sys）：整张表都落在单核的 5–10%，所以**取舍从来不是 C
 `classify_playback_error` 自己判的只有"URL 已经在手时 mpv 还能怎么失败"：传输类措辞、以及
 rc 130（`stopped_by_user`），其余一切保守落到 `unknown`。`forbidden` 在两边都仍然可达，因为
 一个签名过的媒体 URL 可能在解析与打开之间过期或被拒。它绝不用 mpv 的原话 —— 那不是契约 ——
-而**任何一边都不得新增 AS-BUILT-cli-contract.md「数据契约」未列出的成员**。
+而**任何一边都不得新增 ARCH-cli-contract.md「数据契约」未列出的成员**。
 
 `exit_code` 是 mpv 真实的退出状态；进程退出码保持诚实（130 归一为 0 —— 那是一次有意的停止）。
 
@@ -234,7 +256,7 @@ rc 130（`stopped_by_user`），其余一切保守落到 `unknown`。`forbidden`
 
 `?t=601s` 是 YouTube 的语法，`?t=601` 是 B 站的语法。**播放器一种都不认**，它认得的只有
 "从第 N 秒开始"这一件事，而那是 mpv 的一个 flag。写法的识别在引擎
-（`AS-BUILT-engine.md`「起播偏移」），缝是信封的 `start_seconds`。让 `ut-play` 去 parse query
+（`ARCH-engine.md`「起播偏移」），缝是信封的 `start_seconds`。让 `ut-play` 去 parse query
 string，就等于把站点知识重新长回播放器里 —— 正是 ARCHITECTURE.md「站点知识的边界」划走的那部分。
 
 **两个来源，一个去处。** `resolve_media` 把信封的 `start_seconds` 读进 `RESOLVED_START`
@@ -512,7 +534,7 @@ video-format / width / height（实测 2026-09-04，经 ne 引擎的 mp3：四�
 `null`；让调用方去分辨"键不在"与"值是 null"，是白让人多做一次判断 —— 与 `failed:[]` 永远在场
 是同一个论证。人机面刻意**不**印它：`--status` 的散文行连 position 那一对都放弃了（"要playhead
 的人有 `uting`"），九个字段更不可能挤上去，而"到底在解码什么"的人机面是 `uting` 的详情块
-（AS-BUILT-tui.md「编排」的 details 段），那里有地方摊开。散文那一路仍然读满十三个属性 —— `read_player_live`
+（ARCH-tui.md「编排」的 details 段），那里有地方摊开。散文那一路仍然读满十三个属性 —— `read_player_live`
 是**一个**函数，null 政策只存在一份，而代价是一条它本来就要开的连接上的几行字，不是第二次往返。
 
 **写那一侧多两道门。** `do_set_volume` 在发之前测 `[[ -S "$sock" ]]` —— 测的是"它是不是 socket"
@@ -588,7 +610,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 
 **JIT 解析，一次一首。** 一个流 URL 几小时就过期，所以一条预先全解析的队列播到一半就会 403；
 每个条目都在轮到它时才解析。代价是两首之间的空档，而这笔账是有意付的。两个后果是契约性的
-（AS-BUILT-cli-contract.md「数据契约」）：一次解析失败**推进**队列而不是杀掉播放器 —— 否则上游一分钟
+（ARCH-cli-contract.md「数据契约」）：一次解析失败**推进**队列而不是杀掉播放器 —— 否则上游一分钟
 不顺就被焊死在播放器的寿命上 —— 而失败的那一首在 `failed[]` 里拿到自己的墓碑，键是 `<id>-q<pos>`。
 **推进发生在墓碑写下之前**：当队列耗尽时，死的是**播放器**，那条记录归父进程、来自日志里的墓志铭。
 反过来写的话，一次失败会被记两遍 —— 实测过，一个坏句柄同时留下 `<id>` 与 `<id>-q0`。
@@ -610,7 +632,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 
 读的时候**不取锁**：读者要么看到 `mv` 之前的那份文件、要么看到之后的那份，永远不会看到写了一半
 的。这一半曾是 `uting` 焦点卡上"前方队列块"的数据源；那张卡随视图塌缩删掉之后，TUI 只读它的
-`pos`/`len` 两个数（`AS-BUILT-tui.md`），`upcoming` 这一半今天没有 TUI 读者，它是 agent 面的。
+`pos`/`len` 两个数（`ARCH-tui.md`），`upcoming` 这一半今天没有 TUI 读者，它是 agent 面的。
 
 **三条 bash 3.2 的事实塑造了子进程的循环，每一条都是量出来的，不是推出来的。**
 
@@ -789,6 +811,6 @@ ARCHITECTURE.md「站点知识的边界」，那是一个硬性的用法错误�
 `--clear --before` 就是全部的体量故事 —— 没有轮转、没有压实、没有上限，因为在那个速率下它们一个
 都不会触发。
 
-**TUI 读它，且什么也不存**（`h` 键，见 `AS-BUILT-tui.md`）。日志的 `--ls` 信封与播放列表 `--show`
+**TUI 读它，且什么也不存**（`h` 键，见 `ARCH-tui.md`）。日志的 `--ls` 信封与播放列表 `--show`
 的 `.items` 是同一个形状，所以 `build_playlist_rows` 原样渲染它，每一个在存储行上生效的键在这里
 都生效 —— 这也是为什么这个视图只花了一个加载器、一个谓词（`stored_rows`），以及零个渲染器。

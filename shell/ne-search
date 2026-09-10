@@ -16,7 +16,7 @@
 # is the whole reason this engine — alone in the suite — needs `openssl`, and the dependency
 # is scoped to this ONE file: `ne-resolve` shells out to yt-dlp and fetches lyrics over plain
 # GET, so a machine without openssl loses this half and nothing else. docs/ARCHITECTURE.md
-# 「原语与接缝」; AS-BUILT-engine.md.
+# 「原语与接缝」; ARCH-engine.md.
 #
 # WHAT THIS ENGINE IS FOR, stated because it decides whether a query is worth running here.
 # Measured 2026-09-02 over 10 queries x 50 rows: 57% of rows are playable on a free account,
@@ -52,7 +52,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
-# AS-BUILT-cli-contract.md「配置面」 for the keys.
+# ARCH-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -172,7 +172,7 @@ OVERFETCH=2
 MAX_REQUESTS=3
 
 # The `-n` default. Cross-engine: a caller who wants a different result count by default
-# wants it from whichever source they asked. AS-BUILT-cli-contract.md「配置面」.
+# wants it from whichever source they asked. ARCH-cli-contract.md「配置面」.
 NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
@@ -251,7 +251,7 @@ require_deps() {
 # The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". A jq prelude,
 # not a bash function, so a caller already shaping JSON pays one fork instead of one per row.
 # Each engine carries its own copy: they are independent executables sharing no library, and
-# the shared fact is the FORMAT, stated once in docs/AS-BUILT-engine.md「搜索子系统」.
+# the shared fact is the FORMAT, stated once in docs/ARCH-engine.md「搜索子系统」.
 #
 # `ne_secs` is this site's own half: duration arrives as `dt`, in MILLISECONDS.
 JQ_PRELUDE='
@@ -287,7 +287,7 @@ def pick_thumb:
 '
 
 # THE `fee` -> `access` MAP, and the reason this engine exists at all beyond being a third
-# source. `access` (AS-BUILT-cli-contract.md「数据契约」) is printed as a constant "full" by both
+# source. `access` (ARCH-cli-contract.md「数据契约」) is printed as a constant "full" by both
 # shipping engines because neither site tells them anything else in a search response; this
 # one puts the answer in `.result.songs[].fee`, for free, in the page already fetched.
 #
@@ -306,7 +306,7 @@ def pick_thumb:
 #
 # `preview` rather than `paywalled` for fee:1 keeps this field a LOWER BOUND: a VIP account
 # resolving the whole track is not a broken promise, and it keeps `access` a statement about
-# the SITE rather than about who is logged in (AS-BUILT-cli-contract.md「数据契约」).
+# the SITE rather than about who is logged in (ARCH-cli-contract.md「数据契约」).
 #
 # ONE definition, used by the shaping program and by nothing else — the page loop decides
 # whether to fetch again by counting the SHAPED rows, so the predicate cannot drift from what
@@ -322,7 +322,7 @@ def ne_access:
 
 # Map an HTTP status + the response body's own `code` to the suite's stable reason taxonomy so
 # an agent caller can branch on `reason` instead of on NetEase's numbers. The ENUM is the
-# shared fact and lives in AS-BUILT-cli-contract.md「数据契约」 — no member may be added here
+# shared fact and lives in ARCH-cli-contract.md「数据契约」 — no member may be added here
 # that it does not already have.
 #
 # -462 is this host's rate limit and lands in `network`, the member that already means
@@ -372,7 +372,7 @@ ensure_scratch() {
 # ==============================================================================
 
 # Report a search that produced nothing usable, in whichever shape the caller asked for. Exit
-# code follows the suite taxonomy: AS-BUILT-cli-contract.md「退出码」 reserves 1 for
+# code follows the suite taxonomy: ARCH-cli-contract.md「退出码」 reserves 1 for
 # usage/validation, so a failure to reach or parse the site is 2 — a caller branching on the
 # exit code must be able to tell "you called me wrong" from "the site did not answer".
 search_fail() {
@@ -450,7 +450,7 @@ fetch_page_once() {
 # inside a command substitution, so the error envelope would land in a shell variable and the
 # only thing reaching the caller's caller would be the exit code — a JSON caller handed an
 # empty stdout and a bare 2, which is exactly the contract this envelope exists to keep
-# (AS-BUILT-cli-contract.md「数据契约」).
+# (ARCH-cli-contract.md「数据契约」).
 PAGE_TOTAL=0
 FETCH_REASON=""
 fetch_page() {
@@ -493,7 +493,7 @@ fetch_page() {
 # text that carries none can only corrupt it.
 #
 # `select(.url != null)` is the row's own premise: a result is a CALL (`ut-play --engine ne --
-# <url>`) or it is not a row. AS-BUILT-cli-contract.md「数据契约」.
+# <url>`) or it is not a row. ARCH-cli-contract.md「数据契约」.
 JQ_SHAPE='
 [ .[]
   | . + { id:          (if (.id | type) == "number" then (.id | tostring) else null end),
@@ -521,7 +521,7 @@ fetch_results() {
     # The row ceiling is applied FIRST and the request plan is derived from what survives it:
     # UT_MAX_SEARCH_RESULTS is counted in rows because rows are what the envelope contains,
     # and this engine spends it by asking for more of them per request rather than by taking
-    # more pages (AS-BUILT-cli-contract.md「配置面」).
+    # more pages (ARCH-cli-contract.md「配置面」).
     local wanted=$NUM_RESULTS
     ((UT_MAX_SEARCH_RESULTS > 0 && wanted > UT_MAX_SEARCH_RESULTS)) && wanted=$UT_MAX_SEARCH_RESULTS
 
@@ -673,7 +673,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
+  config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   NE_UA           User-Agent sent with the search request (a browser UA)
   NE_INCLUDE_VIP  1 = also return rows that are not fully playable (default: 0)
 
@@ -683,7 +683,7 @@ EOF
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. AS-BUILT-cli-contract.md「门模型」
+# ut-play so the caller learns the right tool instead of a bare error. ARCH-cli-contract.md「门模型」
 has_format=0
 query=()
 reject_url() {
@@ -825,7 +825,7 @@ fi
 # openssl joins curl and jq HERE, in the search half only, and it goes through the same
 # require_cmd gate every other dependency in the suite does: a machine without it loses this
 # one command and keeps the other nine, which is exactly what scoping the dependency to the
-# engine was for (AS-BUILT-engine.md).
+# engine was for (ARCH-engine.md).
 require_deps curl jq openssl
 
 # -n 0 is a legal, cheap answer: the empty envelope, without a round trip.

@@ -1,49 +1,75 @@
-# AS-BUILT-tui —— 人机面 `uting` 的实现
+# ARCH-tui —— 人机面 `uting` 的实现
+
+**这份属于 `ARCH-*` 系列**，入口和全文档路由在 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 模块功能和结构
 
-`shell/uting` 的实现 why：引擎发现、**唯一那个视图**的渲染、防闪烁的原地重绘、reflow
-与分页、键位与输入层、主题与中英 chrome，以及所有被实测钉死的规矩。
-**代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），不复制实现。
+**管什么**：**唯一的人机交互界面 `shell/uting`** —— 音源引擎自动发现、单一视图与行源切换、基于差量计算的终端原地重绘、双字节 CJK 字符宽度计算、终端窗口重排（Reflow）与分页、无框架事件循环与 UTF-8 多字节键位解析，以及基于 Kitty 协议的焦点行封面转码发射（`UT_IMAGE`）。
+🔴 **纯编排面**：本模块不包含任何站点私有知识，亦不包含播放器后台控制逻辑；对下只通过统一命令行调度其它平级动词。
+
+**不管什么**（边界表，走错门会得到相反的建议）：
+
+| 事项 | 归哪 |
+|---|---|
+| 音源搜索与解析直链的具体站点实现 | [`ARCH-engine.md`](ARCH-engine.md) |
+| 播放器进程生命周期、mpv 参数组装与持久状态库 | [`ARCH-player.md`](ARCH-player.md) |
+| CLI 信封标准格式、退出码与 SemVer 约束 | [`ARCH-cli-contract.md`](ARCH-cli-contract.md) |
+| 键位注册表、mpv 原生 VO 绘图等已否决路线 | [`ROADMAP.md`](ROADMAP.md) |
+
+### 一张图：TUI 架构与单视图编排流
 
 ```
-   TTY（人）── 键位 ──► uting（scan_engines：<name>-search + <name>-resolve 成对才算一个引擎）
-                          │
-   ┌ 行源 —— 换掉列表里的行，再按一次就回去 ────────────────────────────────────────────┐
-   │  搜索    <engine>-search -j          b 播放列表  ut-playlist --show -j            │
-   │  h 历史  ut-history --ls -j          c 分 P  <engine>-resolve --parts             │
-   │  i 章节  <engine>-resolve --info     （能力靠"有没有这个动词"发现，不靠注册表）    │
-   └───────────────────────────────────┬─────────────────────────────────────────────┘
-                                       ▼ fetch_json（spinner 夹着它）→ load_rows / build_*_rows
-   ┌ 唯一的视图 ─────────────────────────────────────────────────────────────────────┐
-   │ 宽度层 char_w / disp_w / truncate_disp → layout_cols → display_list_menu（原地重绘）│
-   │ 实时过滤 apply_filter · 重排分页 on_winch · 主题与中英 chrome · ASCII 兜底         │
-   │ 输入层 read_nav_input → utf8_complete（字节重组成字）→ 菜单循环的 case 派发表      │
-   │                                                                                   │
-   │ 焦点行的封面（UT_IMAGE）—— 详情区右栏，只有一张图，只跟着"焦点"这一个变量         │
-   │   启动一次：image_probe（终端答不答 kitty 图形协议）· image_cell_px（一格几像素）  │
-   │   每帧：预算闸 → image_clear → image_focus（查缓存）→ image_emit（f=100,C=1,q=2）  │
-   │   时钟上（不在按键循环里）：image_prepare_bg ──► curl · mpv（后台子 shell，一次一个）│
-   └───────────────────────────────────┬─────────────────────────────────────────────┘
-                                       ▼ Enter
-   ut-play -d -j --engine <该行的引擎> ──► 播放器记录 ──► 三个播放态 Starting / Playing / Paused
-   nc -U <播放器在 -d -j 信封里公布的 sock>（唯一批准的直连：进度、暂停、音量）
-   写回：用户 config 的十个偏好键（write_prefs，temp+mv）—— 那份文件就是偏好的 agent 面
-
-   不在这张图里的：任何一条 YouTube / Bilibili 的事实，任何一次 yt-dlp 或 mpv 调用
+   用户终端 TTY（标准输入 / 输出）
+        |  按键事件（单字节 / 多字节转义序列）
+        v
+   +-----------------------------------------------------------------------------------------+
+   | uting 入口编排层                                                                        |
+   |   引擎自动扫描: scan_engines（检查 <name>-search 与 <name>-resolve 成对存在）           |
+   |   配置预加载与偏好加载: ut_read_config                                                  |
+   +------------------------------------+----------------------------------------------------+
+                                        | 行源切换 (按相应键切入，再按或按 q 返回主列表)
+        +-------------------------------+-------------------------------+
+        |                               |                               |
+        v                               v                               v
+   [搜索行源]                      [持久行源]                      [层级行源]
+   <engine>-search -j              b: ut-playlist --show -j        c: <engine>-resolve --parts
+   (主搜索列表)                    h: ut-history --ls -j           i: <engine>-resolve --info
+        |                               |                               |
+        +-------------------------------+-------------------------------+
+                                        | fetch_json 标准信封拉取
+                                        v
+   +-----------------------------------------------------------------------------------------+
+   | 统一视图渲染管线 (Single View Engine)                                                   |
+   |   [字符宽度计算]  char_w / disp_w / truncate_disp（CJK 与 Emoji 严格按 2 格计宽）       |
+   |   [动态排版重算]  on_winch 捕获窗口变更 -> layout_cols 重新分配列宽 -> 动态分页计算     |
+   |   [差量屏幕重绘]  display_list_menu（光标精准定位，消除清屏闪烁）                       |
+   |   [实时输入过滤]  apply_filter（逐键过滤与行内刷新）                                    |
+   |   [终端封面管线]  UT_IMAGE（焦点行唯一封面）                                             |
+   |     环境探测: image_probe (Kitty TGP 探针) · 单元格像素: image_cell_px (CSI 16 t)       |
+   |     异步转码: image_prepare_bg -> curl 抓取 -> mpv --vo=image 转码出 192px PNG          |
+   |     帧同步发射: image_clear 擦除旧图 -> image_emit 发射 \e_Ga=T,f=100 Kitty 协议序列    |
+   +------------------------------------+----------------------------------------------------+
+                                        | 回车选定行（Enter）
+                                        v
+   +-----------------------------------------------------------------------------------------+
+   | 后台播放调度与写回                                                                      |
+   |   调度播放: ut-play -d -j --engine <行引擎> -- <行URL>                                  |
+   |   状态轮询: nc -U <IPC Socket>（读取播放进度、切换暂停/继续）                           |
+   |   偏好写回: write_prefs（退出时将当前音源、音量、模式等写回用户 config）                 |
+   +-----------------------------------------------------------------------------------------+
 ```
 
 这个面持有渲染，且**不持有任何站点知识** —— 一条 YouTube 或 Bilibili 的事实出现在这个
 文件里，就是分层违规（ARCHITECTURE.md「命令拓扑」的支配原则）。它也不持有播放与存储：
 **纯编排**，对下只调那些动词；唯一被批准的例外是播放器在 `-d -j` 信封里公布出来的那个
-mpv socket（AS-BUILT-player.md「运行时 IPC」）。
+mpv socket（ARCH-player.md「运行时 IPC」）。
 
 ## 接口与 API
 
 一个 TTY 上的键位面（键表由 `uting --help` 陈述、由 `tests/contract.sh` 的 tmux 段证明），
 对下组合动词：`<engine>-search -j`、`ut-playlist` / `ut-history`、
 `<engine>-resolve --info/--parts -j`、`ut-play -d -j --engine <行自己的引擎>`。
-契约面在 `AS-BUILT-cli-contract.md`。
+契约面在 `ARCH-cli-contract.md`。
 
 ### 调用面 —— 选项的乘积
 
@@ -120,14 +146,14 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
 所以第三个引擎不会被这件事卡住。
 
 它说的是"播放会读哪个 profile 的 cookie"，**不是**"你登录着" ——
-那条界线在 AS-BUILT-engine.md「先探后播」 量过，别在 UI 文案里把它说宽。
+那条界线在 ARCH-engine.md「先探后播」 量过，别在 UI 文案里把它说宽。
 
 **状态行的 `total=` 是 parts 列表特有的字段，而且它只出现在那一行上。** 它存在的理由是
 搜索行的一处不一致：B 站的搜索响应**只给聚合时长**，所以一个 100 P 视频的搜索行写着
 `10h:32m:03s`（实测 2026-08-29：那个数字与 `--parts` 的 `total_duration_fmt` **逐字相同**），
 而在那一行上按 Enter 放出来的是**第 1 P**，12:07。两个数字都没错，错的是搜索屏上没有任何
 东西说它们是两个数字 —— 而这一层修不了：要在搜索行上分辨，得对每条结果多打一次
-`/x/web-interface/view`，正是 `bili-search` 最稀缺的那样东西（AS-BUILT-engine.md）。
+`/x/web-interface/view`，正是 `bili-search` 最稀缺的那样东西（ARCH-engine.md）。
 
 于是说清它的地方是 `c` 打开的部分列表，它把两个数字放在相隔一行的位置对峙：表头的
 `total=` 是集合，下面每一行是它自己那一 P。第 1 P 的时长**不**在表头里再印一遍 ——
@@ -144,11 +170,11 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
 在 audio 旁边是一个码率。
 
 这个文件不认识 yt-dlp 串，也不该认识：`f` 选的是一个**规范档位**，翻成 format-sort
-是引擎的事（`quality_sort_for_tier`，AS-BUILT-engine.md）。TUI 只是把档位原样交给
+是引擎的事（`quality_sort_for_tier`，ARCH-engine.md）。TUI 只是把档位原样交给
 `ut-play --quality`，与它交 `-f` 的方式一字不差。没有对应的 `uting` 旗标 —— 一个档位是
 设一次的调音，它的入口是配置键、这个键、以及 agent 面上的 `ut-play --quality`。
 
-**单 P 不开视图。** 引擎答 `count: 1` 不是错（AS-BUILT-cli-contract.md 的 `--parts` 一节），
+**单 P 不开视图。** 引擎答 `count: 1` 不是错（ARCH-cli-contract.md 的 `--parts` 一节），
 但在 TUI 里开一个单行列表是拿一次按键和一次重绘换一句废话 —— 屏幕上那一行**本来就是**
 那唯一的 P。所以 `c` 在那里出的是提示（`分P: 这个视频只有一 P`），回答的正是这个键真正
 在问的"这条还有别的吗"。
@@ -229,7 +255,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     与这个键从前在第 1 页的 no-op 一模一样。存的是 `RESULT_N`（要了多少）而不是
     `NUM_ENTRIES`（拿到多少）：一次只有 37 条结果的查询不该把下一次查询的起点钉在 37。
 - **十个键改的设置会写回用户配置**（`mark_pref` / `flush_prefs`；机制、键表与那三条
-  硬约束在 `AS-BUILT-cli-contract.md`「配置面」「写回」，决定在 ARCHITECTURE.md「两个根数据文件」）。TUI 这一侧只有三件事
+  硬约束在 `ARCH-cli-contract.md`「配置面」「写回」，决定在 ARCHITECTURE.md「两个根数据文件」）。TUI 这一侧只有三件事
   值得记在这里：① **置脏点全都在成功路径之后** —— `cycle_engine` / `cycle_sort` 有一个
   取数失败就回滚的窗口，屏幕上是旧值，文件里就必须是旧值；② **写是延后的**，真正落盘发生在
   `nav_tick` 与 `cleanup_on_exit` 这两个现成的地方，所以连按 `t`/`l` 只付**一次**重写，
@@ -331,8 +357,8 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     没了，屏幕上的行是过去的照片；空列表说的还是 `b` 开空列表时的那句话，因为那是同一个事实。
 
 - **播放是异步、非阻塞的，走 `ut-play -d -j --engine`。** 引擎取自搜索信封，绝不留给播放器的
-  默认值（AS-BUILT-cli-contract.md「门模型」）。`play_selected` 用一次 `jq` 从那个信封里读出
-  `id`/`pid`/**`sock`**，从不自己重建 socket 路径（AS-BUILT-player.md「运行时 IPC」）。
+  默认值（ARCH-cli-contract.md「门模型」）。`play_selected` 用一次 `jq` 从那个信封里读出
+  `id`/`pid`/**`sock`**，从不自己重建 socket 路径（ARCH-player.md「运行时 IPC」）。
   播放在一个独立的 detached 进程组里启动，于是 `uting` 保有对终端的完全控制。
   用户浏览结果、翻页、发起新搜索（`n`）时音频不中断。在任何一行上按一次 `Enter`，
   干净地停掉上一个播放器并启动新选择，没有延迟。
@@ -430,7 +456,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
   - **一个章节行是一次调用，不是一条引用 —— 而这一条 2026-08-29 曾被否掉过。** 当时的理由是
     "章节当行会逼着条目记录长出一个起始偏移字段，并让它蔓延进歌单、队列与历史"。
     **0.4.0 之后那条理由失效了**：`start_seconds` 已经是 resolve 信封的字段，每个引擎都从句柄的
-    `?t=` 里读它（`AS-BUILT-engine.md`「起播偏移」）。所以行的 url 就是**带 `t=<秒>` 的那个句柄**
+    `?t=` 里读它（`ARCH-engine.md`「起播偏移」）。所以行的 url 就是**带 `t=<秒>` 的那个句柄**
     （`chapter_url`，先把已有的 `t=` 剥掉 —— 带两个 `t=` 的句柄从哪一秒开始取决于解析器往哪看），
     记录**一个新字段都不用加**：`Enter` 从那一章起播、`+` 从那一章入队、
     `a` 存下来的也是从那一章起播的一行。偏移**随行走**，所以实时过滤重排了行也不会错位
@@ -438,7 +464,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
   - **`Enter` 在章节行上的两个分支，是同一件事。** `play_chapter`：播放器手上已经是**这一条**
     （engine 与去掉 `t=` 的句柄都相等）就走 `ut-play --seek-to <秒>` —— 章节是**已经打开的那个
     文件里的一个偏移**，所以是一次 seek，永远不是一次 re-resolve（这正是这条轴与 `--parts`、
-    `--quality` 的分界，AS-BUILT-cli-contract.md「命令规格」）；否则照常 `play_selected`，偏移在 url 里。
+    `--quality` 的分界，ARCH-cli-contract.md「命令规格」）；否则照常 `play_selected`，偏移在 url 里。
   - **仍然没有第三个渲染器，理由没变。** 一个 "mini player" —— 用三行渲染同样那几个事实 ——
     会是一个状态两个渲染器，也就是会漂移的重复。今天这个数是**一个**，而不是两个。
 
@@ -528,7 +554,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     永远不回主循环），并在播放器一消失就经 `clear_play_state` 清掉整块 `CURRENT_PLAY_*`。
     测试方法是对信封里那个 pid 做 `kill -0`，而那是 **bash 包装进程**的 pid：包装进程阻塞在
     mpv 上，所以"包装进程活着"恰好等于"还在播"，这与播放器自己回收时依据的
-    （AS-BUILT-player.md「运行时 IPC」 的进程组存活）是同一个真相，只是从客户端一侧、
+    （ARCH-player.md「运行时 IPC」 的进程组存活）是同一个真相，只是从客户端一侧、
     用一个 builtin、零 fork 够到 —— 便宜到 1 秒一拍也付得起。**空**的 pid 意思是"未知"
     而不是"死了"（`play_selected` 只要求 id 与 sock），所以它不动 chrome。
     pid 复用会让它误报，与 ARCHITECTURE.md「风险登记」 为播放器自己的 `group_alive`
@@ -576,7 +602,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     一个 60 列的 pane 报了 80，于是那时的卡片画出 80 宽的 rail，每一行（rail、标题、进度条）都折了。
     `term_size()` 通过这个 UI 本来就要求的那个 TTY 读真正的 ioctl，
     再依次以 `tput`、80x24 兜底。（`ut-play` 的 `viz` 模式用同样的方式给它的滤镜定尺寸 ——
-    只是宽度照抄、**高度乘二**，因为 `--vo=tct` 画的是半格：`AS-BUILT-player.md`「终端可视化」。）
+    只是宽度照抄、**高度乘二**，因为 `--vo=tct` 画的是半格：`ARCH-player.md`「终端可视化」。）
   - **chrome 一次运行只说一种语言。** 把标签写成中文字面量、而帮助、错误与字段标签留在英文，
     会让这个工具读起来像同时在说两种语言。`init_ui_strings` 把每一个标签**一次性**解析进全局量
     —— bash 3.2 没有关联数组，而每次绘制查一次表会在每次重绘时 fork 或重新分支 ——
@@ -990,7 +1016,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     - **`？`（全角）与 `?` 同绑。** 这是一个双语 TUI，zh 输入法下 shift-/ 出的是全角问号，
       `utf8_complete` 本来就会把它拼成一个键，所以这是多一个 case 模式，不是第二条代码路径。
       case 模式里那个 `?` **必须带引号**：裸 `?` 是"任意单字符"的 glob，会把它下面每一个键吞掉。
-    - **它是第八个写回键**（`UT_KEYS=core|full`，机制见 `AS-BUILT-cli-contract.md`「配置面」「写回」）：
+    - **它是第八个写回键**（`UT_KEYS=core|full`，机制见 `ARCH-cli-contract.md`「配置面」「写回」）：
       一个每次开会话都要重按的偏好不是偏好。也因此它在出厂 `config` 里有一个值，
       而一个拼错的值**当场就死**，与 `UT_PLAY_QUALITY` 走同一道闸。
     - **它藏的是提示，不是键。** core 档下 `i`、`a`、`b`、`h`、`c`、`v`、`f`、`o`、`e`、
@@ -1051,7 +1077,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     是一件新事都没有（`1:47 · CLeZyIID9Bo&t=0`，连 id 都被 `t=` 拼坏了）。原因不在这个块：
     搜索信封里当时就只有这些字段。**每个引擎的搜索响应里本来都带着 `description`，从前都把它
     扔了** —— yt 的 flat 搜索给的是站方自己截断的那段摘要，bili 的搜索接口给的是简介本身 ——
-    所以它现在是信封的一个字段（`AS-BUILT-cli-contract.md`「数据契约」），不多花一次请求。块里最多两行，
+    所以它现在是信封的一个字段（`ARCH-cli-contract.md`「数据契约」），不多花一次请求。块里最多两行，
     **截两次**：先按两行能装的宽度 `truncate_disp`（省略号从这里来，因为折行没有办法说"还有"），
     再由 `WRAP_MAX` 兜底，因为按词折行可能把一行花在更少的字上。
     - **`WRAP_MAX` 住在 `wrap_emit` 那一个出口上**，理由与 `WRAP_LINES` 一样：一个提前停止
@@ -1068,7 +1094,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     的 socket（`fetch_play_times` 每拍那一批请求），而不是引擎。
     - **不来自引擎，这正是重点。** 播放器记录里的 `selected` 是引擎**要到的**格式串
       （`"251 - audio only (medium)"`）—— 是请求不是答案，对解码器最后拿到了什么只字未提
-      （AS-BUILT-player.md「运行时 IPC」）。只有 mpv 知道，而 TUI 本来就每拍在问它。
+      （ARCH-player.md「运行时 IPC」）。只有 mpv 知道，而 TUI 本来就每拍在问它。
     - **只印在"正在播的那一行"上。** 它是这个块里唯一一个源头是**活进程**而不是已取回记录的
       成员，所以它只能对那一行为真；印在别的行下面，就是给另一首曲子的说明配了错的图。行的
       匹配走 URL 而不是下标 —— 与 `chapter_span` 同一个 `handle_key`、同一对 `{engine, url}`，
@@ -1098,7 +1124,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     details 段每行都需要频道、播放量、直播态与一个 id，所以一行不再是一个显示串。
     前六个是搜索行本来就有的那些；**后四个每一个都是同一条理由长出来的**——
     那件事是**行**的属性，不是会话的属性，也不能从相邻行去推，因为实时过滤一重排就错：
-    第七个 `engine`（在播放列表成为第二个行源时加的，AS-BUILT-player.md「持久状态层」）——
+    第七个 `engine`（在播放列表成为第二个行源时加的，ARCH-player.md「持久状态层」）——
     一个存下来的清单可以混源，所以"哪个引擎播这一行"跟着行走；
     第八个 `rail` —— 这一行自己点名的那一格 rail，是十个里唯一一个已经是显示形态的，
     只有章节表写它（一个区间，不是一个长度），别的源留空、照旧由渲染器对 `duration_fmt`

@@ -19,7 +19,7 @@
 #      lives there.
 #
 # The keymap it can send lives in README.md (Keys) and the YT_* knobs in
-# AS-BUILT-cli-contract.md「配置面」 — this file restates neither.
+# ARCH-cli-contract.md「配置面」 — this file restates neither.
 #
 # Portability: bash 3.2 (macOS system bash). Needs tmux; jq only for the cleanup report.
 #
@@ -192,7 +192,7 @@ fi
 # changing every ~0.1s), writes the frame's head at 2.76s, then goes QUIET before writing the
 # rest. That quiet stretch is the trap: it is not a slow trickle with small pauses, it is one
 # stall mid-frame — the width layer measuring what the frame is about to print
-# (AS-BUILT-tui.md) — so a settle shorter than it photographs the tear no matter how it is
+# (ARCH-tui.md) — so a settle shorter than it photographs the tear no matter how it is
 # spelled. A first attempt at 0.6s did, and so did a quiescence test with a 0.25s window. The
 # stall itself was 0.88s when this was written and is 0.20s since disp_fits bounded the
 # measurement; the window is not re-tuned down, because what it is sized against is the SLOW

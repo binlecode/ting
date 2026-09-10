@@ -12,7 +12,7 @@
 # THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes ten keys back to
 # it when you change one at runtime (engine, sort, mode, quality, theme, language, result
 # count, key-hint tier, row numbers, list mode) — in place, comments and layout kept.
-# AS-BUILT-cli-contract.md「配置面」 (write-back), ARCHITECTURE.md「两个根数据文件」.
+# ARCH-cli-contract.md「配置面」 (write-back), ARCHITECTURE.md「两个根数据文件」.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
 #
@@ -28,7 +28,7 @@
 #   YouTube-specific: YT_THEME and YT_LANG are read only by uting, YT_ASCII by uting and
 #   all four engine scripts, YT_ASCII_VO by ut-play — and neither uting nor ut-play knows
 #   what a source is. THIS FILE is the authority on every key's meaning and default;
-#   AS-BUILT-cli-contract.md「配置面」 holds the chain and the rules that span files.
+#   ARCH-cli-contract.md「配置面」 holds the chain and the rules that span files.
 #
 #   A KNOB WHOSE UNSET STATE MEANS "AUTO-DETECT" MUST NOT APPEAR HERE. Giving it a value in
 #   this file is indistinguishable from a user setting it, so it defeats the very detection
@@ -41,7 +41,7 @@
 #   NOT HERE, deliberately: UT_STATE_DIR and UT_START_RESULTS. Both defaults are a chain
 #   through ANOTHER variable, which a flat KEY=value file cannot express:
 #     UT_STATE_DIR      ${XDG_STATE_HOME:-$HOME/.local/state}/uting — flattening it to a
-#                       literal path would silently drop the XDG support AS-BUILT-cli-contract.md「配置面」 promises. It
+#                       literal path would silently drop the XDG support ARCH-cli-contract.md「配置面」 promises. It
 #                       stays inline in ut-playlist and ut-history.
 #     UT_START_RESULTS  unset = follow UT_FETCH_BATCH below. How many rows a query STARTS
 #                       from, as opposed to the step each edge moves by. It stays inline in
@@ -68,7 +68,7 @@ UT_PLAY_MODE=audio                  # the -f default. -f itself accepts audio | 
 UT_VOLUME=                          # the --volume default; empty = leave mpv's own
 UT_PLAY_QUALITY=auto                # the --quality default: auto | low | medium | high.
                                     # The (mode, tier) -> format-sort table lives in the
-                                    # engines (AS-BUILT-engine.md「解析」); -S overrides it when
+                                    # engines (ARCH-engine.md「解析」); -S overrides it when
                                     # both are given.
                                     # uting's f key rotates it live and writes it back here
 
@@ -79,7 +79,7 @@ UT_VIZ_STYLE=bars                   # what -f viz draws: bars = log-scaled spect
                                     # one per terminal column | wave = the waveform. Both
                                     # cost the same to within 5% of one core at terminal
                                     # size; bars is the default because it is the legible
-                                    # one there. AS-BUILT-player.md「终端可视化」
+                                    # one there. ARCH-player.md「终端可视化」
 YT_MPV_INPUT_CONF=                  # path to an mpv input.conf for detached players
 
 # ── scope: terminal UI (uting) ──────────────────────────────────────────────────────────

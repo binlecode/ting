@@ -1,45 +1,51 @@
-# AS-BUILT-engine —— 什么是一个引擎：`<name>-search` + `<name>-resolve`
+# ARCH-engine —— 什么是一个引擎：`<name>-search` + `<name>-resolve`
+
+**这份属于 `ARCH-*` 系列**，入口和全文档路由在 [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
 ## 模块功能和结构
 
-那些认识**站点**的半边的实现 why：`yt-search` / `yt-resolve`、`bili-search` / `bili-resolve`
-与 `ne-search` / `ne-resolve`。开头两节定界（模块功能和结构 / 接口），随后按章：搜索（含两处
-手工 HTTP 传输、网易云的 weapi 加密，与 `kind`/`access` 的实测由来）、「先探后播」的客户端选择、
-解析与它的只读动词、起播偏移。
-**这是下一个引擎的作者要读的那份文档**，与 `AS-BUILT-cli-contract.md`「加一个引擎」并排看。
-**代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
+**管什么**：**所有与音源站点相关的专门知识** —— 3 对音源引擎（YouTube: `yt-*`, Bilibili: `bili-*`, 网易云: `ne-*`）的双半边实现。前半边为搜索（`query -> search 信封`），后半边为解析（`handle -> resolve 信封`，提取直链、HTTP 头与元数据），以及起播偏移、分 P（`--parts`）、歌词字幕（`--transcript`）与登录探测（`--auth`）。
+🔴 **站点知识唯一容身处**：套件内除引擎对之外的任何文件如果出现特定音源站点的字段或逻辑，即判定为分层违规。
+
+**不管什么**（边界表，走错门会得到相反的建议）：
+
+| 事项 | 归哪 |
+|---|---|
+| 音频解码、mpv 进程组拉起、生命周期管理与 IPC 控制 | [`ARCH-player.md`](ARCH-player.md) |
+| CLI 信封标准定义、退出码分配与全局命令行契约 | [`ARCH-cli-contract.md`](ARCH-cli-contract.md) |
+| 结果在终端的交互呈现、封面渲染与按键映射 | [`ARCH-tui.md`](ARCH-tui.md) |
+| 喜马拉雅等已否决音源路线、跨引擎聚合动词提案 | [`ROADMAP.md`](ROADMAP.md) |
+
+### 一张图：音源引擎双半边架构与数据流
 
 ```
-            query                                          handle（URL / id / BV… —— 文法是引擎的）
-              │                                                  │
-   ┌──────────▼───────────────────────┐            ┌─────────────▼───────────────────────────┐
-   │ <name>-search                    │            │ <name>-resolve                          │
-   │  门 → fetch_results              │            │  门 → normalize_target → is_own_host     │
-   │      → emit_search_json          │            │      → dump_once ──► emit_stream         │
-   │  kind / access 的判断落在这里    │            │  只读动词：--info · --auth（探登录）    │
-   └──────────┬───────────────────────┘            │  probe_raw 探 PO（仅 yt）                │
-   yt:   yt-dlp（flat，一次调用）                  │  bili 独有 --parts（fetch_view_once，    │
-   bili: curl + jq（fetch_page_once）              │            一个 HTTP 请求，不走 yt-dlp） │
-   ne:   curl + openssl + jq（同名函数，           │  yt 与 ne 各有 --transcript：一条字幕轨  │
-         weapi 两道 AES —— 明文口已死）            │            / 一份歌词，同一个信封       │
-              │                                    └─────────────┬───────────────────────────┘
-              │                                    yt-dlp（dump_once）· curl（probe_raw 仅 yt；
-              │                                                   fetch_lyric_once 仅 ne）
-              ▼                                                  ▼
-   search 信封 {items[]: {engine, url, title, …}}   resolve 信封 {stream_urls[], http_headers{},
-              │                                                   title, duration, format, start_seconds}
-              │                                                  ▲
-              ▼                                                  │ 接缝是信封，不是背后的工具
-   uting 渲染 / ut-playlist --add（stdin）              ut-play --engine <name>（名字靠拼接找到它）
-
-   每个引擎各带一份副本（jq 前奏、时长规矩、reason 枚举）—— 没有共享库，所以播放器不必认识它
+          query（搜索词）                               handle（URL / ID / BV号 / 纯数字）
+              |                                                      |
+   +----------v--------------------------+        +------------------v-----------------------+
+   | <name>-search（搜索前半边）         |        | <name>-resolve（解析后半边）             |
+   |   门控校验 -> 执行抽取 -> 标准化封包|        |   门控校验 -> 句柄规范化 -> 域名白名单   |
+   |   kind / access 计算收敛于此        |        |   dump_once 抽取媒体 -> 生成播放直链     |
+   |   yt:   yt-dlp (flat 模式)          |        |   只读动词: --info / --auth              |
+   |   bili: curl + jq (网页端接口)      |        |   bili 专有: --parts（多分P单次提取）    |
+   |   ne:   curl + openssl (weapi 双AES)|        |   yt/ne 专有: --transcript（字幕/歌词） |
+   +----------+--------------------------+        +------------------+-----------------------+
+              |                                                      |
+              v                                                      v
+   +-------------------------------------+        +------------------------------------------+
+   | search 信封 (JSON)                  |        | resolve 信封 (JSON)                      |
+   |   {status: "ok", engine, results[]} |        |   {status: "ok", stream_urls[],          |
+   |   results: [{engine, url, title...}]|        |    http_headers{}, format, duration...}  |
+   +----------+--------------------------+        +------------------+-----------------------+
+              |                                                      ^
+              v                                                      | 名字拼接: <engine>-resolve
+   uting 视图渲染 / ut-playlist --add 入库        ut-play 调度播放（播放器完全不含站点细节）
 ```
 
 **这套套件里每一个与站点相关的事实，要么住在一对引擎里，要么就是一次分层违规** ——
 播放器与站点无关，TUI 是纯编排。引擎刻意**不**拥有：播放、生命周期、`players/`。
 一件被划走的事：`-f MODE` 作为格式字符串*意味着什么*是引擎知识（`format_for_mode()`
 住在每个 `<engine>-resolve` 里），但模式→格式→mpv 那张表只陈述一次，放在播放器的
-mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
+mpv 选项集旁边（`ARCH-player.md`「模式 → 格式 → mpv」）。
 
 每个引擎**各自带一份副本** —— 同一段 jq 前奏、同一套时长规矩、同一份 reason 枚举 ——
 这是有意的：一个与另一个引擎共享库的引擎，那个库最终会变成播放器不得不知道的东西
@@ -49,7 +55,7 @@ mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 
 一个引擎 = `<name>-search`（查询 → 结果信封）+ `<name>-resolve`（句柄 → 解析信封 +
 该站点自己的只读动词）。argv、信封字段与退出码由各命令的 `--help` 陈述、由
-`tests/contract.sh` 证明；形状的 why 与 semver 边界在 `AS-BUILT-cli-contract.md`。
+`tests/contract.sh` 证明；形状的 why 与 semver 边界在 `ARCH-cli-contract.md`。
 
 **能力靠"有没有那个动词"声明。** `--parts` 只在 `bili-resolve` 有，`--transcript` 在
 `yt-resolve` 与 `ne-resolve` 有而 `bili-resolve` 没有（同一个动词底下是两种东西：一条字幕轨，
@@ -122,7 +128,7 @@ yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info -
 `yt-search` 用 yt-dlp、`bili-search` 用 curl（「Bilibili 的传输」）—— 传输不同，信封相同。
 
 **`engine` 在信封里，是因为一个拿着结果的调用方必须能把它路由回懂它的那个 resolver** ——
-`ut-play --engine <那个值>`（AS-BUILT-cli-contract.md「数据契约」）。它正是 host 白名单（「解析」）
+`ut-play --engine <那个值>`（ARCH-cli-contract.md「数据契约」）。它正是 host 白名单（「解析」）
 存在要保其诚实的那个字段。
 
 **整形只发生一次，在一个 jq 程序里。** 上下界 select、`duration_fmt`/`kind`/`access` 的合并、
@@ -149,7 +155,7 @@ yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info -
 中止 —— 哪怕在 `-j` 下，交给 agent 的也是一个 jq 解析错误。所以捕获 stderr、用引擎自己的
 分类器（`classify_yt_dlp_error` / `classify_http_error` —— **枚举是共享的，分类器不是**）
 判 reason，发出 `status:"error"` 的信封，退 **2+ 而绝不是 1**（1 归用法/校验，
-AS-BUILT-cli-contract.md「退出码」）。
+ARCH-cli-contract.md「退出码」）。
 
 ### 封面（`thumbnail`）—— 站点字段名到此为止
 
@@ -170,13 +176,13 @@ B 站给的是**协议相对**的一条 `//i0.hdslb.com/…`，网易云给的�
 而判别输入本来就在数据里：不补的实现当场红。
 
 **取哪一张是一条固定策略，因为正确答案取决于一个格子有多少像素，而引擎不该知道那个。**
-格子尺寸是渲染事实，属于画的人（`AS-BUILT-tui.md`「封面」）。于是 yt 那半取
+格子尺寸是渲染事实，属于画的人（`ARCH-tui.md`「封面」）。于是 yt 那半取
 **宽度 ≥200 里最小的一张**：实测同一张封面 720px 是 170KB 的转义载荷、360px 是 39KB，
 而终端本来就要再缩一次。代价说清楚 —— 在一个格子宽 16px 的终端上显示框是 384px，
 360px 的源会被轻微放大；这是"不让引擎打听显示"换来的。
 
 **拿不到就是 `null`，键仍在** —— 与 `live_status` 同一条规矩
-（AS-BUILT-cli-contract.md「数据契约」）。没有封面的行不是坏行：画的那一面对有图无图
+（ARCH-cli-contract.md「数据契约」）。没有封面的行不是坏行：画的那一面对有图无图
 留同样的位置，所以缺一张图不会让版面跳。
 
 ### Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上
@@ -271,7 +277,7 @@ yt-dlp、只在解析那一半、只经由 `--cookies-from-browser`。正是它�
 规范的 BV URL 才是调用方要交回给 `bili-resolve` 的东西；以及 `live_status` 是 **`null`，不是
 那个原始的 `0`** —— 在 `search_type=video` 下那个字段根本不是这套套件 is_live/was_live 的概念，
 把那个 0 带过去会让某个渲染器画出一个站点从没声称过的直播状态。**一个引擎不知道的字段是
-null，而那个键仍然在**（AS-BUILT-cli-contract.md「数据契约」）。
+null，而那个键仍然在**（ARCH-cli-contract.md「数据契约」）。
 
 ### 网易云的传输 —— 站方把明文那扇门关了，于是这一半自己加密
 
@@ -336,7 +342,7 @@ B 站这一侧曾以为
   付费内容不在 `search_type=video` 这张表里。
 
 于是 B 站两个字段都如实印默认值。**引擎说它知道的，不猜它没有的信号** —— 恒为默认值是合法状态
-（AS-BUILT-cli-contract.md「数据契约」），而一个猜出来的 `kind` 会以事实的面目发货。补上的条件：
+（ARCH-cli-contract.md「数据契约」），而一个猜出来的 `kind` 会以事实的面目发货。补上的条件：
 出现**不加请求**就能拿到的分 P / 付费信号，或搜索端点本身开始携带它。
 
 **而 `access` 上，第三个引擎就是那个条件本身。** 网易云的 `cloudsearch` 响应里逐行带着站方
@@ -352,7 +358,7 @@ B 站这一侧曾以为
 
 `fee:1` 选 `preview` 而不是 `paywalled`，是为了让这个字段保持一个**下界**：一个大会员账号解出
 整首歌不算违约，而这个字段也因此**不随登录状态变** —— 它报的是站点事实，不是登录裁决
-（AS-BUILT-cli-contract.md「数据契约」）。
+（ARCH-cli-contract.md「数据契约」）。
 
 **默认还会把非 `full` 的行滤掉**（`NE_INCLUDE_VIP=0`），理由是同一条判据：**一条记录就是一次
 可执行调用**，存进 `ut-playlist` 的行必须能跑，而不是一个可能被拒的引用。这是**配置键而不是
@@ -479,7 +485,7 @@ URL，或本引擎自己的媒体 id 形状，用的是**显式清单，不是�
 —— 只有当选中的格式合并了两条流时才有 —— 是它单独的音轨；`http_headers` 是**必需的，但可以是
 `{}`**。`format` 是发出去的那个选择串（`format_for_mode()` 的产物）也就是**问**，
 `selected`/`selected_resolution` 是同一次调用**答**的那一半 —— 直接取自那份原始记录，所以
-**不多花一次网络**：这两个值一直都在，从前被丢掉。完整 schema：AS-BUILT-cli-contract.md「数据契约」。
+**不多花一次网络**：这两个值一直都在，从前被丢掉。完整 schema：ARCH-cli-contract.md「数据契约」。
 
 ### 只要元数据（`--info`）
 
@@ -497,7 +503,7 @@ extractor 的方差原样发布出去。**
 ### 字幕（`--transcript`）—— 一个动词，两种"字幕"，一个 `bili-resolve` 没有
 
 `yt-resolve --transcript` 取一条字幕轨，并把它清洗成可以直接丢进 prompt 的文本。信封、
-`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-cli-contract.md「数据契约」，
+`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：ARCH-cli-contract.md「数据契约」，
 `no_subtitles_available` 这个 reason 也规定在那里。Bilibili 不供字幕，所以这个 flag 在
 `bili-resolve` 上不被接受、帮助里也不列 —— 「接口」那条能力规矩的一个实例。
 
@@ -570,7 +576,7 @@ URL 的集合，不是这一个动词。
 ### 起播偏移（`start_seconds`）—— 一个键，两种来源
 
 一条链接可以说"从这里开始"（`…&t=601s`）。**认得那种写法是站点知识，所以它住在这里；执行偏移是
-mpv 的一个 flag，所以那半在播放器里**（AS-BUILT-player.md「起播偏移」）。中间那道缝还是信封：
+mpv 的一个 flag，所以那半在播放器里**（ARCH-player.md「起播偏移」）。中间那道缝还是信封：
 `start_seconds`，必需键，`null` 或非负整数秒。
 
 **引擎们从相反的两侧把它填出来，这是量出来的，不是风格选择**（2026-08-30，yt-dlp
@@ -612,4 +618,4 @@ CLAUDE.md）。
 
 **推论给第三个引擎作者**：先跑 `yt-dlp -J '<带时间戳的本站 URL>' | jq .start_time`。有值就白拿，
 没有就照 bili 那样自己解，站点根本没有这种语法就恒填 `null` —— 与 `kind`/`access` 恒填默认值是
-合法状态同理（「`kind` 与 `access`」）。清单：AS-BUILT-cli-contract.md「加一个引擎」。
+合法状态同理（「`kind` 与 `access`」）。清单：ARCH-cli-contract.md「加一个引擎」。

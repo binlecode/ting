@@ -98,7 +98,7 @@
 新一代（都还小）：`involvex/youtube-music-cli` 422、`NoctaVox` 377、`SubTUI` 260（Subsonic）、`gomu` 211、`waves` 168（Soulseek）。
 
 **`pushed_at` 会把两个分布抹平，必须看 commit 数**：经典四件套在**维护模式**
-（近 180 天：`musikcube` 1、`ncmpcpp` 2、`yewtube` 4、`cmus` 7），生长全在 2024–2026 新生代
+（近 180 天：`musikcube` 1、`ncmpcpp` 2、`yewtube` 0（前轮测得 4，2026-03-04 后无新提交）、`cmus` 7），生长全在 2024–2026 新生代
 （`cliamp` / `rmpc` / `kew` / `termusic` / `spotatui` / `go-musicfox` / `yt-x` 各 100+）。
 
 ### 3.2 国内格（2026-09-03 核查更新）
@@ -119,8 +119,8 @@
 
 3. **2026 年国内新生代演进（三个分化方向）**：
    - **逆向 API 的语言原生内嵌化**：打破了"新项目一律放弃网易云"的单向判断。2026 下半年出现的
-     `professor-lee/CNMPlayer`（147★，Rust + Ratatui 0.30 + rodio/symphonia）将 Node.js 版
-     `NeteaseCloudMusicApiEnhanced/api-enhanced` 完整移植为 Rust 原生库 `ncm-api-rs`，
+     `professor-lee/CNMPlayer`（154★，Rust + Ratatui 0.30 + rodio/symphonia）引入了外部纯 Rust 库
+     `ncm-api-rs`（`SPlayer-Dev/ncm-api-rs`，57★，从 `NeteaseCloudMusicApiEnhanced/api-enhanced` 移植），
      内置 weapi/eapi/linuxapi 三种加解密算法，实现了纯原生免外部 Node 服务依赖的网易云 TUI 客户端；
    - **面向 Agent / 机器调用的规范化 CLI 出现**：`public-clis/bilibili-cli`（1014★，Python，2026-03 活跃）
      为 B 站提供了结构化信封输出（`ok/schema_version/data/error`，支持 `--json` 与 non-TTY 下默认 `--yaml`），
@@ -143,7 +143,7 @@
    决定见 `ARCHITECTURE.md`「定位与设计目标」 与 §1.1 第 1 条。
 
 2. **YouTube 这一格的人机面已被占，机器面仍空。** `ytfzf` 死在 2024-09，
-   但**位置被 `Benexl/yt-x` 接管了**（1642★，POSIX sh + fzf + jq + curl + mpv，
+   但**位置被 `Benexl/yt-x` 接管了**（~1650★，POSIX sh + fzf + jq + curl + mpv，
    近半年 100+ commit）—— 技术栈与本项目高度重合，功能面走得更远（行内过滤、搜索历史与 bang
    召回、个人 feeds、分页、下载、扩展系统）。**但它没有机读契约**：本地 JSON 是它自己的状态文件，
    不是对外承诺。它的**扩展系统**（source shell 脚本、覆盖函数）是本仓**明确不该抄**的东西 ——
@@ -155,7 +155,7 @@
    行式 key/value；`ncspot` **推 JSON 到 unix socket**（与本仓的 mpv IPC 客户端路径几乎同构，
    连"stock netcat 不肯关连接"那个坑都踩过并写进了文档）；`spotify-player` 是
    **daemon + CLI 动词 + 给 jq 的 JSON**，且**早于本项目**；`termusic` 拆 server/client 走 gRPC；
-   `spotatui`（1247★）与 `spotuify` 已经在出 **MCP 面**；`mpv-mcp-server` 干脆从另一侧直接做了
+   `spotatui`（~1300★）与 `spotuify` 已经在出 **MCP 面**；`mpv-mcp-server` 干脆从另一侧直接做了
    mpv + yt-dlp 的 agent 面。**这条结论在 §10 有 2026 年的续篇**：agent 面已经不是加分项，
    而且"可被 agent 驱动"与"播放脱离 UI 存活"被证明是同一个架构需求的两面。
 
@@ -249,7 +249,7 @@
 两把尺子，必须分开量，否则结论一定错：
 
 - **契约完整度：到了。** envelope、退出码、生命周期、引擎契约都实现且有回归覆盖
-  （`AS-BUILT-cli-contract.md`「数据契约」）。
+  （`ARCH-cli-contract.md`「数据契约」）。
 - **功能完整度：到了。** `ARCHITECTURE.md`「两个存储」 那三条（播放列表、队列、历史）都已落地，
   每条都带着自己的动词和 `-j` envelope。**"工作时放点音乐"这件事，清单到此为止** ——
   拿 kew / ncspot / termusic 当基准来评是错的，那是通用本地播放器的清单，不是这里要的。
@@ -335,7 +335,7 @@ mpv 手册对它的定位写得很直白：**"不是安全的网络协议 ——
      极大减少了与 mpv 之间的 IPC 通信开销。
 - **termusic** 的 MPV 后端、以及本仓。
 
-**这条路上真正要做的四个决定**（mpv 侧的选项名，本仓的用法见 `docs/AS-BUILT-player.md`「播放子系统」）：
+**这条路上真正要做的四个决定**（mpv 侧的选项名，本仓的用法见 `docs/ARCH-player.md`「播放子系统」）：
 
 | 决定 | mpv 侧 | 后果 |
 |---|---|---|
@@ -362,7 +362,7 @@ mpv 是个独立进程，谁启动它跟它活多久无关。
 | 项目 | 服务端 | 协议 | 客户端 |
 |---|---|---|---|
 | **MPD** | `mpd` 守护进程，管播放 + 播放列表 + 音乐库 | 自定义文本协议，默认 `127.0.0.1:6600` 或 unix socket | ncmpcpp（C++）、rmpc（Rust）等几十个 |
-| **termusic** | `termusic-server` | **gRPC** | `termusic` TUI，与服务端**是两个进程** |
+| **termusic** | `termusic-server` | **gRPC**（20 RPC，跨 4 个 Service） | `termusic` TUI，与服务端**是两个进程** |
 | **spotuify** | 一个守护进程，内嵌 librespot | **一条 unix socket** | TUI / CLI / **MCP** / macOS 菜单栏，共四个 |
 | **spotifyd** | 守护进程，实现 Spotify Connect | Spotify Connect（网络协议） | 任意官方/第三方 Spotify 客户端 |
 
@@ -450,7 +450,7 @@ dennislan 的 Music Player TUI 是这条路最纯粹的样本：
     这证明 412 是**指纹与 WAF 风控拦截**，不是单纯的 URL 过期。
 - **网易云音乐（实测）**：CDN 路径携带的绝对时间戳 `/<YYYYMMDDHHMMSS>/`（例如 `20260904040619`），
   实测有效窗口仅为 **20–25 分钟（1200–1500 秒）**。**这是目前已知主流音源中时效最短的一家**。
-  此外，海外 IP 直连网易云音乐时有严格地域屏蔽（yt-dlp 会尝试用虚构的国内 IP 伪造 `X-Forwarded-For` 绕过）。
+  此外，海外 IP 直连网易云音乐时有严格地域屏蔽（yt-dlp 会尝试用虚构的国内 IP 设置 `X-Real-IP` 头绕过，对应 `--xff` 选项）。
 
 **设计含义**：
 1. **绝不能在播放列表中持久化 URL**：存 URL 必烂，存**调用（engine + handle）**才是对的；
@@ -520,11 +520,11 @@ UI 与播放分离的架构里，MPRIS 该由谁来发布，是个真问题 —�
 四个独立样本展示了不同层次的探索：
 
 - **Meting-Agent**：一个音源聚合器，**同时提供 MCP server 和 Claude Skill**；
-- **bilibili-mcp-server** 一族：涵盖 `iseenope/bilibili-mcp-server`（22 工具）与
+- **bilibili-mcp-server** 一族：涵盖 `iseenope/bilibili-mcp-server`（31 工具）与
   `34892002/bilibili-mcp-js`、`huccihuang/bilibili-mcp-server`，覆盖视频/弹幕/字幕/评论；
-- **网易云个人账号 MCP**：2026 年 8 月出现的 `Vael-KY/netease-music-mcp`（140★，18 工具）与
-  `Cheiineeey/netease-music-mcp`（95★），支持在真实网易云账号上翻歌单、建歌单、塞歌、读歌词、
-  获取每日推荐与私人 FM、生成播放卡片；
+- **网易云个人账号 MCP**：2026 年 8 月出现的 `Vael-KY/netease-music-mcp`（149★，18 工具，
+  支持在真实网易云账号上翻歌单、建歌单、塞歌、读歌词、获取每日推荐与私人 FM）与
+  `Cheiineeey/netease-music-mcp`（99★，3 工具：搜歌生成卡片、列出歌单、添加单曲）；
 - **面向 Agent 的 CLI**：`public-clis/bilibili-cli`（1014★），专为 LLM/Agent 设计结构化输出
   （`ok/schema_version/data/error`，非 TTY 默认 YAML），支持视频/字幕/评论提取与 ASR 音频切片；
 - **spotuify**：**41 个 MCP 工具**，与 58 条 CLI 命令、TUI 完全对等，明确写着
@@ -541,7 +541,7 @@ Meting-Agent、bilibili-mcp、netease-music-mcp 以及 bilibili-cli 都**只做"
 国内出现的各种 MCP 工具把 API 查数包得很好，但一旦涉及"在用户的音箱里把歌放出来并随时能 pause/stop"，
 这一层生命周期目前依然是空白。
 spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + 每进程 socket + JSON 契约
-解决它（`docs/AS-BUILT-player.md`「detached 播放的生命周期」）。**这是两种不同的答案，但回答的是同一个问题。**
+解决它（`docs/ARCH-player.md`「detached 播放的生命周期」）。**这是两种不同的答案，但回答的是同一个问题。**
 
 ---
 
@@ -552,12 +552,12 @@ spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + �
 | 项目 | 语言 / UI | A 解码 | B 寿命 | C 站点知识 | D 控制面 | 最近活动 |
 |---|---|---|---|---|---|---|
 | **go-musicfox** | Go / Bubbletea | beep（默认）· mpd · mpv · **dlna** | 随 UI | 内置网易云 + UnblockNeteaseMusic | 键盘 · MPRIS · Now Playing · SMTC | 2538★，5.1.0（2026-08），活跃（2026-08-31） |
-| **CNMPlayer** | Rust / Ratatui 0.30 | rodio + symphonia（进程内） | 随 UI | `ncm-api-rs` 原生加解密（weapi/eapi/linuxapi） | 键盘 · chafa 封面 | 147★，活跃（2026-08-30） |
-| **bilibili-tui** | Rust / Ratatui 0.30 | 外部 mpv | 随 UI | yt-dlp + 自己的扫码登录 | 键盘 · 鼠标 | 214★，活跃（2026-08-30） |
-| **bilibili-cli** | Python / Click | —（无播放，仅 ASR 音频切片） | — | 内置 B 站 API + 浏览器 Cookie | CLI（结构化 YAML/JSON） | 1014★，活跃（2026-03） |
-| **termusic** | Rust / tui-realm | symphonia（默认）· mpv · gstreamer，**运行时可切** | **独立**（termusic-server） | 本地 + 播客 | 键盘 · **gRPC（17 RPC）** · MPRIS | 2189★，活跃（2026-09-02） |
+| **CNMPlayer** | Rust / Ratatui 0.30 | rodio + symphonia（进程内） | 随 UI | `ncm-api-rs` 原生加解密（weapi/eapi/linuxapi） | 键盘 · chafa 封面 | 154★，活跃（2026-08-30） |
+| **bilibili-tui** | Rust / Ratatui 0.30 | 外部 mpv | 随 UI | yt-dlp + 自己的扫码登录 | 键盘 · 鼠标 | 218★，活跃（2026-08-30） |
+| **bilibili-cli** | Python / Click | —（无播放，仅 ASR 音频切片） | — | 内置 B 站 API + 浏览器 Cookie | CLI（结构化 YAML/JSON） | 1031★，活跃（2026-03） |
+| **termusic** | Rust / tui-realm | symphonia（默认）· mpv · gstreamer，**运行时可切** | **独立**（termusic-server） | 本地 + 播客 | 键盘 · **gRPC（20 RPC，4 Services）** · MPRIS | 2196★，活跃（2026-09-08） |
 | **spotuify** | Rust / ratatui | 内嵌 librespot | **独立守护进程** | Spotify 协议 | 键盘 · **CLI 58 命令** · **MCP 41 工具** · 菜单栏 | 活跃（2026-08-31） |
-| **spotify_player** | Rust / ratatui | rodio + librespot | 可选 daemon（`-d`） | Spotify 协议 | 键盘 · Connect | 7171★，活跃（2026-07） |
+| **spotify_player** | Rust / ratatui | rodio + librespot | 可选 daemon（`-d`） | Spotify 协议 | 键盘 · Connect | 7194★，活跃（2026-09-09） |
 | **rmpc** | Rust / ratatui | **无**（MPD 播） | MPD 独立 + `rmpcd` | MPD 音乐库 | 键盘 · MPD 协议 · rmpcd 的 MPRIS + Lua 插件 | 3295★，活跃（2026-09-01） |
 | **cliamp** | Go / Bubbletea + Beep | 纯 Go 解码（本地）· yt-dlp（网络）· go-librespot | 随 UI | **yt-dlp 覆盖 + Lua 插件** | 键盘 · `mediactl`（三平台媒体键） | 3990★，活跃（2026-09-02） |
 | **go-music-dl** | Go / Bubbletea | —（以下载/服务为主） | — | **`music-lib`：10+ 国内平台（含汽水解密）** | CLI · TUI · Web · 桌面 | 4138★，1.1.0（2026-08-30），活跃 |
@@ -590,14 +590,16 @@ spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + �
      采用双连接（命令连接缓存复用、事件连接独立监听）；
      在进程内用 `timex.Timer` 本地推算播放进度，彻底避免对 mpv IPC 轮询 `time-pos`。
 5. **termusic 的 gRPC 接口性质（已证）**：
-   - 查阅 `lib/proto/player.proto` 源码证实：拥有规范的 proto3 `service MusicPlayer` 定义，
-     暴露了包含播放控制、进度读取、音量调整、无缝模式开关、播放列表增删查改等 17 个 RPC，
-     是标准的公开结构化协议，完全允许第三方客户端连入驱动。
+   - 查阅 `lib/proto/` 源码证实：拥有规范的 proto3 接口定义，在 `player.proto` 中定义
+     `service PlayerControl`（8 个 RPC，管播放状态、跳曲、进度读取、音量、速度调整、无缝开关与 seek 定位），
+     在 `queue.proto` 中定义 `service QueueControl`（9 个 RPC，管播放列表增删查改、单曲播放、乱序与排序），
+     另在 `server.proto` 与 `stream.proto` 分别定义 `ServerControl`（2 个 RPC）与 `StreamEvents`（1 个 RPC）。
+     共 20 个 RPC 跨 4 个 Service 构成公开结构化协议，完全允许第三方客户端连入驱动。
 
 ### 12.2 本轮新提出的长效问号
 
 1. **国内平台地域封锁的持久性应对**：网易云等平台对海外 IP 执行强地域版权屏蔽，yt-dlp
-   目前通过伪造国内 IP 的 `X-Forwarded-For` 尝试绕过；站方 WAF 未来若强化对该 Header 的剔除与 IP 真实性校验，
+   目前通过伪造国内 IP 设置 `X-Real-IP` 头（`--xff`）尝试绕过；站方 WAF 未来若强化对该 Header 的剔除与 IP 真实性校验，
    海外轻量客户端（不挂国内代理的前提下）将面临新的解析断崖。
 2. **多源回退（解灰）的替代方案**：`UnblockNeteaseMusic` 停滞且官方客户端升级破坏解灰，
    未来国内音乐平台若继续收紧免登录音源接口，像 `go-music-dl` 这种依靠 `music-lib`

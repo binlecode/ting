@@ -6,7 +6,7 @@
 # nothing about playback (no mpv, no lifecycle, no players/). It knows two things: the row
 # and the file.
 #
-# WHY IT IS NOT THE PLAYER'S `failed[]`. AS-BUILT-player.md「状态机」 draws the line this file is
+# WHY IT IS NOT THE PLAYER'S `failed[]`. ARCH-player.md「状态机」 draws the line this file is
 # the other side of: `failed[]` lives in ${TMPDIR}/uting-$(id -u), is bounded, records only
 # failures, and dies with the reboot — correct for a tombstone a caller reads seconds later,
 # useless as a log of what a user listened to. History is written on success AND failure,
@@ -57,7 +57,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
-# AS-BUILT-cli-contract.md「配置面」 for the keys.
+# ARCH-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -106,7 +106,7 @@ ut_read_config "$UT_DEFAULTS"
 # The same user-level state root ut-playlist uses, and for the same reasons: XDG because the
 # neighbours (yt-dlp, mpv) are there and a Linux port would need no second layout, and an
 # override because without it `tests/contract.sh` would write into the user's real history.
-# AS-BUILT-cli-contract.md「配置面」.
+# ARCH-cli-contract.md「配置面」.
 UT_STATE_DIR="${UT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/uting}"
 HISTORY_DIR="$UT_STATE_DIR/history"
 
@@ -165,7 +165,7 @@ validate_enum() {
 #   4  corrupt         argv understood, the store could not answer
 #
 # `--clear` on an empty store stays 0 with removed:0: the caller asked for an end state and
-# the end state holds, exactly as `--del` and `--stop` do. AS-BUILT-cli-contract.md「数据契约」与「退出码」.
+# the end state holds, exactly as `--del` and `--stop` do. ARCH-cli-contract.md「数据契约」与「退出码」.
 fail() {
     local code=$1 reason=$2 msg=$3
     echo "ut-history: $msg" >&2
@@ -335,7 +335,7 @@ do_ls() {
 #
 # The row is CONSTRUCTED field by field rather than merged from the input, so an unknown key
 # a caller happens to carry (a search result's channel, view_count, live_status) cannot land
-# on disk. That is both the AS-BUILT-player.md「持久状态层」 rule about fields that expire into lies, and
+# on disk. That is both the ARCH-player.md「持久状态层」 rule about fields that expire into lies, and
 # the only way the line length stays bounded by this file rather than by its callers.
 do_record() {
     ensure_store
@@ -352,7 +352,7 @@ do_record() {
     [[ "$raw" == *[![:space:]]* ]] || fail 1 invalid_input "no input on stdin"
 
     # The reason enum is the PLAYBACK one, unchanged and not widened here: a caller branches
-    # on the same member names whichever surface produced them (AS-BUILT-cli-contract.md「数据契约」). A
+    # on the same member names whichever surface produced them (ARCH-cli-contract.md「数据契约」). A
     # skipped track is `stopped_by_user` — the user acted, and `seconds` is what tells a skip
     # at 0:05 from a stop at 3:20. Adding a member is a contract change, made in the doc and
     # then here; it is not something the player gets to invent on the way past.
@@ -597,7 +597,7 @@ while (($#)); do
     # The gate arms. ut-play, ut-playlist and ut-history share a prefix and two of them share
     # a --ls, so the likely wrong turns get a sentence naming the right command rather than a
     # bare unknown-flag error — what every other command in this suite does at its edges
-    # (AS-BUILT-cli-contract.md「门模型」).
+    # (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --pause | --resume | --seek | --seek-to | --queue | --enqueue | --next | --id | --all | --engine | -f)
         echo "ut-history: $1 is a playback flag — this command stores what was played, use ut-play to play" >&2
         exit 1

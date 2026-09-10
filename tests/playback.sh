@@ -12,7 +12,7 @@
 # It also owns two claims contract.sh's offline half can never reach, both for the same
 # reason — they need players that are really running: that a mutation with no `--id` and two
 # players answers `status:"ambiguous"` (4 alone does not separate it from an idle call), and
-# AS-BUILT-cli-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
+# ARCH-cli-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
 # verbatim — contract.sh proves that envelope reaches the gate, this is where it launches.
 #
 # Cost: **~93s / 59 ok** (2026-09-04; 82s/51 ok on 2026-09-01, before the live read grew the
@@ -107,7 +107,7 @@ wait_for_sock() {
 # wait_live <id> <field>  — poll --status until one LIVE field reports something real, then
 # echo it; 1 on timeout, with whatever it last saw. The fields this waits on come off the mpv
 # socket, not the record, so until mpv is decoding they are legitimately null — null there is
-# an honest READING (AS-BUILT-player.md「运行时 IPC」), and what must not happen is null forever. Same rule as
+# an honest READING (ARCH-player.md「运行时 IPC」), and what must not happen is null forever. Same rule as
 # wait_for_sock: bounded poll, never a fixed sleep, because the wait is network-bound.
 #
 # By FIELD rather than one loop per field: position and duration arrive at the same moment for
@@ -195,7 +195,7 @@ report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
-# The exit code alone leaves the third row of AS-BUILT-cli-contract.md「调用面」's 1-vs-4 table
+# The exit code alone leaves the third row of ARCH-cli-contract.md「调用面」's 1-vs-4 table
 # unproved: 4 is also what an IDLE mutation answers, so a caller told only "4" cannot tell
 # "nothing to act on" from "say which one". `status` is the field that separates them, and it
 # has no check anywhere else — contract.sh reaches the not_playing side and can never reach
@@ -205,7 +205,7 @@ report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2
 # its first run, against correct behaviour. Same trap contract.sh's jq_ok exists to close.
 amb=$(shell/ut-play --set-volume 40 -j 2>/dev/null)
 report "…and says ambiguous"  0 "$(printf '%s' "$amb" | jq -e '.status=="ambiguous" and .reason=="multiple_players" and (.players|length)==2' >/dev/null 2>&1; echo $?)"
-# --stop takes the same ambiguity rule (AS-BUILT-cli-contract.md「数据契约」): with 2 players and no
+# --stop takes the same ambiguity rule (ARCH-cli-contract.md「数据契约」): with 2 players and no
 # selector it must refuse with 4 AND stop nothing — a --stop that guessed would kill the
 # wrong listener's audio, which no exit code repairs.
 report "--stop no --id"       4 "$(shell/ut-play --stop -j >/dev/null 2>&1; echo $?)"
@@ -230,7 +230,7 @@ if pos=$(wait_live "$id1" position); then
 else
     bad "player 1 never reported a position — the live read is unproved"
 fi
-# false is an ANSWER; null is "the question could not be asked" (AS-BUILT-player.md「运行时 IPC」). A playing player that
+# false is an ANSWER; null is "the question could not be asked" (ARCH-player.md「运行时 IPC」). A playing player that
 # reported paused:null would make every consumer's readiness probe read a fabrication, and a
 # playing player that reported it as anything but false would make --pause unobservable.
 report "live paused is false, not null" 0 \
@@ -337,7 +337,7 @@ report "--resume reads back running" "false" \
 report "…and --status agrees"         "false" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
 
-# NOT checked here: the `head -n <count>` pipe close in live_props (AS-BUILT-player.md「运行时 IPC」).
+# NOT checked here: the `head -n <count>` pipe close in live_props (ARCH-player.md「运行时 IPC」).
 # Tried and pulled: against the real peer it cannot go red — swap the `head` for a bare `cat`
 # and the same read still measures 0.04s, so the assertion passes whatever the code does. The
 # 1.11s that guard appeared to save was measured against a SCRIPTED peer, and this suite keeps
@@ -493,7 +493,7 @@ echo "── a queue is a player consuming a playlist ────────�
 # One player, so no --id is needed anywhere below (exactly-one is the zero-friction case).
 shell/ut-play --stop --all -j >/dev/null 2>&1
 # The list is STORED first and read back out, so what launches the player is
-# AS-BUILT-cli-contract.md「调用面」's second pipeline run verbatim:
+# ARCH-cli-contract.md「调用面」's second pipeline run verbatim:
 #     ut-playlist --show chill -j | ut-play -d --queue -
 # It used to be a `jq -nc` array inlined here, which proved the array arm and left the arm the
 # doc actually advertises unexecuted — and that arm is the one carrying the claim: a stored
