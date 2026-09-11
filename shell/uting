@@ -977,6 +977,12 @@ C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''
 # screen. \033[0m is spelled out here and nowhere else in the row path.
 C_ROW_HL=$'\033[7m'
 C_ROW_END=$'\033[0m'
+# The key block's keycap ground (phase 4). Empty unless a ground can be drawn at all: the
+# packer closes every key with C_RESET, which is the empty string with colours off — so a
+# ground set there would run to the bottom of the screen. Set only from set_theme, which
+# only runs under COLORS_ON, so the existing close is exactly right and the row path's
+# spelled-out C_ROW_END is not needed here.
+C_KEYCAP=''
 SYNC_ON=0
 COLORTERM_TC=0
 COLORS_ON=0             # set by init_colors; gates the live theme cycle (t key)
@@ -1046,6 +1052,56 @@ row_hl_from_accent() {
         $((zr + (r - zr) * k / 100)) $((zg + (g - zg) * k / 100)) $((zb + (b - zb) * k / 100))
 }
 
+# ── The keycap's ground: a SURFACE, and therefore the one ground with no hue ────────────
+# The hint block's keys sit on a ground instead of wearing brackets. Brackets are two more
+# glyphs per key — 48 cells across the block — and measured, that is a whole extra line in
+# English at both 100 and 62 columns; a line this block cannot spend, because its own gate
+# (nav_ok) drops the WHOLE block when it no longer fits and falls back to the banner's three
+# keys. A ground with no padding costs nothing: the separator goes from " · " to three
+# spaces, three cells for three cells, and the block comes out exactly as tall as it was.
+#
+# NO HUE, and that is the difference from every other ground on this screen. A keycap is a
+# surface the key is printed on, not a state — so it is mixed from the terminal's own
+# background toward the OPPOSITE POLE (white on a dark terminal, black on a light one),
+# which lands on a neutral grey. The playing row's ground is mixed toward the ACCENT and
+# stays the only hued ground in the frame: two grounds that differ in hue read as two
+# different kinds of fact, which is what they are. Mixing the caps toward the accent would
+# have put twenty-four accent chips on the busiest line of the chrome and made "the accent"
+# mean both "this row is playing" and "this is a key".
+#
+# The rungs are gentler than the row's (14/10 against 30/18): a cap has to read as a raised
+# surface behind three cells of text, while the row's ground has to be findable at a glance
+# from anywhere on the screen. Same expression, same BG_R/G/B from detect_bg's OSC 11 reply,
+# same assumed black/white when the terminal would not answer.
+#
+# minimal takes the INDEX rung even on a truecolor terminal, for the reason the source pill
+# does: minimal's property is that the user's terminal owns what a colour is. 100;97 sets
+# both ends (bright-black ground, bright-white glyph) so it is legible on a light terminal
+# and on a dark one — a bare 47 or 100 would be invisible on one of the two. mono gets
+# nothing at all: its promise is bold and dim, and a chip is neither.
+KEYCAP_MIX_DARK=14
+KEYCAP_MIX_LIGHT=10
+# The block's separator, declared beside the ground it replaces the dot for: three cells of
+# air, exactly what " · " measured, so the swap cannot change the block's height.
+KEYCAP_SEP="   "
+keycap_ground() {
+    C_KEYCAP=''
+    [[ "$THEME" == "mono" ]] && return 0
+    if ((COLORTERM_TC)) && [[ "$THEME" != "minimal" ]]; then
+        local zr zg zb tr tg tb k
+        if [[ "$BG" == light ]]; then
+            zr=255; zg=255; zb=255; tr=0; tg=0; tb=0; k=$KEYCAP_MIX_LIGHT
+        else
+            zr=0; zg=0; zb=0; tr=255; tg=255; tb=255; k=$KEYCAP_MIX_DARK
+        fi
+        if [[ -n "$BG_R" ]]; then zr=$BG_R; zg=$BG_G; zb=$BG_B; fi
+        printf -v C_KEYCAP '\033[48;2;%d;%d;%dm' \
+            $((zr + (tr - zr) * k / 100)) $((zg + (tg - zg) * k / 100)) $((zb + (tb - zb) * k / 100))
+    else
+        C_KEYCAP=$'\033[100;97m'
+    fi
+}
+
 # One accent spec → C_CYAN/C_MARK. Value syntax is config's UT_ACCENT; the spec reaching here
 # has already passed accent_gate, so this parses rather than validates. Split with ANCHORED
 # strips (${v%%…} / ${v#…}) — ${v//…/} is quadratic on bash 3.2 and the portability contract
@@ -1083,6 +1139,9 @@ set_theme() {
     # theme at all on a terminal that cannot draw 24-bit) must not inherit the ground the
     # PREVIOUS theme installed — that would be one theme's colour surviving into another's.
     C_ROW_HL=$'\033[7m'
+    # The keycap ground follows the same rule, and it is resolved at the END of this function
+    # rather than here: it depends on the theme and the background, not on the accent.
+    C_KEYCAP=''
     # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
     # same minimalist filter as minimal: ONE signature accent, gray hierarchy for
     # everything else. Hexes are the official palettes; light/dark
@@ -1138,6 +1197,9 @@ set_theme() {
         fi
         ;;
     esac
+    # Last, and outside the case: it reads the theme and the background, not the accent, so
+    # every arm above resolves it the same way and no arm has to remember to.
+    keycap_ground
 }
 init_colors() {
     local on=0
@@ -1850,7 +1912,21 @@ init_ui_strings
 GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
-GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
+GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_AV="↑↓"; GL_AH="←→"; GL_ENTER="⏎"; GL_TAB="⇥"
+# The key names in the hint block, and the rule that picks their spelling: A KEY IS DRAWN
+# AS THE SYMBOL ITS OWN KEYCAP CARRIES, and spelled as a word when the keycap carries none.
+# ⏎ (U+23CE) and ⇥ (U+21E5) are printed on the physical keys; the space bar is blank, so
+# `Space` stays a word — ␣ (U+2423) is a glyph no keyboard shows, i.e. a rebus in a block
+# whose whole job is to say which key to press. The arrows lost their slash rather than
+# their shape: ↑↓ is the pair of keys, and the `/` was an "or" spent on the one item where
+# the two glyphs already read as a pair (it still separates -/= , where the two keys have
+# no shape in common).
+#
+# BOTH NEW GLYPHS ARE EAW NEUTRAL, so they go in CW_NARROW pinned to one cell and cannot
+# double under YT_AMBIG_WIDE=1 — unlike the arrows, which are Ambiguous and already ride
+# CW_AMBIG. Measured at one cell in tmux (`display-message -p '#{cursor_x}'`), the method
+# the width layer's table records. ↵ (U+21B5) went out of CW_NARROW with this change:
+# nothing draws it now, and a width table is a claim about what this UI draws.
 # The CURSOR's marker. It was ▶ — the same glyph as GL_PLAY — and the name was split off
 # first precisely so this could change without touching the player's: they are two different
 # facts ("you are pointing here" versus "the player is playing this") and a row can carry
@@ -1910,6 +1986,7 @@ init_glyphs() {
     if ((ASCII_GLYPHS)); then
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
+        GL_TAB="Tab"
         GL_CURSOR=">"
         GL_BAR_THUMB="#"; GL_BAR_TRACK="|"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
@@ -2431,7 +2508,7 @@ init_cell_tables() {
     # know about. The bar draws neither glyph now (render_prog_bar: the weight change IS the
     # playhead), so they are out — a width table is a claim about what this UI draws, and an
     # entry for a glyph nothing draws is a claim nobody can check.
-    CW_NARROW="↵♫❚❯▘▝▗▖$CW_RANGE"                              # U+21B5 U+266B U+275A U+276F
+    CW_NARROW="⏎⇥♫❚❯▘▝▗▖$CW_RANGE"                             # U+23CE U+21E5 U+266B U+275A U+276F
     case "${YT_AMBIG_WIDE:-}" in
     1 | true | yes | on) CW_AMBIG_W=2 ;;
     esac
@@ -4330,7 +4407,7 @@ display_list_menu() {
     # movement key — and it is `full` because the arrows already say how to move: this is the
     # shortcut, not the way. `Nj` is two cells, one NARROWER than the `0-9` it replaced, so
     # the pair of them still cannot move this block from one line to two on its own.
-    keys_full && nav_items+=("Nj	$S_JUMP" "#	$S_ROWNUM" "Tab	$S_LISTMODE")
+    keys_full && nav_items+=("Nj	$S_JUMP" "#	$S_ROWNUM" "$GL_TAB	$S_LISTMODE")
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
@@ -4419,8 +4496,17 @@ display_list_menu() {
     # a 10-line screen, and printing it would push the header off the top no matter how the
     # rows are repaged. Then the keys go and the results stay, and the banner's tail picks up
     # the playback keys (see its short-terminal fallback).
+    # THREE SPACES, not " $GL_SEP ". The keys wear a ground now (C_KEYCAP), and a ground is
+    # already a boundary — a dot between two chips is a separator drawn twice. Air alone
+    # groups them, which is what the dot was standing in for. It is a three-cell separator
+    # either way, so the block is exactly as tall as it was with dots: measured 3/5 lines in
+    # English and 3/4 in Chinese at 100/62 columns, both before and after.
+    # The STATUS row keeps its dots: its segments have no ground, so there air alone would
+    # read as one run-on phrase (the note where HINT_SEP is set for it).
+    # Set around the MEASURE call as well as the print call, the rule this block has always
+    # followed: a separator whose width the packer did not know wraps an item early or late.
     HINT_MEASURE=1
-    HINT_SEP=" $GL_SEP "
+    HINT_SEP="$KEYCAP_SEP"
     print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
     HINT_SEP=""
     HINT_MEASURE=0
@@ -5090,8 +5176,13 @@ display_list_menu() {
     # left here is the printing.
     if ((nav_ok)); then
         ((hint_gap)) && printf '\033[K\n'
-        HINT_SEP=" $GL_SEP "
+        # The cap is applied here and NOT at the measure call above: the packer measures
+        # plain text, so a colour there would be a value it never looks at. Ground plus bold
+        # in one override — the key keeps the weight it always had and gains the surface.
+        HINT_SEP="$KEYCAP_SEP"
+        HINT_KEY_COLOR="${C_KEYCAP}${C_BOLD}"
         print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
+        HINT_KEY_COLOR=""
         HINT_SEP=""
     fi
 
