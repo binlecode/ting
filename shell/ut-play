@@ -193,6 +193,8 @@ Usage (everything after -- is the handle, so it may start with '-'):
   ut-play --set-volume N [--id ID] [-j]                   live volume on a detached player
   ut-play --pause | --resume [--id ID] [-j]               pause/resume a detached player
   ut-play --seek ±N | --seek-to N [--id ID] [-j]          seek (relative needs the sign)
+  ut-play [--loop off|one] -d ... -- <id|URL>              repeat the track it is playing
+  ut-play --set-loop off|one [--id ID] [-j]               turn repeat on/off while it plays
   ut-play -d --queue - [-j]                               play a QUEUE: items on stdin
   ut-play --enqueue - [--id ID] [-j]                      append to a running queue
   ut-play --next [--id ID] [-j]                           skip to the next queued track
@@ -447,6 +449,20 @@ normalize_playback_mode() {
 # --auth), so a die there would kill a working menu over an optional field. Merging them
 # would cost one side or the other exactly that.
 ENGINE_RESOLVE=""
+# One gate for both spellings of the loop mode, because both take the same two values and a
+# caller who guesses the third has guessed a REAL feature under the wrong flag — so the
+# message routes them to it instead of just listing what is legal.
+validate_loop_mode() {
+    local val=$1 flag=$2
+    validate_enum "$val" off one && return 0
+    case "$val" in
+    single | sequential | seq | all | list | repeat-one | one-repeat)
+        die "$flag takes off or one (repeat the current track). Playing on to the NEXT track is a queue, not a loop mode: 'ut-play -d --queue -' (items on stdin)"
+        ;;
+    esac
+    die "$flag must be off or one (got '$val')"
+}
+
 engine_resolve_bin() {
     if [[ -n "$ENGINE_RESOLVE" ]]; then
         return 0
@@ -628,6 +644,14 @@ patch_player_meta() {
 run_mpv() {
     local mpv_cmd=(mpv --no-ytdl)
 
+    # LAST POSSIBLE MOMENT, and that is the whole reason the read is here rather than at the
+    # top of the child's queue loop: between the two lies a JIT resolve, i.e. seconds of
+    # engine round trip during which a --set-loop would land on a record nobody reads again
+    # until the track after next. Measured as exactly that hole — repeat turned on in the gap
+    # between two tracks did not reach the track that was starting. A no-op off the detached
+    # path (no YT_PLAYER_ID, no record), so a foreground play keeps the value its flag gave it.
+    refresh_loop_mode
+
     # Optionally load caller-provided mpv input bindings.
     if [[ -n "$YT_MPV_INPUT_CONF" && -r "$YT_MPV_INPUT_CONF" ]]; then
         mpv_cmd+=(--input-conf="$YT_MPV_INPUT_CONF")
@@ -653,6 +677,16 @@ run_mpv() {
     local start_at="${PLAY_START:-$RESOLVED_START}"
     if [[ -n "$start_at" ]]; then
         mpv_cmd+=(--start="$start_at")
+    fi
+
+    # REPEAT THE FILE, and the only mpv-side half of the loop contract: `one` is
+    # loop-file=inf, `off` is mpv's own default. It goes here, among the launch-time
+    # settings, because it has nothing to override — and it is set at LAUNCH as well as over
+    # the socket because every track in a queue is a NEW mpv process (detached_child_loop),
+    # so a value that lived only in the running process would evaporate at the first track
+    # boundary. ARCH-player.md「循环」.
+    if [[ "$LOOP_MODE" == "one" ]]; then
+        mpv_cmd+=(--loop-file=inf)
     fi
 
     # Runtime control channel: only when launched under detach_play, which exports
@@ -1284,6 +1318,24 @@ child_signal() {
     return 0
 }
 
+# The loop mode is the PLAYER's state and lives on disk, so the child re-reads it rather
+# than remembering the flag it was launched with: --set-loop writes that file from ANOTHER
+# process, and a child holding its launch value would keep replaying the track the user
+# turned repeat off on (or drop the repeat they turned on) at the next boundary. Silent on
+# every failure, keeping the value in hand: the first track can arrive before detach_play
+# has written the record at all (the race patch_player_meta already polls through).
+refresh_loop_mode() {
+    local sf v
+    [[ -n "${YT_PLAYER_ID:-}" ]] || return 0
+    sf=$(player_state "$YT_PLAYER_ID")
+    [[ -f "$sf" ]] || return 0
+    v=$(jq -r '.loop // empty' "$sf" 2>/dev/null) || return 0
+    case "$v" in
+    off | one) LOOP_MODE="$v" ;;
+    esac
+    return 0
+}
+
 detached_child_loop() {
     local handle=$1 rc=0 played=0
     # SIGUSR1 is --next's channel; TERM and INT are both --stop's, because stop_group sends
@@ -1854,7 +1906,7 @@ detach_play() {
     # dash. -S wins over --quality inside the engine (ARCH-player.md「模式 → 格式 → mpv」).
     set -m
     YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" YT_PLAYER_ID="$id" \
-        nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" \
+        nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" --loop "$LOOP_MODE" \
         ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
         ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} ${PLAY_START:+--start "$PLAY_START"} \
         -- "$url" >"$log" 2>&1 &
@@ -1881,7 +1933,8 @@ detach_play() {
         --arg log "$log" \
         --arg sock "$sock" \
         --argjson volume "$volume_json" \
-        '{id: $id, pid: $pid, url: $url, engine: $engine, mode: $mode, format: null, selected: null, selected_resolution: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
+        --arg loop "$LOOP_MODE" \
+        '{id: $id, pid: $pid, url: $url, engine: $engine, mode: $mode, format: null, selected: null, selected_resolution: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume, loop: $loop}' >"$sf.tmp.$pid"; then
         rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
         rm_player_files "$id"
         stop_group "$pid"
@@ -2103,7 +2156,7 @@ do_status() {
                     '{id, pid, url, engine, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
                       title, selected, selected_resolution, media: $media,
-                      started_at, queue: $queue}' \
+                      loop: (.loop // "off"), started_at, queue: $queue}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The
@@ -2116,7 +2169,7 @@ do_status() {
         fi
     else
         if ((${#LIVE_PLAYER_FILES[@]})); then
-            local f id pid mode started_at url title volume vol_suffix pause_suffix queue_suffix
+            local f id pid mode started_at url loop title volume vol_suffix pause_suffix queue_suffix
             for f in "${LIVE_PLAYER_FILES[@]}"; do
                 vol_suffix=""
                 pause_suffix=""
@@ -2124,8 +2177,8 @@ do_status() {
                 # @tsv, instead of five separate per-field forks. title stays on its own
                 # jq -r so a title with an embedded tab/newline round-trips byte-for-byte
                 # rather than being @tsv-escaped.
-                IFS=$'\t' read -r id pid mode started_at url < <(
-                    jq -r '[.id, .pid, .mode, .started_at, .url] | @tsv' "$f" 2>/dev/null
+                IFS=$'\t' read -r id pid mode started_at url loop < <(
+                    jq -r '[.id, .pid, .mode, .started_at, .url, (.loop // "off")] | @tsv' "$f" 2>/dev/null
                 ) || true
                 title=$(jq -r '.title // empty' "$f" 2>/dev/null || true)
                 read_player_live "$(player_sock "$id")"
@@ -2148,6 +2201,9 @@ do_status() {
                 queue_suffix=$(printf '%s' "$QUEUE_JSON" |
                     jq -r 'if . != null and .len > 1 then ", track \(.pos + 1)/\(.len)" else "" end' 2>/dev/null) || queue_suffix=""
                 vol_suffix="$vol_suffix$queue_suffix"
+                # Same rule as the queue segment above: only a NON-default state earns a
+                # word. Every player has a loop mode; almost none of them are repeating.
+                [[ "$loop" == "one" ]] && vol_suffix="$vol_suffix, repeat one"
                 if [[ -n "$title" ]]; then
                     printf "playing (id %s, pid %s, mode %s%s%s, since %s): %s\n  %s\n" \
                         "$id" "$pid" "$mode" "$vol_suffix" "$pause_suffix" "$started_at" "$title" "$url"
@@ -2451,6 +2507,56 @@ do_next() {
     exit 0
 }
 
+# Turn repeat on or off on a running player. A STATE verb rather than a socket verb, and
+# that is the whole of the design: the loop mode's home is players/<id>.json, because every
+# track in a queue gets a FRESH mpv (detached_child_loop) and a value that lived only in the
+# running process would be lost at the first boundary. The socket write below is what makes
+# it take effect on the track playing RIGHT NOW; the disk write is what makes it true.
+#
+# So the exit taxonomy is --enqueue's, not --pause's: 4 for no target or an ambiguous one,
+# 0 otherwise — a socket that would not answer does NOT fail the call, because the intent is
+# already recorded and the next track honours it. It also means this verb needs no nc: it
+# asks for one (through ipc_command) and shrugs when there is none.
+do_set_loop() {
+    local want=$1 want_id=$2
+    require_live_target "$want_id"
+
+    local id sf tmp prop ok=1
+    id=$RESOLVED_ID
+    sf=$(player_state "$id")
+    tmp="$sf.tmp.$$"
+    # The same lock the title backfill takes, for the same reason: both are read-modify-write
+    # on one file with no version check, so the loser of a race silently drops a field.
+    lock_player_state "$id" || true
+    if jq --arg l "$want" '.loop = $l' "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$sf" || ok=0
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        ok=0
+    fi
+    unlock_player_state "$id"
+    if ((! ok)); then
+        # The record IS the contract here, so a record that did not change is a call that did
+        # not take effect — 4, the same as a socket mpv refused.
+        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"state_failed"}' || echo "failed to record the loop mode" >&2
+        exit 4
+    fi
+
+    case "$want" in
+    one) prop=inf ;;
+    *) prop=no ;;
+    esac
+    ipc_command "$(player_sock "$id")" \
+        "$(printf '{"command":["set_property","loop-file","%s"],"request_id":1}' "$prop")" || true
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg id "$id" --arg loop "$want" '{status: "ok", id: $id, loop: $loop}'
+    else
+        printf 'repeat %s (player %s)\n' "$want" "$id"
+    fi
+    exit 0
+}
+
 # ==============================================================================
 # 5. CLI OPTIONS PARSING & VALIDATION
 # ==============================================================================
@@ -2469,10 +2575,23 @@ OUTPUT_MODE="list"
 DETACH=0
 ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
 ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek |
-                     # seek-to | enqueue | next
+                     # seek-to | enqueue | next | set-loop
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # relayed from the resolve envelope; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
+# REPEAT, and only repeat: `one` is mpv's loop-file=inf, `off` is no repeat at all. Playing
+# ON to the next track is not a mode of this flag — it is a QUEUE (--queue), which is a
+# different thing the player already has, and giving it a second spelling here would put a
+# word in --status that the player cannot verify: a queue of ten looks the same whether it
+# came from a UI's "sequential" or from ten presses of --enqueue. ARCH-player.md「循环」.
+#
+# Deliberately NOT defaulted from a config key. uting's own three-state cycle writes
+# UT_LOOP_MODE back to the user's config, and its third state (seq) is not a value this flag
+# has — reading it here would make every later ut-play call die on the caller's own
+# preference file. The player's default is off, full stop.
+LOOP_MODE="off"      # --loop
+LOOP_SET=0           # whether --loop was actually given (the flag is launch-only)
+SET_LOOP_ARG=""      # value from --set-loop
 SEEK_ARG=""          # value from --seek ±N / --seek-to N
 QUEUE_INPUT=""       # value from --queue / --enqueue: always "-", i.e. stdin
 TARGET_ID=""         # value from --id (target a specific detached player)
@@ -2642,6 +2761,32 @@ while (($#)); do
         SEEK_ARG="${1#*=}"
         shift
         ;;
+    --loop)
+        [[ $# -ge 2 ]] || die "--loop requires a value"
+        validate_loop_mode "$2" --loop
+        LOOP_MODE="$2"
+        LOOP_SET=1
+        shift 2
+        ;;
+    --loop=*)
+        validate_loop_mode "${1#*=}" --loop
+        LOOP_MODE="${1#*=}"
+        LOOP_SET=1
+        shift
+        ;;
+    --set-loop)
+        [[ $# -ge 2 ]] || die "--set-loop requires a value"
+        validate_loop_mode "$2" --set-loop
+        set_action set-loop --set-loop
+        SET_LOOP_ARG="$2"
+        shift 2
+        ;;
+    --set-loop=*)
+        validate_loop_mode "${1#*=}" --set-loop
+        set_action set-loop --set-loop
+        SET_LOOP_ARG="${1#*=}"
+        shift
+        ;;
     --queue)
         [[ $# -ge 2 ]] || die "--queue requires '-' (the items are read from stdin)"
         QUEUE_INPUT="$2"
@@ -2697,7 +2842,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --loop --status --stop --set-volume --pause --resume --seek --seek-to --set-loop --queue --enqueue --next --id --all --color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -2763,12 +2908,12 @@ fi
 # something to the lifecycle verbs, -d is a launch rather than an action, and a detached
 # player has no terminal for the terminal-rendering modes to draw into (ARCH-player.md「状态机」).
 case "$ACTION" in
-stop | set-volume | pause | resume | seek | seek-to | enqueue | next) ;;
+stop | set-volume | pause | resume | seek | seek-to | enqueue | next | set-loop) ;;
 *)
     # --id names ONE running player, so it is meaningless to a verb that does not address
     # one. Listing the verbs beats "invalid combination": the caller has the right idea and
     # the wrong verb.
-    [[ -z "$TARGET_ID" ]] || die "--id applies only to the verbs that address one player: --stop, --set-volume, --pause, --resume, --seek, --seek-to, --enqueue and --next"
+    [[ -z "$TARGET_ID" ]] || die "--id applies only to the verbs that address one player: --stop, --set-volume, --pause, --resume, --seek, --seek-to, --set-loop, --enqueue and --next"
     ;;
 esac
 if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
@@ -2784,6 +2929,13 @@ if [[ -n "$PLAY_START" ]]; then
     # --start belongs to the PLAYBACK path. The lifecycle verbs address a player that is
     # already running, and moving a running playhead is what --seek-to is for.
     [[ -z "$ACTION" ]] || die "--start applies to starting playback, not to $ACTION_FLAG (to move a running player, use --seek-to)"
+fi
+# --loop is a LAUNCH modifier, the same shape --start has: it says how the player about to
+# start should behave, and a player that is already running is --set-loop's business. Gated
+# on LOOP_SET rather than on the value, so `--loop off --pause` is refused too — it is the
+# same misunderstanding, not a harmless no-op.
+if ((LOOP_SET)) && [[ -n "$ACTION" ]]; then
+    die "--loop applies to starting playback, not to $ACTION_FLAG (to change a player that is already running, use --set-loop)"
 fi
 if ((DETACH)) && [[ -n "$ACTION" ]]; then
     die "-d/--detach cannot be combined with $ACTION_FLAG"
@@ -2909,6 +3061,14 @@ fi
 if [[ "$ACTION" == "next" ]]; then
     require_cmd jq
     do_next "${TARGET_ID:-}"
+fi
+# The third disk-state verb, and the reason it is here rather than up with the socket verbs:
+# what it writes is the player's record. It TRIES the socket afterwards (do_set_loop) so the
+# current track picks the change up immediately, but it does not depend on one, so it is
+# gated on jq alone — no nc, exactly like --enqueue and --next.
+if [[ "$ACTION" == "set-loop" ]]; then
+    require_cmd jq
+    do_set_loop "$SET_LOOP_ARG" "${TARGET_ID:-}"
 fi
 # yt-dlp is no longer a dependency of the PLAYER: extraction belongs to the engine, which
 # gates its own tools. What is left here is what actually plays and shapes output.

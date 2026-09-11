@@ -19,6 +19,7 @@ ut-play --status -j                    # machine: what is playing, where, how lo
 ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --seek-to N
 ut-playlist --show chill -j | ut-play -d --queue -   # machine: play a list, one player
 ut-play --enqueue - --id <id> -j       # machine: append to it; --next skips a track
+ut-play --set-loop one --id <id> -j    # machine: repeat this track (off|one; a LIST is --queue)
 ut-play --stop --id <id> -j            # machine: stop it
 ut-history --ls -n 20 -j               # machine: what was played, when, for how long
 ```
@@ -227,12 +228,12 @@ the packaging NO in `docs/ROADMAP.md` says what would change that.
 `c` the focused row's parts · `i` the focused row's chapters · `+` add to the queue · `>` next track ·
 `Space` pause · `-`/`=` volume · `#` row numbers (the jump's partner: it prints the
 number `Nj` takes) · `Tab` list mode ·
-`[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
+`[`/`]` seek · `r` loop mode · `s` stop · `l` language · `t` theme · `q` quit
 
 **The hint block has two tiers and `?` is the door.** `core` — the shipped default — prints
 this view's own job (move, act on the row, get back out, quit, and `?` itself) and fits one
 line at 80 columns; `full` prints every key above. It hides HINTS, never keys: everything in
-`full` is still pressable under `core`. The tier is a preference like the other nine, written
+`full` is still pressable under `core`. The tier is a preference like the other ten, written
 back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a zh input method's
 shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
 you are typing.

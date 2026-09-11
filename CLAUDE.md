@@ -85,7 +85,7 @@ shell/uting --version                                     # 响应版本（不�
 - **站点知识与播放生命周期彻底隔离**：播放器 `ut-play` 绝不直接运行 `yt-dlp`，不知道站点 Cookie 或格式代码；通过拼接命令名调用 `<engine>-resolve -j` 获取最终流媒体 URL 及 HTTP 请求头，以 `--no-ytdl` 注入 `mpv`。
 - **单视图原地重绘**：`uting` 仅拥有一套统一的滚动渲染视图，无全屏清屏闪烁；所有非搜索数据（歌单 `b`、历史 `h`、分 P `c`、章节 `i`）均作为“临时替换行源”接入该视图。
 - **多字节与 CJK 精确宽度**：按键处理以单字节累积并由 `utf8_complete` 还原字符；显示宽度由 `disp_w` 按 EAW 表准确分配，保证不同终端与语言下绝对不撕裂排版。
-- **配置继承链与偏好写回**：配置查找按 `Flag > Env (UT_*) > User Config (~/.config/uting/config) > Shipped Config` 顺序继承。出厂 `config` 永远只读，`uting` 退出时将 10 个偏好键写回用户个人配置文件。
+- **配置继承链与偏好写回**：配置查找按 `Flag > Env (UT_*) > User Config (~/.config/uting/config) > Shipped Config` 顺序继承。出厂 `config` 永远只读，`uting` 退出时将 11 个偏好键写回用户个人配置文件。
 
 ---
 

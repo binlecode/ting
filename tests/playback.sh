@@ -577,6 +577,59 @@ else
     bad "the queued player never reported a duration in 40s — cannot drive it to a track end"
 fi
 
+# ── REPEAT: the track that does not end ────────────────────────────────────────────────
+# Driven on the queue player deliberately, because the claim IS about the boundary: a track
+# reaching its end under repeat must start over INSTEAD of handing the queue on. Reading
+# mpv's loop-file back over the socket would only prove a property was set; this proves what
+# the property DOES, and it uses the same seek the advance above uses rather than waiting out
+# a real ending.
+# THE ORDER IS THE POINT: wait for the track to be UP before pressing the key. That is the
+# real gesture (music is playing, the user turns repeat on) and it is also the only order
+# that proves anything — between two tracks there is no socket, so the mode would reach mpv
+# only at the next launch and this block would be timing a resolve instead of a loop.
+if dur=$(wait_live "$qid" duration); then
+    qpos=$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')
+    report "--set-loop reports the mode it set" "one" \
+        "$(shell/ut-play --set-loop one -j 2>/dev/null | jq -r '.loop // empty')"
+    report "…and --status agrees" "one" \
+        "$(shell/ut-play --status -j | jq -r '.players[0].loop // empty')"
+    shell/ut-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
+    # Polled, never timed: how long mpv takes to loop a file is not this suite's subject.
+    # The playhead coming back to somewhere near the START of the same track is the whole
+    # observable, and `dur - 10` is a floor no seek in this block ever lands above.
+    # Either outcome ends the poll: the playhead coming home (repeat worked) or the queue
+    # moving (it did not). Waiting only for the first would spend forty seconds arriving at
+    # the same red the second reports immediately.
+    i=0
+    while [ $i -lt 40 ]; do
+        p=$(shell/ut-play --status -j | jq -r '.players[0].position // empty')
+        [ "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')" != "$qpos" ] && break
+        case "$p" in "" | null) ;; *) [ "$p" -lt $((dur - 10)) ] && break ;; esac
+        sleep 1; i=$((i + 1))
+    done
+    report "a repeating track wraps to its own start" 1 \
+        "$(p=$(shell/ut-play --status -j | jq -r '.players[0].position // 999999')
+           [ "$p" -lt $((dur - 10)) ] && echo 1 || echo 0)"
+    report "…and the queue did not advance" "$qpos" \
+        "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')"
+    # THE OTHER HALF OF THE PAIR, and the reason the wrap above is not just a queue being
+    # slow: turn repeat off and drive the SAME track to the SAME end. Now it must hand on.
+    # It also proves the child re-reads the record between tracks — the value it was launched
+    # with is `off`, so a child holding that would pass the wrap check above by accident and
+    # this one either way; only the pair separates them.
+    shell/ut-play --set-loop off -j >/dev/null 2>&1
+    shell/ut-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
+    i=0
+    while [ $i -lt 90 ]; do
+        [ "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')" != "$qpos" ] && break
+        sleep 1; i=$((i + 1))
+    done
+    report "repeat off: the same end advances the queue" "$((qpos + 1))" \
+        "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')"
+else
+    bad "the repeating player never reported a duration in 40s — the repeat claims are unproved"
+fi
+
 # --stop takes the whole QUEUE down. The child traps BOTH signals stop_group sends it, and
 # the INT half is not belt-and-braces: bash only sets SIGINT to SIG_IGN in an async child when
 # job control is OFF, and detach_play launches under `set -m`, so an untrapped INT here is a
@@ -592,6 +645,19 @@ report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&
 wait_no_players
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
+
+# The LAUNCH half of the same field: --loop rides a detach the way -f and --quality do, and
+# the record it lands in is what the child re-reads before every track. Asserted on the
+# RECORD and not on mpv, because the pair above already proved what the value does; what is
+# unproved without this line is that a launch can carry it at all. No socket wait: the record
+# is written by the parent, so this costs one detach and no decode.
+lout=$(shell/ut-play -d -j --loop one --volume 0 -- "$U1" 2>/dev/null)
+lid=$(printf '%s' "$lout" | jq -r '.id // empty')
+report "a launch records its loop mode" "one" \
+    "$(shell/ut-play --status -j | jq -r --arg i "$lid" '.players[]|select(.id==$i)|.loop // empty')"
+shell/ut-play --stop --all -j >/dev/null 2>&1
+wait_no_players
+no_orphans "no orphan mpv after a repeat launch"
 # NOT checked here: that a stopped queue files no tombstone. Tried and pulled: disable the
 # child's `stopped` branch outright and failed[] is STILL empty, so the check was green against
 # broken code. contract.sh drives the tombstone boundaries from fixtures instead, which is

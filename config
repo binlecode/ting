@@ -9,9 +9,9 @@
 #   ${XDG_CONFIG_HOME:-~/.config}/uting/config
 # which is read first and wins over everything here.
 #
-# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes ten keys back to
-# it when you change one at runtime (engine, sort, mode, quality, theme, language, result
-# count, key-hint tier, row numbers, list mode) — in place, comments and layout kept.
+# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes eleven keys back
+# to it when you change one at runtime (engine, sort, mode, quality, theme, language, result
+# count, key-hint tier, row numbers, list mode, loop mode) — in place, comments and layout kept.
 # ARCH-cli-contract.md「配置面」 (write-back), ARCHITECTURE.md「两个根数据文件」.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
@@ -93,6 +93,17 @@ UT_SORT_CYCLE=relevance view_count duration          # order the o key steps thr
 UT_QUALITY_CYCLE=auto medium high   # order the f key steps through. Not the full tier set:
                                     # low is a deliberate choice, not a step you want to land
                                     # on while rotating past it — add it here if you want it
+UT_LOOP_MODE=off                    # off|seq|one: what happens when a track ends. off = the
+                                    # track you picked plays and playback stops; seq = the
+                                    # rows from the cursor down play in order (uting hands
+                                    # them over as a QUEUE, so they keep playing after the UI
+                                    # exits); one = the track you picked repeats. The r key
+                                    # rotates it live and writes it back here.
+                                    # ut-play's own --loop takes only off and one: `seq` is
+                                    # how uting SHAPES a launch, not a state a player can be
+                                    # in — a queue of ten looks the same to the player
+                                    # whether it came from seq or from ten presses of +
+UT_LOOP_CYCLE=off seq one           # the order the r key steps through
 UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark mono   # the t key
 UT_RESOURCE=1                       # 0 = no cpu/ram readout for the playing player. The
                                     # readout is the player's own PROCESS GROUP (wrapper +

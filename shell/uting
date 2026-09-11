@@ -53,7 +53,7 @@ fi
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
 # duplicated verbatim in all ten entry points and this is uting's alone.
-PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX UT_LIST_MODE"
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX UT_LIST_MODE UT_LOOP_MODE"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
     if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
@@ -106,7 +106,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
-# The ten keys above are the ones this TUI changes at runtime, and they are written back to
+# The eleven keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
 # a preference; the reasoning is ARCHITECTURE.md「两个根数据文件」 (reopen triggers: ROADMAP), the key table is
 # ARCH-cli-contract.md「配置面」. What the code below is:
@@ -133,7 +133,7 @@ PREF_WRITE_OFF=0   # a write failed once; stop retrying at every tick
 PREF_SAID=""       # keys already refused out loud, so the notice is said once each
 
 # The whitelist AND the key→variable map. One case, because two of them would be two places
-# to add an eleventh key and one place to forget it.
+# to add a twelfth key and one place to forget it.
 pref_value() {
     case "$1" in
     UT_DEFAULT_ENGINE) printf '%s' "$ENGINE" ;;
@@ -146,6 +146,7 @@ pref_value() {
     UT_KEYS)           printf '%s' "$KEYS_TIER" ;;
     UT_ROW_INDEX)      if ((ROW_INDEX)); then printf 'on'; else printf 'off'; fi ;;
     UT_LIST_MODE)      printf '%s' "$LIST_MODE" ;;
+    UT_LOOP_MODE)      printf '%s' "$LOOP_MODE" ;;
     esac
 }
 
@@ -156,8 +157,8 @@ pref_listed() {
     return 1
 }
 
-# A value is acceptable only if ut_read_config would read it back UNCHANGED. The ten are
-# enumerations and a number, so this never fires today; it is here so an eleventh key cannot
+# A value is acceptable only if ut_read_config would read it back UNCHANGED. The eleven are
+# enumerations and a number, so this never fires today; it is here so a twelfth key cannot
 # quietly write a line the loader mangles — `#` starts a comment, one matching quote pair is
 # stripped, surrounding space is trimmed and a leading ~/ becomes $HOME.
 pref_value_ok() {
@@ -585,6 +586,11 @@ Keys (List View):
            to the search results. A chapter row is a call: Enter plays from it,
            + queues from it, a stores it
                               (only when the engine has --info; the shipped ones all do)
+  r        cycle what happens when a track ends: off → seq → one. off plays the row you
+           picked and stops; seq plays the rows from the cursor DOWN, in order, by handing
+           the player a queue — so they keep playing after this UI exits; one repeats the
+           track. off/one take effect on a player that is already running; seq shapes the
+           next Enter, and says so. UT_LOOP_CYCLE sets the order and its members
   +        append the focused row to the running player's queue (nothing playing: says so)
   >        skip to the next queued track
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
@@ -592,9 +598,9 @@ Keys (List View):
            `core` is this view's own job, `full` is every key above. UT_KEYS pins it
   q        quit (stops background playback on exit)
 
-  The ten settings these keys change — engine, sort field, playback mode, quality tier,
-  theme, chrome language, the result count, the key-hint tier, row numbers and the list
-  mode — are written back to YOUR config file
+  The eleven settings these keys change — engine, sort field, playback mode, quality tier,
+  theme, chrome language, the result count, the key-hint tier, row numbers, the list mode
+  and the loop mode — are written back to YOUR config file
   (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.
@@ -705,6 +711,19 @@ PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it
 # a per-request choice, so it comes from the config chain and the key — CLAUDE.md's flag-vs-key
 # rule, and the reason ut-play's own --quality exists for the agent surface.
 PLAY_QUALITY="$UT_PLAY_QUALITY"
+# WHAT HAPPENS WHEN A TRACK ENDS, rotated live by the r key (cycle_loop_mode) and written
+# back like the rest. THREE states here against the player's TWO, and the asymmetry is the
+# design: `off` and `one` are the player's own `--loop` values, while `seq` is not a fact
+# about a player at all — it is how THIS file builds the launch, as a queue of the rows from
+# the cursor down (build_queue_from_selection). ut-play cannot tell such a queue from ten
+# presses of `+`, so it is never told. No uting flag, same rule as the quality tier: what
+# happens after a track is set-once tuning, not a per-request choice. ARCH-tui.md「循环」.
+LOOP_MODE="$UT_LOOP_MODE"
+case "$LOOP_MODE" in
+"") LOOP_MODE="off" ;;
+off | seq | one) ;;
+*) die "UT_LOOP_MODE must be off, seq or one (got '$UT_LOOP_MODE')" ;;
+esac
 # Which tier of key hints the view prints, rotated live by the ? key (cycle_keys) and
 # written back like the other nine. There is deliberately NO uting flag for it, by the same
 # rule as the quality tier above: how much of the keymap you want written down is set-once
@@ -754,6 +773,9 @@ IFS=' ,' read -r -a SORT_CYCLE <<<"$UT_SORT_CYCLE"
 # make on purpose. The validator below still accepts the full set, so a user who wants it
 # says so once here, exactly as with the mode cycle.
 IFS=' ,' read -r -a QUALITY_CYCLE <<<"$UT_QUALITY_CYCLE"
+# The order the r key steps through, like the three cycles above it. A user who never wants
+# the queue behaviour drops `seq` here rather than pressing past it every session.
+IFS=' ,' read -r -a LOOP_CYCLE <<<"$UT_LOOP_CYCLE"
 # The -s default, one value shared with both search halves.
 SORT_FIELD="$UT_SORT_FIELD"   # -s flag overrides. Runtime-mutable: o rotates it (cycle_sort).
 # WHICH THEME NAMES ARE LEGAL — one place. This used to be spelled five times (the cycle
@@ -869,6 +891,7 @@ validate_cycle() {
 validate_cycle UT_MODE_CYCLE "audio video fast" ${MODE_CYCLE[@]+"${MODE_CYCLE[@]}"}
 validate_cycle UT_SORT_CYCLE "relevance view_count duration" ${SORT_CYCLE[@]+"${SORT_CYCLE[@]}"}
 validate_cycle UT_QUALITY_CYCLE "auto low medium high" ${QUALITY_CYCLE[@]+"${QUALITY_CYCLE[@]}"}
+validate_cycle UT_LOOP_CYCLE "off seq one" ${LOOP_CYCLE[@]+"${LOOP_CYCLE[@]}"}
 validate_cycle UT_THEME_CYCLE "$THEME_NAMES" \
     ${THEME_CYCLE[@]+"${THEME_CYCLE[@]}"}
 # Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to ut-play),
@@ -1811,6 +1834,8 @@ set_ui_lang() {
         S_INFO_ACT="详情"
         S_CHAP_KEY="章节"; S_CHAP_NONE="这个条目没有章节"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_ACT="队列"
+        S_LOOP="循环"; S_LOOP_ACT="循环"; S_LOOP_OFF="关"; S_LOOP_SEQ="顺序"; S_LOOP_ONE="单曲"
+        S_LOOP_NEXT="（下次起播生效）"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
         S_PREF_PINNED="由环境变量固定，没有写入配置文件"
@@ -1849,6 +1874,8 @@ set_ui_lang() {
         S_INFO_ACT="Info"
         S_CHAP_KEY="chapters"; S_CHAP_NONE="this item has no chapters"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_ACT="Queue"
+        S_LOOP="loop"; S_LOOP_ACT="Loop"; S_LOOP_OFF="off"; S_LOOP_SEQ="seq"; S_LOOP_ONE="one"
+        S_LOOP_NEXT=" (from next play)"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
         S_PREF_PINNED="is fixed by the environment — not written to your config"
@@ -4252,6 +4279,14 @@ display_list_menu() {
     # and auto is what every install that has never pressed f is sitting on.
     [[ "$PLAY_QUALITY" != "auto" ]] && st_items+=("$S_QUALITY $PLAY_QUALITY")
     [[ -n "$PLAY_VOLUME" ]] && st_items+=("$S_VOL $PLAY_VOLUME")
+    # Same rule again — absent at the default, which is what every install that has never
+    # pressed r is sitting on. It rides the status line rather than the banner because this
+    # is the segment container that already exists; the banner's right edge is a different
+    # budget (ARCH-tui.md「重排与分页」) and a mode is not a fact about the track playing.
+    case "$LOOP_MODE" in
+    seq) st_items+=("$S_LOOP $S_LOOP_SEQ") ;;
+    one) st_items+=("$S_LOOP $S_LOOP_ONE") ;;
+    esac
     # The only confirmation `+` has: the queue-ahead block that used to be it went with the
     # card (D-g), and a key whose whole effect is invisible is a key you press twice. Absent
     # below two, by the rule min=/max=/quality= already follow — a queue of one is what every
@@ -4451,7 +4486,7 @@ display_list_menu() {
     # "cannot act" the source key and the store keys are gated on.
     keys_full && ((COLORS_ON)) && nav_items+=("t	$S_THEMEKEY")
     keys_full && nav_items+=(
-        "-/=	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP"
+        "-/=	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "r	$S_LOOP" "s	$S_STOP"
     )
     nav_items+=("q	$S_QUIT")
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
@@ -5336,6 +5371,26 @@ play_failed_notice() {
 }
 
 # ── PLAY delegate (Asynchronous / Non-blocking) ─────────────────────────────────────────
+# The rows from the cursor to the end of the list, in the item shape ut-play --queue reads
+# (ARCH-player.md「队列」). Built from the ROW ARRAYS and never from $json: `/` narrows what is
+# on screen without touching the envelope, so a queue assembled from the envelope would play
+# rows the user has just filtered away. Each item carries its OWN engine for the reason
+# play_selected passes one — a playlist and the log both mix sources, and the player routes
+# per item — and the duration only when the row has a plain number to give, because that
+# field is metadata for --status and a guess there is worse than a null.
+build_queue_from_selection() {
+    local i
+    for ((i = selected; i < NUM_ENTRIES; i++)); do
+        printf '%s%s%s%s%s%s%s\n' \
+            "${R_ENGINE[$i]:-$CURRENT_ENGINE}" "$US" "${urls[$i]}" "$US" \
+            "${R_TITLE[$i]:-}" "$US" "${R_DUR[$i]:-}"
+    done | jq -R -s -c 'split("\n") | map(select(length > 0) | split("\u001f")
+        | {engine: .[0],
+           url: .[1],
+           title: (if (.[2] // "") == "" then null else .[2] end),
+           duration: (if (.[3] // "") | test("^[0-9]+$") then (.[3] | tonumber) else null end)})'
+}
+
 play_selected() {
     ((NUM_ENTRIES > 0)) || return 0
     local url="${urls[$selected]}"
@@ -5360,8 +5415,22 @@ play_selected() {
     # --quality rides beside -f because the engine reads the pair: the tier alone selects
     # nothing. Forwarded as the canonical spelling, never as a format-sort string — this file
     # holds no yt-dlp vocabulary, and ut-play holds none either (ARCH-engine.md「解析」).
-    out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
-        ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
+    # WHAT ENTER LAUNCHES is the loop mode's only other job. off and one send the one row
+    # under the cursor and differ by --loop alone; seq sends the rows from here to the end of
+    # the list as a QUEUE, which is the only shape the player understands "keep going" in —
+    # and the reason the connected playback survives this TUI exiting, since the queue is the
+    # detached player's own state and not something this file drives from outside.
+    # --engine is not passed on that path: every item carries its own.
+    local loop_flag=off
+    if [[ "$LOOP_MODE" == "one" ]]; then loop_flag=one; fi
+    if [[ "$LOOP_MODE" == "seq" ]]; then
+        out=$(build_queue_from_selection |
+            "$PLAY_BIN" -d -j -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
+                ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} --loop "$loop_flag" --queue - 2>"$errfile") || rc=$?
+    else
+        out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
+            ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} --loop "$loop_flag" -- "$url" 2>"$errfile") || rc=$?
+    fi
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -6413,6 +6482,40 @@ cycle_quality() {
     mark_pref UT_PLAY_QUALITY
 }
 
+# ── LOOP action (key: r) ────────────────────────────────────────────────────────────────
+# The same rotation as the two above, plus one thing they do not do: it pushes the REPEAT
+# half at the player that is already running, because repeat is a property of a track that
+# is playing right now and waiting for the next Enter to apply it would be a badge that
+# disagrees with the speakers. `seq` maps to the player's `off`: as far as ut-play is
+# concerned those two are one state, and the difference between them is which rows the NEXT
+# launch packs into the queue.
+#
+# Which is also why `seq` says so out loud. Switching to it mid-playback deliberately does
+# NOT enqueue the rest of the list behind the current track: pressing r twice more would
+# then append it a second time, and there is no verb that takes a queued item back out —
+# ROADMAP.md「还没定的事」 is still holding that whole question open, and a key that quietly
+# settles it is not a key, it is a decision. So the notice names the moment it applies.
+cycle_loop_mode() {
+    local i n=${#LOOP_CYCLE[@]} cur=0 pushed
+    for (( i = 0; i < n; i++ )); do
+        [[ "${LOOP_CYCLE[$i]}" == "$LOOP_MODE" ]] && { cur=$i; break; }
+    done
+    LOOP_MODE="${LOOP_CYCLE[$(( (cur + 1) % n ))]}"
+    mark_pref UT_LOOP_MODE
+    if [[ -n "$CURRENT_PLAY_ID" ]]; then
+        if [[ "$LOOP_MODE" == "one" ]]; then pushed=one; else pushed=off; fi
+        # Best effort, like every other one-shot the banner fires: the player may have ended
+        # between the keypress and here, and check_player_alive is the one place that gets to
+        # say so.
+        "$PLAY_BIN" --set-loop "$pushed" --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
+    fi
+    case "$LOOP_MODE" in
+    one) store_notice "$S_LOOP_ACT:" "$S_LOOP_ONE" ;;
+    seq) store_notice "$S_LOOP_ACT:" "$S_LOOP_SEQ$S_LOOP_NEXT" ;;
+    *) store_notice "$S_LOOP_ACT:" "$S_LOOP_OFF" ;;
+    esac
+}
+
 # One failure path for the re-fetch actions (n / → / o / e). It replaces three copies of this
 # block that had already drifted in wording — the count and sort keys said "no results"
 # where n said 'no results for "…"' — the standard signal that a block wants to be a function.
@@ -7353,6 +7456,14 @@ while true; do
     case "$READ_NAV_KEY" in
     " ") toggle_pause; continue ;;
     s | S) stop_current_playback; continue ;;
+    # Loop is a playback key, so it lives with the playback keys, for the reason written over
+    # the volume pair below: what happens when a track ends belongs to the player and not to
+    # a view, and every row source can have one running.
+    #
+    # LOWER CASE ONLY, and the one arm in this block that does not also take its shifted
+    # twin: ROADMAP.md「还没做的事」 has `R` down for renaming the playlist on screen, and a
+    # greedy `r | R` here would eat that key before it is written.
+    r) cycle_loop_mode; continue ;;
     # Volume moved off 9/0 because the digits are worth more as row jumps: a ten-row
     # window whose rows can be NAMED by a digit and not REACHED by one is a readout
     # pretending to be a control. `=` and not `+`, because `+` is already enqueue and `=`

@@ -392,6 +392,32 @@ report "--queue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - --
 report "--enqueue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play --enqueue - -- URL)"
 report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - --status)"
 
+# ── the loop mode, idle. REPEAT is what the player has; playing ON to the next track is a
+# queue, and the two are told apart at the door. --loop and --set-loop are one enum with two
+# spellings, so both are driven — a value that is not off|one never reaches a player (1),
+# and a well-formed one with no player to receive it is the did-not-take-effect class (4).
+report "--loop needs a value"        1 "$(rc shell/ut-play --loop)"
+report "--loop bogus is 1"           1 "$(rc shell/ut-play --loop bogus -- URL)"
+report "--set-loop bogus is 1"       1 "$(rc shell/ut-play --set-loop bogus -j)"
+# The value a caller is most likely to reach for, and the one arm whose TEXT is asserted:
+# playing on to the next track is a real feature under a different flag, so the message has
+# to route them to it. A plain "must be off or one" passes the exit code above and fails
+# here, which is what makes the pair worth two lines instead of one.
+report "--loop sequential is 1"      1 "$(rc shell/ut-play --loop sequential -- URL)"
+report "…and it names the queue"     0 "$(err_has 'queue' shell/ut-play --loop sequential -- URL)"
+# The same 1-vs-4 split the socket verbs carry, on the verb that reaches a player's RECORD
+# rather than its socket — so, like --enqueue and --next, it must answer without nc.
+report "idle --set-loop is 4"        4 "$(rc shell/ut-play --set-loop one -j)"
+report "idle --set-loop says why"    0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-loop one -j)"
+report "--id on --set-loop parses"   4 "$(rc shell/ut-play --set-loop one --id nope -j)"
+report "--set-loop rejects a handle" 1 "$(rc shell/ut-play --set-loop one -- URL)"
+# --loop is a LAUNCH modifier: beside a verb that addresses a running player it is a caller
+# who means --set-loop. Both verbs below answer 4 when idle, so a 1 can only have come from
+# the combination gate — the check cannot pass on the idle path by accident. (--start's own
+# pair of lines above has the same shape and is there for the same reason.)
+report "--loop with --pause is 1"    1 "$(rc shell/ut-play --loop one --pause -j)"
+report "--loop with --status is 1"   1 "$(rc shell/ut-play --loop one --status -j)"
+
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
 # like too (docs/ARCH-player.md「状态机」). These checks own the boundary that keeps the tombstone
@@ -1502,7 +1528,8 @@ report "the file did not create the hijack socket" "absent" \
 # member check ran or not. (Written as a literal list rather than a case inside $( ): on
 # bash 3.2 a case pattern's `)` closes the command substitution.)
 for spec in UT_MODE_CYCLE=audio,bogus UT_SORT_CYCLE=relevance,bogus \
-    UT_THEME_CYCLE=nord,bogus UT_THEME_CYCLE=custom,bogus UT_QUALITY_CYCLE=auto,bogus; do
+    UT_THEME_CYCLE=nord,bogus UT_THEME_CYCLE=custom,bogus UT_QUALITY_CYCLE=auto,bogus \
+    UT_LOOP_CYCLE=off,bogus; do
     printf '%s\n' "$spec" > "$CFG"
     report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
 done
@@ -2712,6 +2739,28 @@ else
     shown=$(poll_until 10 pane_has 'page [0-9]+/[0-9]+')
     report "Tab comes back" 1 "$shown"
     wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=page$')
+    report "…and the file follows it back" 1 "$wrote"
+
+    # THE ELEVENTH preference key, and the one that changes what the next Enter LAUNCHES.
+    # Asserted on the STATUS SEGMENT rather than on the key's hint cell: that cell is printed
+    # from a literal and stays green under a build that bound r to nothing, while the segment
+    # is rendered from LOOP_MODE itself. Three presses rather than one, because the discriminator
+    # is the ROTATION — a key wired to set one value passes the first check and fails the
+    # second — and because the third has to bring the default back, which spends no width at
+    # all (the rule quality= and min=/max= already follow). This pane's chrome is pinned to
+    # English by the fixture, so naming the segment is safe here.
+    tmux send-keys -t "$TS" 'r'
+    shown=$(poll_until 10 pane_has 'loop seq')
+    report "r puts the loop mode on the status line" 1 "$shown"
+    wrote=$(poll_until 10 cfg_has '^UT_LOOP_MODE=seq$')
+    report "…and writes it to your config" 1 "$wrote"
+    tmux send-keys -t "$TS" 'r'
+    shown=$(poll_until 10 pane_has 'loop one')
+    report "r rotates on rather than toggling" 1 "$shown"
+    tmux send-keys -t "$TS" 'r'
+    gone=$(poll_until 10 pane_lacks 'loop (seq|one)')
+    report "…and the default state spends no width" 1 "$gone"
+    wrote=$(poll_until 10 cfg_has '^UT_LOOP_MODE=off$')
     report "…and the file follows it back" 1 "$wrote"
 
     # THE SCROLLBAR, in both modes and on every visible row: the gutter is what replaced the
