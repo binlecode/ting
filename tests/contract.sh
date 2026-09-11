@@ -2611,10 +2611,10 @@ else
     : >"$IMG_WALK"
     tmux pipe-pane -o -t "$TS" "cat >> '$IMG_WALK'"
     tmux send-keys -t "$TS" j j j j j j j j j j
-    turned=$(poll_until 10 pane_has '^[[:space:]>▶]*11\. ')
+    turned=$(poll_until 10 pane_has '^[[:space:]>▶▎]*11\. ')
     report "j walks the selection onto the next page" 1 "$turned"
     tmux send-keys -t "$TS" k k k k k k k k k k
-    back=$(poll_until 10 pane_lacks '^[[:space:]>▶]*11\. ')
+    back=$(poll_until 10 pane_lacks '^[[:space:]>▶▎]*11\. ')
     report "and k walks it back" 1 "$back"
     # POLLED, NOT SLEPT THROUGH, and the two conditions are why the walk is where this
     # window lives. A cover is fetched on the one-second clock and transcoded by an mpv, so
@@ -2656,12 +2656,12 @@ else
     : >"$IMG_TOG"
     tmux pipe-pane -o -t "$TS" "cat >> '$IMG_TOG'"
     tmux send-keys -t "$TS" '#'
-    gone=$(poll_until 10 pane_lacks '^[[:space:]>▶]*1\. ')
+    gone=$(poll_until 10 pane_lacks '^[[:space:]>▶▎]*1\. ')
     report "# takes the row numbers off" 1 "$gone"
     wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=off$')
     report "…and writes that to your config" 1 "$wrote"
     tmux send-keys -t "$TS" '#'
-    shown=$(poll_until 10 pane_has '^[[:space:]>▶]*1\. ')
+    shown=$(poll_until 10 pane_has '^[[:space:]>▶▎]*1\. ')
     report "# puts them back" 1 "$shown"
     wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
     report "…and the file follows it back" 1 "$wrote"
@@ -2907,7 +2907,7 @@ else
     # The row is read off the pane rather than assumed (everything above this line has been
     # moving the cursor), and the direction is chosen from it so the key always has somewhere
     # to go: a cursor already on the last row would not move DOWN, and that is not a finding.
-    cur_row=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | sed -n 's/^▶ *\([0-9][0-9]*\)\..*/\1/p' | head -1)
+    cur_row=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | sed -n 's/^[>▶▎] *\([0-9][0-9]*\)\..*/\1/p' | head -1)
     case "$cur_row" in
     '' | *[!0-9]*)
         echo "contract.sh: no row cursor on the pane before the notice check — suite error, not a failure" >&2
@@ -2918,7 +2918,7 @@ else
     notice_gone() { pane_lacks 'nothing listened to yet' && pane_lacks 'RC='; }
     alive=$(poll_until 10 notice_gone)
     report "…and the next key clears it without exiting" 1 "$alive"
-    moved=$(poll_until 5 pane_has "^▶ +$want\.")
+    moved=$(poll_until 5 pane_has "^[>▶▎] +$want\.")
     report "…and that key did its own job, not the notice's" 1 "$moved"
     if [ "$alive" != 1 ]; then
         echo "  ---- pane after the notice was dismissed ----" >&2
@@ -3004,7 +3004,7 @@ else
         [ $row -ge 8 ] && break
         tmux send-keys -t "$TS" Down
         row=$((row + 1))
-        walked=$(poll_until 5 pane_has "^▶ +$row\.")
+        walked=$(poll_until 5 pane_has "^[>▶▎] +$row\.")
         [ "$walked" = 1 ] || break
     done
     report "i opens the chapter rows" 1 "$shown"
@@ -3190,7 +3190,7 @@ else
                 [ $prow -ge 6 ] && break
                 tmux send-keys -t "$TS" Down
                 prow=$((prow + 1))
-                pwalked=$(poll_until 5 pane_has "^▶ +$prow\.")
+                pwalked=$(poll_until 5 pane_has "^[>▶▎] +$prow\.")
                 [ "$pwalked" = 1 ] || break
             done
             report "c opens a multi-part row as the row source" 1 "$popened"
