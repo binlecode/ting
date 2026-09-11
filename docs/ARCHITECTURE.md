@@ -845,6 +845,7 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
 | 链接里的起播偏移搭在 `url` 里被存进播放列表（收藏曲每次从 10:01 起） | `url` 与 `start_seconds` 各答一问，B 站那半剥且只剥 `t=` | ARCH-engine.md「起播偏移」 |
 | 一个凭据头到达 mpv 的 argv，在 `ps` 里看得见 | 引擎不得把 `Cookie`/`Authorization` 放进 `http_headers` | ARCH-player.md「模式 → 格式 → mpv」 |
 | 停止之后留下还在响的孤儿 mpv | 对**进程组**下手，不走 PID 树（pgid 在改挂父进程时不变） | ARCH-player.md「进程组模型」 |
+| 一条 pid 写坏的记录把 `--stop` 变成自杀：`pgrep -g 0` 与 `kill -TERM 0` 指的都是**调用者自己**的进程组 | 发信号前先过 `is_live_pid`：正整数才发，0／负数／非数字一个信号都不发 | ARCH-player.md「进程组模型」 |
 | 一个被捕获的 `-d` stdout 阻塞在某个后台作业上 | detach 路径上没有后台作业；未来任何 `… &` 必须自己关掉 fd | ARCH-player.md「进程组模型」 |
 | 长命 detached 播放器的 mpv 状态行把磁盘写满 | `YT_DETACHED` → 子进程里把日志钉在有界大小 | ARCH-player.md「进程组模型」 |
 | 别的进程连上某个播放器的 IPC socket | `STATE_DIR/players` 0700；Linux 回退到 `/tmp` 时钉住权限 | ARCH-player.md「运行时 IPC」 |

@@ -1389,6 +1389,7 @@ IMAGE_JOB_URL=""    # …and which row it is for
 IMAGE_FAIL_URL=""   # the one row already tried and not gettable: tried once, never again
 IMAGE_PNG=""        # the file this frame should emit; "" = nothing to emit
 IMAGE_COLS=0        # how many columns that file will take, for the right flush
+IMAGE_TICK=0        # spinner frame for the in-flight cover status
 
 # The cache lives under TMPDIR, NOT under $UT_STATE_DIR, and the distinction is the suite's
 # own: the state dir holds what a person saved and what a player played, and its layout
@@ -1662,6 +1663,19 @@ image_place() {
     ((IMAGE_DRAWN)) && IMAGE_PLACED="$sig"
     return 0
 }
+
+# Display transient loading status in the thumbnail area while the cover is being
+# fetched and transcoded. Rendered at the vertical center of the 24x7 box.
+image_status() {
+    local right_edge=$1 text tw col up
+    text="${GL_SPIN[IMAGE_TICK % ${#GL_SPIN[@]}]} $S_PIC_LOADING"
+    disp_w "$text"
+    tw=$DISP_W
+    col=$((right_edge - IMAGE_BOX_COLS + 1 + (IMAGE_BOX_COLS - tw) / 2))
+    ((col < 1)) && col=1
+    up=$((IMAGE_BOX_ROWS - IMAGE_BOX_ROWS / 2))
+    printf '\033[%dA\033[%dG%s%s%s\033[%dB\033[1G' "$up" "$col" "$C_DIM" "$text" "$C_RESET" "$up" || true
+}
 detect_bg() {
     local fgbg b resp="" rgb rr gg bb
     case "$BG_MODE" in
@@ -1769,6 +1783,7 @@ set_ui_lang() {
         S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
         S_QUITTING="正在退出"; S_PLAY_FAILED="播放失败"; S_SEARCH_ACT="搜索"
+        S_PIC_LOADING="loading pic..."
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
         S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
@@ -1806,6 +1821,7 @@ set_ui_lang() {
         S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
         S_QUITTING="Quitting"; S_PLAY_FAILED="Play failed"; S_SEARCH_ACT="Search"
+        S_PIC_LOADING="loading pic..."
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
         S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
@@ -4552,14 +4568,12 @@ display_list_menu() {
         # the bar on the next line draws, so the two cannot disagree about where the track
         # is — one says how much, the other says where.
         #
-        # It is BRACKETED and pressed against the title rather than floated off it behind a
-        # GL_SEP. The banner is one row of four fields separated by that same dot, and while
-        # the readout was one of them the eye had to count dots to find out which segment was
-        # the clock; a bracket pair says "this belongs to the thing on my left" in one glyph
-        # and takes the dot off the row. It also buys a cell: the bracketed form measures 15
-        # against the old 16, so the elision budget below gets slightly MORE title, not less.
-        # This is what frees the bar on the next line to run edge to edge with no numbers
-        # parked at its ends. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
+        # The banner's status section (bracketed position badge, resource footprint, and
+        # fallback hints) is flushed right to right_edge via CHA (\033[%dG), anchoring it
+        # to the same column as the duration rail below and the header status segments above.
+        # \033[K goes FIRST on the row to erase the gap across frames.
+        #
+        # PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
         # second while the list is up — so the banner costs no IPC of its own and is at most
         # one second stale, the resolution it is drawn at anyway.
         #
@@ -4576,12 +4590,12 @@ display_list_menu() {
         # PT_TOTAL with GL_LIVE rather than a number. The separator inside the brackets goes
         # with it: "00:42 / ● LIVE" reads as a ratio, which is the one thing the pair is not,
         # and the badge is short enough that a space alone divides it.
-        local b_tail=" ${GL_TIME_L}${CURRENT_PLAY_DURATION}${GL_TIME_R}"
+        local b_tail="${GL_TIME_L}${CURRENT_PLAY_DURATION}${GL_TIME_R}"
         if [[ -n "$PT_CUR" ]]; then
             if ((CURRENT_PLAY_IS_LIVE)); then
-                b_tail=" ${GL_TIME_L}${PT_CUR} ${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
+                b_tail="${GL_TIME_L}${PT_CUR} ${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
             else
-                b_tail=" ${GL_TIME_L}${PT_CUR}/${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
+                b_tail="${GL_TIME_L}${PT_CUR}/${PT_TOTAL:-$CURRENT_PLAY_DURATION}${GL_TIME_R}"
             fi
         fi
         # The player's footprint (UT_RESOURCE): the pair fetch_play_res cached on the same
@@ -4614,28 +4628,38 @@ display_list_menu() {
         # not a fact. The title is last because it is the only field that names
         # what is playing; below that there is nothing left to give and it takes the pane
         # minus its own label.
-        local title_room=$((nav_cols - head_w - tail_w - res_w - hint_w))
+        local gap=2
+        local title_room=$((right_edge - head_w - tail_w - res_w - hint_w - gap))
         if ((title_room < LAYOUT_MIN_FIELD)); then
             b_hint=""; hint_w=0
-            title_room=$((nav_cols - head_w - tail_w - res_w))
+            title_room=$((right_edge - head_w - tail_w - res_w - gap))
         fi
         if ((title_room < LAYOUT_MIN_FIELD)); then
             b_res=""; res_w=0
-            title_room=$((nav_cols - head_w - tail_w))
+            title_room=$((right_edge - head_w - tail_w - gap))
         fi
         if ((title_room < LAYOUT_MIN_BUDGET)); then
             b_tail=""; tail_w=0
-            title_room=$((nav_cols - head_w))
+            gap=0
+            title_room=$((right_edge - head_w))
         fi
         # No clamp below zero: truncate_disp's contract already covers a budget that
         # cannot hold anything, and clamping UP to 1 would spend a cell the row has not got.
         truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
-        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s%s%s%s\033[K\n' \
-            "$p_color" "$p_icon" "$p_label" "$C_RESET" \
-            "$C_CYAN" "$TRUNC_TEXT" "$C_RESET" \
-            "$C_DIM" "$b_tail" "$C_RESET" \
-            "$C_DIM" "$b_res" "$C_RESET" \
-            "$C_DIM" "$b_hint" "$C_RESET"
+        local b_st="$b_tail$b_res$b_hint"
+        local b_st_w=$((tail_w + res_w + hint_w))
+        if ((b_st_w > 0)); then
+            local st_col=$((right_edge - b_st_w + 1))
+            ((st_col < 1)) && st_col=1
+            printf '\033[K%s%s %s:%s %s%s%s\033[%dG%s%s%s\n' \
+                "$p_color" "$p_icon" "$p_label" "$C_RESET" \
+                "$C_CYAN" "$TRUNC_TEXT" "$C_RESET" \
+                "$st_col" "$C_DIM" "$b_st" "$C_RESET"
+        else
+            printf '\033[K%s%s %s:%s %s%s%s\n' \
+                "$p_color" "$p_icon" "$p_label" "$C_RESET" \
+                "$C_CYAN" "$TRUNC_TEXT" "$C_RESET"
+        fi
     fi
     # The banner used to leave a BLANK LINE standing in for itself when nothing was playing,
     # so that starting a track did not shift the list. With the key block moved to the bottom
@@ -5162,6 +5186,9 @@ display_list_menu() {
                 printf '\033[K\n'
                 DETAIL_LINES=$((DETAIL_LINES + 1))
             done
+            if [[ -z "$IMAGE_PNG" && -n "${R_THUMB[$selected]:-}" && "${R_THUMB[$selected]:-}" != "$IMAGE_FAIL_URL" ]]; then
+                image_status "$right_edge"
+            fi
         else
             image_clear
             print_details "$nav_cols" "$selected"
@@ -6736,6 +6763,7 @@ nav_tick() {
     # The caller redraws as soon as this returns (both key loops `continue` into
     # display_menu), so the frame that finds the cover in the cache is the very next one.
     if ((IMAGE_DIRTY)); then
+        IMAGE_TICK=$((IMAGE_TICK + 1))
         local iu="$IMAGE_KEY_URL"
         if [[ -n "$IMAGE_JOB_PID" ]] && kill -0 "$IMAGE_JOB_PID" 2>/dev/null; then
             : # still working — the next tick asks again, which is what the 1 s clock is for

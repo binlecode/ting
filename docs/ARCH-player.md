@@ -327,11 +327,20 @@ ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是�
 
    stop_group(pgid):  先 kill -TERM pgid（**只**发给组长 —— 「队列」事实 2）；随后每 0.2s 一拍：
                       kill -TERM pgid + kill -INT -pgid；再升级到 kill -KILL -pgid
-   group_alive(pgid): pgrep -g pgid 至少有一个成员
+   group_alive(pgid): pgid 先过 is_live_pid（正整数），再看 pgrep -g pgid 有没有成员
 ```
 
 soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()` /
-`ensure_state_dir()` / `new_player_id()`。
+`is_live_pid()` / `ensure_state_dir()` / `new_player_id()`。
+
+**记录里读回来的 pid 是不可信输入，而 0 是个通配符。** `pgrep -g 0` 与 `kill -TERM 0` 在
+macOS 与 Linux 上都指"**调用者自己**的进程组"。所以一条 pid 没写成、抢跑或被截断的记录，
+若不设门禁，代价不是"这次播放停不下来"：`group_alive` 恒真，随后 `stop_group` 把 TERM
+广播给 ut-play 自己、启动它的那个 shell、以及那个终端的整个前台组 —— 一次 `--stop` 带走的是
+整个会话。因此每一条会发信号的路径先问一次 `is_live_pid`：**正整数，否则一个信号都不发**。
+`--next` 的 USR1 打的是 pid 而不是组，但 USR1 的默认处置就是终止，0 在那儿同样致命，
+所以它在自己的调用点上问同一个问题。这条门禁与下一段的 pid 复用是同一件事的两半：
+它挡住的是**无效**的 pid，下一段说的是**有效、但已经不是它**的那个 pid。
 
 **记录里的 `{engine, url}` 就是这条记录代表的那次调用**（`ut-play --engine E -- URL`），
 与 `ut-playlist` 存的记录同一个形状。它在启动时写下、并在每条队列轨道回填时跟着换 ——

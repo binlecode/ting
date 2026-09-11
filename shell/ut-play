@@ -956,16 +956,38 @@ play_url_json() {
 # The pgid is invariant under reparenting, so group operations always reach it.
 # pgrep -g / kill -<pgid> are available on macOS and Linux.
 
+# A PID READ BACK FROM DISK IS UNTRUSTED INPUT, and one value must never reach pgrep or
+# kill: 0 is a WILDCARD in both. `pgrep -g 0` matches the CALLER's own process group
+# (measured on macOS: it returns the shell asking the question), so an unchecked
+# `group_alive 0` is permanently true, and the `kill -TERM 0` / `kill -KILL -0` that
+# follows broadcasts to that same group — this process, the shell that ran it, and the
+# terminal's whole foreground group, in place. A player record whose pid never got written,
+# lost a race, or was truncated therefore does not end one playback, it ends the session.
+# Negative values are kill's explicit group form and would let a record name any group at
+# all; non-numeric text pgrep rejects on its own but has no business here either. So the
+# gate is a positive integer or nothing, asked once, of every path that signals: reaping and
+# --stop reach it through group_alive, stop_group re-asks because it is the one that
+# broadcasts, and --next's USR1 (whose default disposition is terminate, so pid 0 is lethal
+# there too) asks at its own call site.
+is_live_pid() {
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
 # True if any process in group $pgid is still alive.
 group_alive() {
     local pgid=${1:-}
-    [[ -n "$pgid" ]] && [[ -n "$(pgrep -g "$pgid" 2>/dev/null)" ]]
+    is_live_pid "$pgid" && [[ -n "$(pgrep -g "$pgid" 2>/dev/null)" ]]
 }
 
 # Stop the whole process group: SIGINT (mpv treats it as a clean stop, like q), wait
 # briefly for graceful exit, then SIGKILL any survivor. Negative PID targets the group.
 stop_group() {
     local pgid=$1
+    # Asked again here rather than trusted from the caller: two of the three call sites come
+    # through group_alive and the third hands over its own `$!`, but this is the function
+    # that broadcasts, and a future fourth caller must not be able to reintroduce the group
+    # wildcard by forgetting a check that lives somewhere else (see is_live_pid).
+    is_live_pid "$pgid" || return 1
     # The LEADER is told by SIGTERM and everything else in the group by SIGINT: mpv treats
     # INT as the clean stop `q` is, and the child is told by name so a --stop ends a QUEUE
     # rather than the one track playing out of it.
@@ -2404,7 +2426,7 @@ do_next() {
     # loop it is supposed to advance. If the child is gone the position still moved, which
     # is why the envelope reports what is on disk rather than "skipped".
     pid=$(jq -r '.pid // empty' "$(player_state "$id")" 2>/dev/null) || pid=""
-    [[ -n "$pid" ]] && kill -USR1 "$pid" 2>/dev/null
+    is_live_pid "$pid" && kill -USR1 "$pid" 2>/dev/null
     queue_snapshot "$id"
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg id "$id" --argjson queue "$QUEUE_JSON" '{status: "ok", id: $id, queue: $queue}'

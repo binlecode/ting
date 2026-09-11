@@ -21,13 +21,14 @@
 #
 # Cost, measured 2026-09-03 and broken down because a number at the door is what a reader
 # decides on: ~83-99s in full (three runs at this size: 83s, 99s, 86s), of which `--offline`
-# is the first ~28s: 258 checks, no packet sent. The live half is roughly 21 engine round
+# is the first ~30s: 276 checks, no packet sent (that half re-measured 2026-09-10; the full
+# figures above are still 09-03's). The live half is roughly 21 engine round
 # trips plus TWO walks — `i` over the chapter rows and `c` over the parts rows — and the
 # spread is mostly theirs: each stops at the first row that opens, so today's result ordering
 # decides whether it pays one lap or six. The `c` walk is the cheaper of the two (one HTTP
 # request per lap against an extraction).
 #
-# THE TOTAL IS A RANGE, 400-403, and that is not sloppiness: four checks report only when a
+# THE TOTAL IS A RANGE, 403-406, and that is not sloppiness: four checks report only when a
 # walk gives them something to report (a chapterless row for the kept-fields claim, an opened
 # view for either toggle, a parts view to read a total off), and the alternative to skipping
 # them is a check that cannot fail on the days the site is generous. A skip line names each
@@ -436,6 +437,46 @@ report "capped at 8 in the envelope" 8 "$(shell/ut-play --status -j | jq '.faile
 report "capped at 8 on disk"         8 "$(ls "$SD/players/dead" 2>/dev/null | wc -l | tr -d ' ')"
 report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shell/ut-play --status -j)"
 rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
+rm -rf "$SD/players/dead"
+
+echo "── a pid the record cannot vouch for signals NOTHING ──────────────"
+# The record above is a fixture because a pid that is GONE is a dead player. This one is a
+# fixture for the opposite reason: pid 0 is a value no launch writes, and every way it can
+# appear — a write that lost its race, a truncated file, a hand edit — arrives as data, so
+# data is exactly how the check has to arrive too.
+#
+# What makes 0 worth its own section is that it is a WILDCARD, not a miss: `pgrep -g 0` and
+# `kill -TERM 0` both mean "the caller's own process group", so the unguarded version of this
+# does not fail to stop a player, it stops the shell that asked, and the terminal with it.
+# THE ASSERTION IS THEREFORE NOT THE ENVELOPE. A --stop that printed the right JSON while
+# broadcasting a TERM would read green here, because this suite is in the group it would have
+# killed — and would die mid-run rather than report. So the verb runs inside its OWN process
+# group (set -m makes a backgrounded subshell a group leader, the same mechanism ut-play's own
+# detach_play uses) with a sleep for company, and the sentinel's survival is the check. The
+# suite stays outside that group and lives to print the result either way.
+#
+# Measured before the guard went in: the subshell was killed by SIGTERM, exit 143, having
+# printed nothing at all.
+printf '{"id":"ctest_pid0","pid":0,"url":"https://youtu.be/x","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-ctest_pid0.log","sock":"%s/mpv-ctest_pid0.sock","title":null,"volume":50}\n' \
+    "$SD" "$SD" >"$SD/players/ctest_pid0.json"
+report "pid 0 is not a live player" 0 "$(jq_ok '.status=="players" and .players==[]' shell/ut-play --status -j)"
+printf '{"id":"ctest_pid0","pid":0,"url":"https://youtu.be/x","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-ctest_pid0.log","sock":"%s/mpv-ctest_pid0.sock","title":null,"volume":50}\n' \
+    "$SD" "$SD" >"$SD/players/ctest_pid0.json"
+rm -f "$SD/pid0.verdict"
+set -m
+(
+    sleep 5 &
+    sentinel=$!
+    shell/ut-play --stop -j --id ctest_pid0 >"$SD/pid0.stop" 2>&1
+    kill -0 "$sentinel" 2>/dev/null && echo alive >"$SD/pid0.verdict"
+    kill "$sentinel" 2>/dev/null
+) &
+pid0_group=$!
+set +m
+wait "$pid0_group" 2>/dev/null || true
+report "--stop on pid 0 spares the group" alive "$(cat "$SD/pid0.verdict" 2>/dev/null || echo KILLED)"
+report "…and is the idle answer, not an error" 0 "$(jqv '.status=="stopped" and .stopped==false' "$(cat "$SD/pid0.stop" 2>/dev/null)")"
+rm -f "$SD/players"/ctest_pid0.json "$SD"/pid0.verdict "$SD"/pid0.stop
 rm -rf "$SD/players/dead"
 
 echo "── the playlist store: durable state, one file, one lock ──────────"
