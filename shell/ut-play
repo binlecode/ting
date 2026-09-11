@@ -277,8 +277,9 @@ Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-con
             same tail as a LIST — [{title,url,engine,duration}], at most $QUEUE_UPCOMING_MAX
             entries (\`len\` stays the honest total); upcoming[0] is \`next\` plus its duration.
 
-Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
-            call did not take effect (no such player / ambiguous / IPC failure)
+Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency or a propagated
+            engine/mpv failure · 4 lifecycle call did not take effect (no such
+            player / ambiguous / IPC failure)
 
 Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
   _  toggle video track on/off        q  stop playback and exit
@@ -303,7 +304,7 @@ Environment:
 EOF
 }
 
-die() {
+err() {
     local red='' reset=''
     case "${COLOR_MODE:-auto}" in
     always)
@@ -319,7 +320,20 @@ die() {
     never) ;;
     esac
     echo "${red}Error:${reset} $*" >&2
+}
+
+die() {
+    err "$@"
     exit 1
+}
+
+# A missing tool is not a malformed call: `die` is exit 1 (the argv is wrong — fix it),
+# `die_dep` is exit 2 (the argv was fine; the machine is missing something no rewrite of the
+# argv will supply). An agent that read 1 here would loop editing its own parameters against
+# a wall. docs/ARCH-cli-contract.md「退出码、TTY、依赖」.
+die_dep() {
+    err "required command not found: $1"
+    exit 2
 }
 
 is_non_negative_int() {
@@ -365,7 +379,7 @@ validate_enum() {
 
 require_cmd() {
     local cmd=$1
-    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+    command -v "$cmd" >/dev/null 2>&1 || die_dep "$cmd"
 }
 
 require_deps() {
@@ -2863,7 +2877,7 @@ fi
 # any -U-capable variant is accepted — netcat-openbsd's nc, or ncat (resolve_nc_unix).
 if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd jq
-    resolve_nc_unix || die "required command not found: a unix-socket netcat (nc with -U, or ncat)"
+    resolve_nc_unix || die_dep "a unix-socket netcat (nc with -U, or ncat)"
     do_set_volume "$SET_VOLUME_ARG" "${TARGET_ID:-}"
 fi
 # The same socket, the same lazy nc gate, the same exit taxonomy. The value is validated
@@ -2879,7 +2893,7 @@ fi
 case "$ACTION" in
 pause | resume | seek | seek-to)
     require_cmd jq
-    resolve_nc_unix || die "required command not found: a unix-socket netcat (nc with -U, or ncat)"
+    resolve_nc_unix || die_dep "a unix-socket netcat (nc with -U, or ncat)"
     do_playback_verb "$ACTION" "$SEEK_ARG" "${TARGET_ID:-}"
     ;;
 esac

@@ -594,7 +594,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 
 ```
    0    成功；也包括 --status/--stop（永远）；130 被归一化（SIGINT；干净的 q 本来就退 0）
-   1    用法/校验错误（die）、一个动词的标志门拒绝、uting 的非 TTY 拒绝、互相冲突的动作、
+   1    用法/校验错误（`die` —— **只有调用本身**；工具装没装不落在这里，见下面的 2+ 与「依赖」）、
+        一个动词的标志门拒绝、uting 的非 TTY 拒绝、互相冲突的动作、
         没有句柄（ARCHITECTURE.md「调用形状」）、一个里面带空白的句柄、--id/--all 用在生命周期动词之外、
         -d 配上一个动作或配上 -f ascii|viz、
         一个不带符号的 `--seek` 值（`--seek 30`）或一个负的 `--seek-to`、
@@ -618,6 +619,11 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         ARCH-engine.md「容器（`--items`）」）；一个**空**容器不是失败，它退 0。
         一个引擎解析不了的句柄落在**这里**，不是落在 1：播放器判断不了一个 id 的形状，
         所以"坏 id"是一个抽取结果（ARCHITECTURE.md「端到端控制流」）。
+        **一件没装上的工具也落在这里**（`die_dep`，见「依赖」）—— yt-dlp / mpv / jq / curl /
+        openssl / 一个带 `-U` 的 netcat，缺哪个都是 2。分界与上面那条同源：1 说的是
+        "你的 argv 错了，改它"，2 说的是"argv 没错，这台机器少东西"。一个把缺依赖读成 1 的
+        agent 会去改自己的参数，然后永远改不对 —— 那堵墙不在它这一侧。
+        与"传播上来的失败"的区别只在**工具跑没跑**，对调用方是同一个分支，所以同一个码。
    4    --set-volume / --pause / --resume / --seek / --seek-to / --enqueue / --next /
         --stop：没有生效 —— 没有那个播放器、没有播放器、目标有歧义，或 mpv IPC 失败；
         对那两个队列动词还包括 `queue_empty`（--next 而当前曲目之后什么也没有）与
@@ -638,7 +644,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 
    TTY  ：uting 要求 stdin 与 stdout **双双**是 TTY（ARCH-tui.md）。
           别的动词一律不需要 —— 每一个都在输入为空时报错，而不是提问（ARCHITECTURE.md「调用形状」/ARCHITECTURE.md「调用形状」）。
-   依赖 ：**按文件分，按动词惰性把关** —— 每个命令的 `require_deps` 只索要这一条路真要用的
+   依赖 ：**按文件分，按动词惰性把关，缺了退 2**（`die_dep`；`die` 是 1，两个门只有这一处
+          不同）—— 每个命令的 `require_deps` 只索要这一条路真要用的
           工具（清单在各自的 `usage()`）。所以 `--status`/`--stop` 与两个存储只要 jq；播放器
           **永不**索要 yt-dlp 或 curl（那是引擎的），一次普通播放永不索要 nc（只有 socket 动词
           要它；`--status` 机会性地用它做实时读，没有就降级成记录下来的值加 null）；队列动词

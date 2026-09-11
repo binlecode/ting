@@ -1427,13 +1427,24 @@ report "…parsed, not refused"             0 \
     "$(jq_in '.status=="not_playing"' "$ITEMS_FIXTURE" shell/ut-play --enqueue - -j)"
 
 # --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
-# verb over. Under the dead proxy this verb reaches its transport and fails with 2; a
-# version that had grown a yt-dlp call on this path (to fetch the title, say) would die 1 at
-# the dependency gate before any transport existed. The PATH guard further up is what stops
-# it passing vacuously on a machine with yt-dlp in /usr/bin.
-report "--parts needs no yt-dlp"          2 \
-    "$(env "PATH=$NODEP_PATH" "http_proxy=$NOPROXY" "https_proxy=$NOPROXY" \
-        shell/bili-resolve --parts -j -- "$BILI_ID" >/dev/null 2>&1; echo $?)"
+# verb over. Under the dead proxy this verb reaches its transport and fails with 2; a version
+# that had grown a yt-dlp call on this path (to fetch the title, say) would die at the
+# dependency gate on the bare PATH before any transport existed. The PATH guard further up is
+# what stops it passing vacuously on a machine with yt-dlp in /usr/bin.
+#
+# THE EXIT CODE ALONE NO LONGER SEPARATES THOSE TWO. A missing dependency exits 2 as well
+# (ARCH-cli-contract.md「退出码、TTY、依赖」), so `2` is the answer either way and an exit-code
+# check would pass for precisely the regression it exists to catch. What still separates them
+# is WHO SPOKE: the gate names the tool it wanted, a dead transport never does. So the value
+# compared is the code AND the shape of the message — one run, both facts.
+_parts_err=$(env "PATH=$NODEP_PATH" "http_proxy=$NOPROXY" "https_proxy=$NOPROXY" \
+    shell/bili-resolve --parts -j -- "$BILI_ID" 2>&1 >/dev/null)
+_parts_rc=$?
+case "$_parts_err" in
+*'required command not found'*) _parts_who=gate ;;
+*) _parts_who=transport ;;
+esac
+report "--parts needs no yt-dlp"          "2 transport" "$_parts_rc $_parts_who"
 rm -rf "$UT_STATE_DIR"
 unset UT_STATE_DIR
 

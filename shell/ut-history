@@ -131,7 +131,7 @@ RECORD_INPUT=""
 # 2. HELPERS
 # ==============================================================================
 
-die() {
+err() {
     local red='' reset=''
     case "${COLOR_MODE:-auto}" in
     always) red=$'\033[31m'; reset=$'\033[0m' ;;
@@ -139,11 +139,24 @@ die() {
     never) ;;
     esac
     echo "${red}Error:${reset} $*" >&2
+}
+
+die() {
+    err "$@"
     exit 1
 }
 
+# A missing tool is not a malformed call: `die` is exit 1 (the argv is wrong — fix it),
+# `die_dep` is exit 2 (the argv was fine; the machine is missing something no rewrite of the
+# argv will supply). An agent that read 1 here would loop editing its own parameters against
+# a wall. docs/ARCH-cli-contract.md「退出码、TTY、依赖」.
+die_dep() {
+    err "required command not found: $1"
+    exit 2
+}
+
 require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+    command -v "$1" >/dev/null 2>&1 || die_dep "$1"
 }
 
 validate_enum() {
@@ -536,6 +549,7 @@ Storage: $UT_STATE_DIR/history/<YYYY-MM>.jsonl
 
 Exit codes: 0 ok
             1 the call was malformed   (.reason: invalid_input)
+            2 a dependency is missing  (jq — stderr says which)
             4 the store said no        (.reason: corrupt)
   --clear on an empty log is 0 with removed:0 — the end state holds.
 

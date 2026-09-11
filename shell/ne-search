@@ -201,7 +201,7 @@ esac
 # 2. HELPERS
 # ==============================================================================
 
-die() {
+err() {
     local red='' reset=''
     case "${COLOR_MODE:-auto}" in
     always)
@@ -217,7 +217,20 @@ die() {
     never) ;;
     esac
     echo "${red}Error:${reset} $*" >&2
+}
+
+die() {
+    err "$@"
     exit 1
+}
+
+# A missing tool is not a malformed call: `die` is exit 1 (the argv is wrong — fix it),
+# `die_dep` is exit 2 (the argv was fine; the machine is missing something no rewrite of the
+# argv will supply). An agent that read 1 here would loop editing its own parameters against
+# a wall. docs/ARCH-cli-contract.md「退出码、TTY、依赖」.
+die_dep() {
+    err "required command not found: $1"
+    exit 2
 }
 
 is_non_negative_int() {
@@ -238,7 +251,7 @@ validate_enum() {
 
 require_cmd() {
     local cmd=$1
-    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+    command -v "$cmd" >/dev/null 2>&1 || die_dep "$cmd"
 }
 
 require_deps() {
@@ -663,7 +676,8 @@ playable on a free account and the split is sharp: an ARTIST NAME mostly hits th
 already asks the site for more than you asked for, up to three requests. Set
 NE_INCLUDE_VIP=1 to see the rest, labelled by access.
 
-Exit codes: 0 ok · 1 usage/validation · 2 the site did not answer usefully (see .reason)
+Exit codes: 0 ok · 1 usage/validation · 2 a missing dependency, or the site did
+            not answer usefully (see .reason)
 
 Requires openssl, which no other command in this suite needs: this site's search endpoint
 takes an encrypted payload and the plaintext one it used to serve is gone. It is a dependency

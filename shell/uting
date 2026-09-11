@@ -644,9 +644,18 @@ die() {
     exit 1
 }
 
+# A missing tool is not a malformed call: `die` is exit 1 (usage — the non-TTY refusal and a
+# bad config value both land there), `die_dep` is exit 2 (the call was fine; the machine is
+# missing something no rewrite of the call will supply). The nine headless verbs carry the
+# same pair — ten peers, no shared library. docs/ARCH-cli-contract.md「退出码、TTY、依赖」.
+die_dep() {
+    echo "uting: $1" >&2
+    exit 2
+}
+
 require_cmd() {
     for c in "$@"; do
-        command -v "$c" >/dev/null 2>&1 || die "requires '$c' (not found on PATH)"
+        command -v "$c" >/dev/null 2>&1 || die_dep "requires '$c' (not found on PATH)"
     done
 }
 
@@ -937,7 +946,7 @@ is_uint "$UT_RESOURCE_TICKS" && ((UT_RESOURCE_TICKS > 0)) || die "UT_RESOURCE_TI
 # TUI at the first keypress rather than at start-up. Any -U-capable variant passes —
 # BSD/openbsd nc, or ncat (resolve_nc_unix).
 require_cmd jq
-resolve_nc_unix || die "requires a unix-socket netcat: 'nc' with -U support, or 'ncat'" 
+resolve_nc_unix || die_dep "requires a unix-socket netcat: 'nc' with -U support, or 'ncat'"
 # The self-rendered menu reads keys from stdin and draws to stdout, so BOTH must be a real
 # terminal; refuse cleanly rather than hang/garble when piped (e.g. an agent).
 { [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use ${UT_DEFAULT_ENGINE}-search / ut-play headless"

@@ -198,7 +198,7 @@ esac
 # 2. HELPERS
 # ==============================================================================
 
-die() {
+err() {
     local red='' reset=''
     case "${COLOR_MODE:-auto}" in
     always)
@@ -214,7 +214,20 @@ die() {
     never) ;;
     esac
     echo "${red}Error:${reset} $*" >&2
+}
+
+die() {
+    err "$@"
     exit 1
+}
+
+# A missing tool is not a malformed call: `die` is exit 1 (the argv is wrong — fix it),
+# `die_dep` is exit 2 (the argv was fine; the machine is missing something no rewrite of the
+# argv will supply). An agent that read 1 here would loop editing its own parameters against
+# a wall. docs/ARCH-cli-contract.md「退出码、TTY、依赖」.
+die_dep() {
+    err "required command not found: $1"
+    exit 2
 }
 
 is_non_negative_int() {
@@ -235,7 +248,7 @@ validate_enum() {
 
 require_cmd() {
     local cmd=$1
-    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+    command -v "$cmd" >/dev/null 2>&1 || die_dep "$cmd"
 }
 
 require_deps() {
@@ -532,7 +545,8 @@ Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,c
   track/full on this site: a row IS one video, and anonymous extraction returns the
   whole timeline or no stream at all.
 
-Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
+Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagated
+            yt-dlp failure (see .reason)
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
