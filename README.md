@@ -27,9 +27,10 @@ ut-history --ls -n 20 -j               # machine: what was played, when, for how
 ## Status
 
 **Reference implementation.** This is a working shell suite that its author uses daily, published
-together with a design document that is longer than most of the code it describes. It is not
-packaged: there is no installer and no Homebrew formula, and none is planned
-(see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why — and for why a Go rewrite was ruled out).
+together with a design document that is longer than most of the code it describes. Since `v0.8.0`
+it is also tagged and installable from a tap (`brew install binlecode/actop/uting`) — what ships
+is these scripts, not a binary, so the Go rewrite stays ruled out
+(see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why).
 
 The document may be the more useful artifact. `docs/ARCHITECTURE.md` records things that are usually
 learned and then forgotten: East-Asian-width handling in a terminal renderer, DCS frame
@@ -183,8 +184,14 @@ cd uting
 ./shell/uting "lofi hip hop"     # or: ./shell/uting  and type a query
 ```
 
-For daily use, symlink onto your PATH. Each command goes under its own name — the suite ships
-no second spelling for anything:
+Or install the released version:
+
+```sh
+brew install binlecode/actop/uting
+```
+
+For daily use from a checkout, symlink onto your PATH. Each command goes under its own name —
+the suite ships no second spelling for anything:
 
 ```sh
 ln -s "$PWD/shell/uting"        ~/bin/uting
@@ -216,8 +223,9 @@ entry point reports the same number: it is declared once, in `VERSION`.
 That number is **semver over the CLI contract, not over the code**: the command names, their
 flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a
 renderer or a comment is not. While the suite is `0.y.z`, a breaking change bumps `y` and an
-addition bumps `z`; `1.0.0` is a promise this reference implementation does not make yet, and
-the packaging NO in `docs/ROADMAP.md` says what would change that.
+addition bumps `z`; `1.0.0` is a freeze promise this reference implementation does not make yet.
+It is not a distribution milestone — being installable says nothing about whether the contract has
+stopped moving, and the two were unhitched deliberately when the packaging decision reversed.
 
 ## Keys
 
