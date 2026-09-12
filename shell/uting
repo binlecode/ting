@@ -533,12 +533,13 @@ Menu options:
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
   --theme NAME  Palette: minimal (default) | mono | catppuccin | tokyonight | nord
-                | gruvbox | onedark | custom. Every theme = one signature accent,
-                nothing else hued; mono = gray hierarchy only, no hue. Community
-                themes emit 24-bit color when COLORTERM=truecolor, else ANSI-16
-                fallbacks. custom takes its accent from UT_ACCENT (below) and is
-                minimal when that is unset. Light/dark picks the theme's own light
-                variant (see YT_BG below).
+                | gruvbox | onedark | dracula | rosepine | everforest | kanagawa
+                | solarized | monokai | custom. Every theme = a signature accent
+                plus its own play/pause status hues; mono = gray hierarchy only,
+                no hue. Community themes emit 24-bit color when
+                COLORTERM=truecolor, else ANSI-16 fallbacks. custom takes its
+                accent from UT_ACCENT (below) and is minimal when that is unset.
+                Light/dark picks the theme's own light variant (see YT_BG below).
   -h        This help
   -V        Print the suite version
 
@@ -576,6 +577,10 @@ Keys (List View):
            returns to the search results                    (needs ut-playlist)
   d        remove the focused row from the playlist on screen, after a
            confirmation; stops the player when it was on that row;
+           playlist rows only                               (needs ut-playlist)
+  D        delete the entire playlist on screen, after a confirmation;
+           stops playback when active; playlist rows only   (needs ut-playlist)
+  R        rename the playlist on screen;
            playlist rows only                               (needs ut-playlist)
   h        open the listening log as the row source; h again
            returns to the search results                    (needs ut-history)
@@ -616,7 +621,8 @@ Environment:
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
   YT_LANG=en|zh    Language of the menu chrome. Default: zh under a zh* locale,
                    English otherwise (help text and errors are always English).
-  YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark|custom
+  YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark|dracula
+          |rosepine|everforest|kanagawa|solarized|monokai|custom
                    Palette family (same as --theme; default: minimal).
   UT_ACCENT        The custom palette's accent, one of: 0xRRGGBB (24-bit, needs
                    COLORTERM=truecolor), an SGR foreground code 30-37 or 90-97, or
@@ -785,7 +791,7 @@ SORT_FIELD="$UT_SORT_FIELD"   # -s flag overrides. Runtime-mutable: o rotates it
 # GATES read this constant; the comma form the message wants is derived rather than rewritten.
 # usage()'s two prose lists stay literal — they are English sentences, not data — and are
 # held to this constant by a check in tests/contract.sh instead of by memory.
-THEME_NAMES="minimal mono catppuccin tokyonight nord gruvbox onedark custom"
+THEME_NAMES="minimal mono catppuccin tokyonight nord gruvbox onedark dracula rosepine everforest kanagawa solarized monokai custom"
 THEME_NAMES_CSV=""
 for _tn in $THEME_NAMES; do THEME_NAMES_CSV="${THEME_NAMES_CSV:+$THEME_NAMES_CSV, }$_tn"; done
 unset _tn
@@ -980,23 +986,40 @@ resolve_nc_unix || die_dep "requires a unix-socket netcat: 'nc' with -U support,
 # chrome follows the user's terminal theme, never imposes its own. The community themes
 # (catppuccin/tokyonight/nord/gruvbox/onedark) emit 24-bit RGB only when the terminal
 # advertises COLORTERM=truecolor; otherwise they fall back to the nearest ANSI-16 index.
-# Every theme passes through the same minimalist filter: hierarchy by gray levels
-# (dim → normal → bold) and hue is ONE accent (C_CYAN) — nothing else carries color.
-# The play status was the last holdout: it used to print in a second hue (a per-theme
-# C_GREEN, with C_YELLOW for paused), which read as "not this theme" wherever the accent
-# was not green — gruvbox orange chrome beside an olive status. Now both states take the
-# accent and the GLYPH carries the state (● playing / ❚❚ paused, the latter dimmed), so
-# the card matches its own rails and marker in every palette. Both second-hue variables
-# (C_GREEN, C_YELLOW) are gone outright — a variable nothing prints is a trap, not a
-# spare, and one kept only so a stale read stays harmless is a rationale with no read
-# left to defend. Their per-theme hexes are in git history if a second hue is ever
-# wanted back. C_MARK is the selection/filter marker (bold + accent). Light/dark
-# (YT_BG=auto → $COLORFGBG → OSC 11 query → dark) picks the theme's own light variant
-# (mocha/latte, night/day, polar-night/snow-storm, gruvbox dark/light, onedark/one-light);
-# for minimal it swaps cyan for blue, readable on white.
+# Hierarchy is by gray level (dim → normal → bold), and hue is THREE roles: the accent
+# (C_CYAN — header, marker, rails) plus the two play-state hues, C_PLAY and C_PAUSE.
+#
+# THE SECOND HUE CAME BACK, and the reason the first attempt at it failed is worth keeping.
+# It used to be a per-theme C_GREEN/C_YELLOW pair, and it read as "not this theme" wherever
+# the accent was not green — gruvbox orange chrome beside an olive status. So both states
+# were collapsed onto the accent and the GLYPH was left to carry them (▶ / ❚❚). That worked,
+# and it cost the screen its only other colour: one hue over the whole frame, with 95% of it
+# gray. The fix was never "no second hue" — it was that an OFF-PALETTE green is not this
+# theme's green. Each palette now names its own, from its own official colours (catppuccin's
+# green/yellow, rose-pine's pine/gold, kanagawa's springGreen/carpYellow…), so the status
+# reads as part of the theme instead of beside it.
+#
+# AND THE LIGHTNESS IS NOT DECLARED — it is computed against the ground (tone_for_bg). That
+# is not polish: measured, several of these palettes have NO legible green on their own light
+# variant. Nord's aurora green on Snow Storm is 1.8:1 and its yellow 1.4:1; monokai, which has
+# no official light variant at all, is 1.6:1 and 1.4:1 on white. A table of hexes cannot know
+# that, because a hex never looks at what it is drawn on — the same thing row_hl_from_accent
+# says about grounds. So the table declares the HUE and the ground decides the lightness.
+#
+# The ACCENT is NOT run through that, and stays exactly the hex each theme published. It is
+# the one colour the theme's own authors chose for their own ground, and re-lighting it would
+# be overriding them; the shipped accents measure 2.7:1 (everforest light) to 10.5:1 and that
+# spread is the themes', not ours. C_MARK is the selection/filter marker (bold + accent).
+# Light/dark (YT_BG=auto → $COLORFGBG → OSC 11 query → dark) picks the theme's own light
+# variant (mocha/latte, night/day, polar-night/snow-storm, gruvbox dark/light,
+# onedark/one-light, dracula/alucard, rose-pine/dawn, everforest dark/light, kanagawa
+# wave/lotus); solarized and monokai are the two that keep ONE set across both grounds, each
+# for its own reason, noted at their arms. For minimal it swaps cyan for blue, readable on
+# white, and play/pause take ANSI 32/33 — on the palette whose whole property is that the
+# user's terminal owns what a colour is, green is theirs to define too.
 # --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
 # off under tmux (see display_menu).
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''; C_PLAY=''; C_PAUSE=''
 # The playing row's ground. Reverse video is an ATTRIBUTE, not a hue, so THIS value is set
 # unconditionally and survives --color never / NO_COLOR / a pipe: a terminal with colour
 # turned off still has to be able to say which row is playing, and a screen that cannot is
@@ -1083,6 +1106,58 @@ row_hl_from_accent() {
     if [[ -n "$BG_R" ]]; then zr=$BG_R; zg=$BG_G; zb=$BG_B; fi
     printf -v C_ROW_HL '\033[48;2;%d;%d;%dm' \
         $((zr + (r - zr) * k / 100)) $((zg + (g - zg) * k / 100)) $((zb + (b - zb) * k / 100))
+}
+
+# ── The status hues: the palette names the HUE, the ground sets the lightness ───────────
+# C_PLAY and C_PAUSE are the only colours on this screen that are COMPUTED from a declared
+# value rather than printed as declared, and the measurement that forced it is in the palette
+# note above: nord's own green is 1.8:1 on nord's own light variant, monokai's is 1.6:1 on
+# white. Those are not bad choices by their authors — those palettes were drawn for a dark
+# ground, and their green was never meant to sit on paper. A second hue that cannot be seen
+# is worse than the single hue it replaced, so the hex declares which green this theme means
+# and this walks its lightness until it clears the floor against the ground actually in use.
+#
+# SAME GROUND AS EVERY OTHER MIX HERE: BG_R/G/B from detect_bg's OSC 11 reply when the
+# terminal answered, the assumed black/white when it would not. No new query, no new
+# dependency — and on a terminal whose real background is not the theme's own (the common
+# case: nord's palette on a pure-black terminal), this is measuring the truth rather than
+# the theme author's assumption.
+#
+# DARKENING IS A PURE MULTIPLY (x*92/100 on all three channels), which holds the ratios
+# between channels and therefore the hue EXACTLY — the light path is the one that matters,
+# since it is where every failure was. Lightening mixes toward white instead, which does
+# wash the hue out; it is the rarer path (one theme, one step: rose-pine's pine on its own
+# near-black ground) and there is no way to raise a channel already at 255 without it.
+#
+# THE LUMINANCE IS A GAMMA-2 INTEGER PROXY, not WCAG's ((c+0.055)/1.055)^2.4 — that curve
+# needs floating point, and bash has none. Checked against the real formula across all 13
+# palettes on both grounds, a proxy floor of 3.50 lands every derived colour between 3.4:1
+# and 4.5:1 true, which is the accuracy this needs: the floor is a legibility threshold, not
+# a published number. Worst case is 8 iterations of integer multiply, zero forks, and it runs
+# twice per set_theme — at startup and on the t key.
+TONE_FLOOR=350          # contrast ratio x100, in proxy units
+LUM8=0
+lum8() { LUM8=$(( (2126 * ($1 * $1 / 255) + 7152 * ($2 * $2 / 255) + 722 * ($3 * $3 / 255)) / 255 )); }
+TONE_R=0; TONE_G=0; TONE_B=0
+tone_for_bg() {
+    local r=$1 g=$2 b=$3 zr zg zb lg lc hi lo i=0
+    if [[ "$BG" == light ]]; then zr=255; zg=255; zb=255; else zr=0; zg=0; zb=0; fi
+    if [[ -n "$BG_R" ]]; then zr=$BG_R; zg=$BG_G; zb=$BG_B; fi
+    lum8 "$zr" "$zg" "$zb"; lg=$LUM8
+    while ((i < 40)); do
+        lum8 "$r" "$g" "$b"; lc=$LUM8
+        if ((lc > lg)); then hi=$lc; lo=$lg; else hi=$lg; lo=$lc; fi
+        (( (hi + 500) * 100 / (lo + 500) >= TONE_FLOOR )) && break
+        if ((lg > lc)); then
+            r=$((r * 92 / 100)); g=$((g * 92 / 100)); b=$((b * 92 / 100))
+            ((r == 0 && g == 0 && b == 0)) && break
+        else
+            r=$((r + (255 - r) * 8 / 100)); g=$((g + (255 - g) * 8 / 100)); b=$((b + (255 - b) * 8 / 100))
+            ((r > 247 && g > 247 && b > 247)) && break
+        fi
+        i=$((i + 1))
+    done
+    TONE_R=$r; TONE_G=$g; TONE_B=$b
 }
 
 # ── The keycap's ground: a SURFACE, and therefore the one ground with no hue ────────────
@@ -1175,18 +1250,25 @@ set_theme() {
     # The keycap ground follows the same rule, and it is resolved at the END of this function
     # rather than here: it depends on the theme and the background, not on the accent.
     C_KEYCAP=''
-    # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
-    # same minimalist filter as minimal: ONE signature accent, gray hierarchy for
-    # everything else. Hexes are the official palettes; light/dark
-    # is the theme's own light variant (catppuccin mocha/latte, tokyonight night/day,
-    # nord polar-night/snow-storm, gruvbox dark/light, onedark/one-light).
+    # The eleven community themes pass through the same filter: a signature accent, that
+    # palette's OWN green and yellow for the two play states, gray hierarchy for everything
+    # else. Hexes are the official palettes; light/dark is the theme's own light variant
+    # (catppuccin mocha/latte, tokyonight night/day, nord polar-night/snow-storm, gruvbox
+    # dark/light, onedark/one-light, dracula/alucard, rose-pine/dawn, everforest dark/light,
+    # kanagawa wave/lotus). The accent prints as declared; play/pause go through tone_for_bg.
     local acc_r acc_g acc_b a16
+    local play_r play_g play_b p16
+    local paus_r paus_g paus_b q16
     case "$THEME" in
     minimal)
         accent_minimal
+        C_PLAY=$'\033[32m'; C_PAUSE=$'\033[33m'
         ;;
     mono)
-        C_CYAN=''; C_MARK=$'\033[1m'
+        # mono's promise is bold and dim, and that is exactly enough to separate two states:
+        # the steady one is bold, the held one is dim. A hue here would be the one thing the
+        # name rules out.
+        C_CYAN=''; C_MARK=$'\033[1m'; C_PLAY=$'\033[1m'; C_PAUSE=$'\033[2m'
         ;;
     # The eighth name, in every way the peer of the other seven — no override layer above the
     # current theme, because that would make the t key a silent no-op: seven names cycling
@@ -1206,27 +1288,110 @@ set_theme() {
         else
             accent_minimal
         fi
+        # custom owns exactly one colour — its accent — and inventing a green to go with an
+        # arbitrary user hue would be guessing at a palette that does not exist. The indices
+        # are the honest answer for the same reason minimal takes them: on the one palette
+        # the user defines, what green IS stays the terminal's to say.
+        C_PLAY=$'\033[32m'; C_PAUSE=$'\033[33m'
         ;;
-    catppuccin | tokyonight | nord | gruvbox | onedark)
+    catppuccin | tokyonight | nord | gruvbox | onedark | dracula | rosepine | everforest | kanagawa | solarized | monokai)
         case "$THEME:$BG" in
-        catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; a16=35 ;;
-        catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; a16=35 ;;
-        tokyonight:dark)  acc_r=122; acc_g=162; acc_b=247; a16=34 ;;
-        tokyonight:light) acc_r=46;  acc_g=125; acc_b=233; a16=34 ;;
-        nord:dark)        acc_r=136; acc_g=192; acc_b=208; a16=36 ;;
-        nord:light)       acc_r=94;  acc_g=129; acc_b=172; a16=36 ;;
-        gruvbox:dark)     acc_r=214; acc_g=93;  acc_b=14;  a16=33 ;;
-        gruvbox:light)    acc_r=175; acc_g=58;  acc_b=3;   a16=31 ;;
-        onedark:dark)     acc_r=97;  acc_g=175; acc_b=239; a16=34 ;;
-        onedark:light)    acc_r=64;  acc_g=120; acc_b=242; a16=34 ;;
+        catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; a16=35
+                          play_r=166; play_g=227; play_b=161; p16=32
+                          paus_r=249; paus_g=226; paus_b=175; q16=33 ;;
+        catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; a16=35
+                          play_r=64;  play_g=160; play_b=43;  p16=32
+                          paus_r=223; paus_g=142; paus_b=29;  q16=33 ;;
+        tokyonight:dark)  acc_r=122; acc_g=162; acc_b=247; a16=34
+                          play_r=158; play_g=206; play_b=106; p16=32
+                          paus_r=224; paus_g=175; paus_b=104; q16=33 ;;
+        tokyonight:light) acc_r=46;  acc_g=125; acc_b=233; a16=34
+                          play_r=88;  play_g=117; play_b=57;  p16=32
+                          paus_r=140; paus_g=108; paus_b=62;  q16=33 ;;
+        # Nord publishes ONE aurora set, used on both the Polar Night and the Snow Storm
+        # ground; #a3be8c on Snow Storm is the 1.8:1 that tone_for_bg exists for.
+        nord:dark | nord:light)
+                          acc_r=136; acc_g=192; acc_b=208; a16=36
+                          play_r=163; play_g=190; play_b=140; p16=32
+                          paus_r=235; paus_g=203; paus_b=139; q16=33
+                          [[ "$BG" == light ]] && { acc_r=94; acc_g=129; acc_b=172; } ;;
+        gruvbox:dark)     acc_r=214; acc_g=93;  acc_b=14;  a16=33
+                          play_r=184; play_g=187; play_b=38;  p16=32
+                          paus_r=250; paus_g=189; paus_b=47;  q16=33 ;;
+        gruvbox:light)    acc_r=175; acc_g=58;  acc_b=3;   a16=31
+                          play_r=121; play_g=116; play_b=14;  p16=32
+                          paus_r=181; paus_g=118; paus_b=20;  q16=33 ;;
+        onedark:dark)     acc_r=97;  acc_g=175; acc_b=239; a16=34
+                          play_r=152; play_g=195; play_b=121; p16=32
+                          paus_r=229; paus_g=192; paus_b=123; q16=33 ;;
+        onedark:light)    acc_r=64;  acc_g=120; acc_b=242; a16=34
+                          play_r=80;  play_g=161; play_b=79;  p16=32
+                          paus_r=193; paus_g=132; paus_b=1;   q16=33 ;;
+        # dracula's light variant is ALUCARD — the Dracula project's own, not a guess at one.
+        dracula:dark)     acc_r=189; acc_g=147; acc_b=249; a16=35
+                          play_r=80;  play_g=250; play_b=123; p16=32
+                          paus_r=241; paus_g=250; paus_b=140; q16=33 ;;
+        dracula:light)    acc_r=100; acc_g=74;  acc_b=201; a16=35
+                          play_r=20;  play_g=113; play_b=10;  p16=32
+                          paus_r=132; paus_g=110; paus_b=21;  q16=33 ;;
+        # rose-pine has no green AT ALL — the palette is love/gold/rose/pine/foam/iris. Pine
+        # is what it uses where other themes use green, so pine is what plays here, and p16
+        # follows it to cyan rather than pretending an ANSI green was ever the fallback.
+        rosepine:dark)    acc_r=235; acc_g=188; acc_b=186; a16=35
+                          play_r=49;  play_g=116; play_b=143; p16=36
+                          paus_r=246; paus_g=193; paus_b=119; q16=33 ;;
+        rosepine:light)   acc_r=180; acc_g=99;  acc_b=122; a16=35
+                          play_r=40;  play_g=105; play_b=131; p16=36
+                          paus_r=234; paus_g=157; paus_b=52;  q16=33 ;;
+        # everforest's ACCENT is the green, so the play state takes aqua: a second green
+        # beside a green accent says nothing, which is the whole failure this design is
+        # correcting, only in reverse.
+        everforest:dark)  acc_r=167; acc_g=192; acc_b=128; a16=32
+                          play_r=131; play_g=192; play_b=146; p16=36
+                          paus_r=230; paus_g=152; paus_b=117; q16=33 ;;
+        everforest:light) acc_r=141; acc_g=161; acc_b=1;   a16=32
+                          play_r=53;  play_g=167; play_b=124; p16=36
+                          paus_r=245; paus_g=125; paus_b=0;   q16=33 ;;
+        kanagawa:dark)    acc_r=228; acc_g=104; acc_b=118; a16=31
+                          play_r=152; play_g=187; play_b=108; p16=32
+                          paus_r=230; paus_g=195; paus_b=132; q16=33 ;;
+        kanagawa:light)   acc_r=200; acc_g=64;  acc_b=83;  a16=31
+                          play_r=111; play_g=137; play_b=78;  p16=32
+                          paus_r=204; paus_g=109; paus_b=0;   q16=33 ;;
+        # Solarized's thesis is that ONE accent set works on both grounds — only the base
+        # tones flip. Giving it a light variant would be contradicting the theme, not
+        # completing it, so both grounds get the same hexes and tone_for_bg does the rest.
+        solarized:dark | solarized:light)
+                          acc_r=42;  acc_g=161; acc_b=152; a16=36
+                          play_r=133; play_g=153; play_b=0;   p16=32
+                          paus_r=181; paus_g=137; paus_b=0;   q16=33 ;;
+        # monokai has NO official light variant, and its signature yellow (#e6db74) is 1.4:1
+        # on white — unusable as an accent, and not something tone_for_bg is allowed to fix
+        # since the accent prints as declared. So the accent is monokai's pink on both
+        # grounds: it is equally a monokai signature, it is 10:1 on monokai's own ground and
+        # 3.8:1 on white, and holding ONE hue across both grounds is what every other theme
+        # here does — they shift lightness, never hue.
+        monokai:dark | monokai:light)
+                          acc_r=249; acc_g=38;  acc_b=114; a16=35
+                          play_r=166; play_g=226; play_b=46;  p16=32
+                          paus_r=253; paus_g=151; paus_b=31;  q16=33 ;;
         esac
         if ((COLORTERM_TC)); then
             printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
             printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
             row_hl_from_accent "$acc_r" "$acc_g" "$acc_b"
+            tone_for_bg "$play_r" "$play_g" "$play_b"
+            printf -v C_PLAY '\033[38;2;%d;%d;%dm' "$TONE_R" "$TONE_G" "$TONE_B"
+            tone_for_bg "$paus_r" "$paus_g" "$paus_b"
+            printf -v C_PAUSE '\033[38;2;%d;%d;%dm' "$TONE_R" "$TONE_G" "$TONE_B"
         else
+            # No tone_for_bg on this rung, and it is not an omission: what 31-36 render as is
+            # the user's terminal to decide, so there is no colour here to re-light — the
+            # same reason accent_from_spec refuses to compute a "nearest ANSI-16".
             C_CYAN=$'\033['"$a16"m
             C_MARK=$'\033[1;'"$a16"m
+            C_PLAY=$'\033['"$p16"m
+            C_PAUSE=$'\033['"$q16"m
         fi
         ;;
     esac
@@ -1830,6 +1995,9 @@ set_ui_lang() {
         S_PL_ABSENT="未安装 ut-playlist"; S_PL_SEARCH_ONLY="该键只在搜索结果里可用（按 n 重新搜索）"
         S_PL_LIST_ONLY="该键只在播放列表里可用（按 b 打开一个）"
         S_PL_RM_KEY="移出"; S_PL_RM_HEAD="移出列表"; S_PL_RM_CONFIRM="确认？(y/N)"; S_PL_REMOVED="已移出"
+        S_PL_DEL_KEY="删列表"; S_PL_DEL_HEAD="删除播放列表"; S_PL_DEL_CONFIRM="确认删除该列表及其全部曲目？(y/N)"; S_PL_DELETED="已删除列表"
+        S_PL_RENAME_KEY="重命名"; S_PL_RENAME_PROMPT="重命名列表名称（Esc 取消）"; S_PL_RENAMED="已重命名"
+        S_PL_EMPTY_DEL_CONFIRM="该列表为空，是否彻底删除？(y/N)"
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
@@ -1872,6 +2040,9 @@ set_ui_lang() {
         S_PL_ABSENT="ut-playlist is not installed"; S_PL_SEARCH_ONLY="that key needs search results (press n to search)"
         S_PL_LIST_ONLY="that key needs a playlist (press b to open one)"
         S_PL_RM_KEY="remove"; S_PL_RM_HEAD="Remove from"; S_PL_RM_CONFIRM="Confirm? (y/N)"; S_PL_REMOVED="Removed from"
+        S_PL_DEL_KEY="del-list"; S_PL_DEL_HEAD="Delete playlist"; S_PL_DEL_CONFIRM="Delete playlist and all tracks? (y/N)"; S_PL_DELETED="Deleted playlist"
+        S_PL_RENAME_KEY="rename"; S_PL_RENAME_PROMPT="New name for playlist (Esc cancels)"; S_PL_RENAMED="Renamed to"
+        S_PL_EMPTY_DEL_CONFIRM="Playlist is empty, delete it? (y/N)"
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
@@ -3880,9 +4051,16 @@ player_check_ready() {
 # THREE states, and the choice of glyph/label/colour lives here rather than at the print
 # site. It was written for two views and outlived one of them; the glyph that means "playing"
 # still comes in as an argument (▶ for the banner), because the state and the glyph are two
-# facts and only one of them is this function's. Loading takes the fetch spinner's frames (GL_SPIN) and the dim accent:
-# same visual language as the search that got us here, and dim because it is not the steady
-# state. Colour never carries the state (one accent per palette); the glyph does.
+# facts and only one of them is this function's.
+#
+# This is the ONLY reader of C_PLAY and C_PAUSE, and that is the point: two states, one place
+# that says what they look like. The glyph keeps carrying them too (▶ / ❚❚) — the hue is a
+# second channel for the same fact, not a replacement, so a colourless session loses nothing.
+#
+# LOADING stays on the DIM ACCENT rather than taking a third hue. It is not a third state of
+# the player, it is the search still finishing — same visual language as the fetch that got us
+# here, and dim because it is not steady. A third colour would claim a distinction the palette
+# has not got, and there is nowhere in the three-role system it would come from.
 PS_ICON=""; PS_LABEL=""; PS_COLOR=""
 play_state_marks() {
     if ((CURRENT_PLAY_LOADING)); then
@@ -3892,11 +4070,14 @@ play_state_marks() {
     elif ((CURRENT_PLAY_PAUSED)); then
         PS_ICON="$GL_PAUSE"
         PS_LABEL="$S_PAUSED"
-        PS_COLOR="$C_DIM$C_CYAN"
+        # NOT dimmed on top of C_PAUSE. The dim was doing the "not the steady state" job back
+        # when both states printed the same accent and only the glyph separated them; the hue
+        # says it now, and dimming it would mute the one thing that was just added.
+        PS_COLOR="$C_PAUSE"
     else
         PS_ICON="$1"
         PS_LABEL="$S_PLAYING"
-        PS_COLOR="$C_CYAN"
+        PS_COLOR="$C_PLAY"
     fi
 }
 
@@ -4622,7 +4803,7 @@ display_list_menu() {
             # d is the one store key that is not offered everywhere, for the same reason `e`
             # is not offered on a single-engine install: it can only act on a row a playlist
             # owns, so anywhere else it would spend a cell of a measured block to say no.
-            keys_full && nav_items+=("a	$S_PL_ADD" "d	$S_PL_RM_KEY")
+            keys_full && nav_items+=("a	$S_PL_ADD" "d	$S_PL_RM_KEY" "D	$S_PL_DEL_KEY" "R	$S_PL_RENAME_KEY")
             nav_items+=("b	$S_BACK_SEARCH")
         else
             keys_full && nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
@@ -4716,10 +4897,10 @@ display_list_menu() {
 
     # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        # Accent, not a status hue: the banner's state colour is the same accent the
-        # marker and rails use, so it reads as this palette (see the palette block). The
-        # glyph is what says which state — dimmed for paused, a turning quadrant while the
-        # stream is still coming up. play_state_marks owns that choice.
+        # A status hue, drawn from THIS palette: play and pause take the theme's own green
+        # and yellow (see the palette block), so the banner still reads as this theme rather
+        # than as a stock green bolted onto it. The glyph says the state too — a turning
+        # quadrant while the stream is still coming up. play_state_marks owns both choices.
         play_state_marks "$GL_PLAY"
         local p_icon="$PS_ICON" p_label="$PS_LABEL" p_color="$PS_COLOR"
         # Pure status line: shares ONE line with a variable-length title, so measure the
@@ -5904,6 +6085,75 @@ delete_from_playlist() {
     reload_playlist "$name"
 }
 
+# Delete the entire playlist on screen, after a confirmation.
+# Calls `ut-playlist --del`, stops the player if any track in the playlist is currently playing,
+# and returns to the search view.
+delete_current_playlist() {
+    playlist_only || return 0
+    have_store || return 0
+    local name="$PLAYLIST_NAME" rc=0 msg errfile url playing=0
+    layout_cols
+    local w=$((LAYOUT_COLS - 4))
+    ((w < LAYOUT_MIN_BUDGET)) && w=$LAYOUT_MIN_BUDGET
+    printf '\n%s%s%s %s %s (%d %s)\n' "$C_BOLD" "$S_PL_DEL_HEAD" "$C_RESET" "$GL_ARROW" "$name" "$NUM_ENTRIES" "$S_PL_ITEMS"
+    confirm_key "$S_PL_DEL_CONFIRM" || return 0
+
+    if [[ -n "$CURRENT_PLAY_ID" && -n "$CURRENT_PLAY_URL" ]] && ((${#urls[@]} > 0)); then
+        for url in "${urls[@]}"; do
+            handle_key "$CURRENT_PLAY_URL"
+            local pk="$HANDLE_KEY"
+            handle_key "$url"
+            if [[ -n "$pk" && "$pk" == "$HANDLE_KEY" ]]; then
+                playing=1
+                break
+            fi
+        done
+    fi
+    if ((playing)); then stop_current_playback; fi
+
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    "$PLAYLIST_BIN" --del "$name" -j >/dev/null 2>"$errfile" || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        [[ "$msg" == *[![:space:]]* ]] || msg="$S_PL_FAILED"
+        store_notice "$S_PL_ACT:" "$msg"
+        return 0
+    fi
+    store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"
+    back_to_search
+}
+
+# Rename the playlist currently on screen.
+# Prompts for the new name, calls `ut-playlist --rename`, and on success updates PLAYLIST_NAME
+# and QUERY_LABEL in place without reloading tracks from disk.
+rename_current_playlist() {
+    playlist_only || return 0
+    have_store || return 0
+    local old_name="$PLAYLIST_NAME" new_name rc=0 msg errfile
+    prompt_name "$S_PL_RENAME_PROMPT" || return 0
+    new_name="$PROMPT_NAME"
+    [[ -n "$new_name" ]] || return 0
+    if [[ "$new_name" == "$old_name" ]]; then return 0; fi
+
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    "$PLAYLIST_BIN" --rename "$old_name" "$new_name" -j >/dev/null 2>"$errfile" || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        [[ "$msg" == *[![:space:]]* ]] || msg="$S_PL_FAILED"
+        store_notice "$S_PL_ACT:" "$msg"
+        return 0
+    fi
+    PLAYLIST_NAME="$new_name"
+    QUERY_LABEL="$new_name"
+    store_notice "$S_PL_ACT:" "$S_PL_RENAMED $GL_ARROW $new_name"
+}
+
 # Re-open the list after it has CHANGED under us, keeping the user where they were. The
 # re-fetch IS open_playlist (the stash it takes no-ops on rows that already belong to a
 # store), so there is no second copy of the show + build + load sequence; the one thing this
@@ -5918,6 +6168,12 @@ delete_from_playlist() {
 reload_playlist() {
     local name=$1 keep=$selected
     if ! open_playlist "$name"; then
+        if [[ "$PL_SHOW_COUNT" == "0" ]]; then
+            if confirm_key "$S_PL_EMPTY_DEL_CONFIRM"; then
+                "$PLAYLIST_BIN" --del "$name" -j >/dev/null 2>&1
+                store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"
+            fi
+        fi
         back_to_search
         return 0
     fi
@@ -6132,7 +6388,15 @@ browse_playlists() {
         return 0
     fi
     pick_playlist "$PL_LS_JSON" "$S_PL_OPEN" "$S_PL_PROMPT_OPEN" || { display_menu "$page_index"; return 0; }
-    open_playlist "$PROMPT_NAME" || return 0
+    if ! open_playlist "$PROMPT_NAME"; then
+        if [[ "$PL_SHOW_COUNT" == "0" ]]; then
+            if confirm_key "$S_PL_EMPTY_DEL_CONFIRM"; then
+                "$PLAYLIST_BIN" --del "$PROMPT_NAME" -j >/dev/null 2>&1
+                store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $PROMPT_NAME"
+            fi
+        fi
+        return 0
+    fi
 }
 
 have_history() {
@@ -7697,7 +7961,9 @@ while true; do
     t | T) cycle_theme ;;     # cycle palette family live
     a | A) add_to_playlist ;; # add the focused row to a playlist
     b | B) browse_playlists ;;# open a stored playlist as the row source
-    d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
+    d) delete_from_playlist ;;        # remove the focused row from the playlist on screen
+    D) delete_current_playlist ;;     # delete the entire playlist on screen
+    R) rename_current_playlist ;;     # rename the playlist on screen
     # The three row sources say "did not open" with 1 — an empty log, a one-part video, a
     # video with no chapters, and every fetch that failed — and each of those paths has
     # already printed its notice and waited on a key. Without `|| true` set -e reads that 1

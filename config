@@ -104,7 +104,15 @@ UT_LOOP_MODE=off                    # off|seq|one: what happens when a track end
                                     # in — a queue of ten looks the same to the player
                                     # whether it came from seq or from ten presses of +
 UT_LOOP_CYCLE=off seq one           # the order the r key steps through
-UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark mono   # the t key
+                                    # Ordered so consecutive steps LAND SOMEWHERE ELSE: the
+                                    # four blues (tokyonight, nord, onedark, plus minimal's
+                                    # own cyan) are spread apart rather than run together,
+                                    # which is what made the old order read as one theme
+                                    # pressed seven times. custom is not here — it is a
+                                    # legal name, but cycling onto it lands on whatever
+                                    # UT_ACCENT says, and for most configs that is minimal
+                                    # again, a step that changes nothing.
+UT_THEME_CYCLE=minimal catppuccin tokyonight gruvbox rosepine nord kanagawa everforest onedark monokai solarized dracula mono   # the t key
 UT_RESOURCE=1                       # 0 = no cpu/ram readout for the playing player. The
                                     # readout is the player's own PROCESS GROUP (wrapper +
                                     # mpv), not the whole machine, and draws only while
@@ -185,6 +193,7 @@ NE_INCLUDE_VIP=0                    # 1 = ne-search also returns rows whose acce
 # ── not settable here ───────────────────────────────────────────────────────────────────
 # UT_CONFIG relocates the user config file, so it can only come from the environment, and
 # UT_DEFAULTS — this file's own path — is not settable at all: each entry point derives it
-# from its resolved location. YT_IPC_SOCK, YT_DETACHED, YT_PLAYER_ID and YT_DETACHED_LOG are
-# set by the player for its own detached child; a file-level value would aim every player at
-# one socket. All six are refused if written here.
+# from its resolved location. UT_VERSION is the VERSION line read in from the root — what
+# `--version` answers is not a setting. YT_IPC_SOCK, YT_DETACHED, YT_PLAYER_ID and
+# YT_DETACHED_LOG are set by the player for its own detached child; a file-level value would
+# aim every player at one socket. All seven are refused if written here.

@@ -512,45 +512,6 @@ container_id() {
     printf '%s' "${seg#am}"
 }
 
-normalize_target() {
-    local t=$1 host
-    case "$t" in
-    http://* | https://*)
-        host=$(url_host "$t")
-        is_own_host "$host" ||
-            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
-        TARGET_URL="$t"
-        ;;
-    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
-        TARGET_URL="https://$t"
-        ;;
-    BV*)
-        [[ "$t" =~ ^BV[A-Za-z0-9]{10}$ ]] ||
-            die "'$t' is not a BV id (expected BV followed by 10 characters)"
-        TARGET_URL="https://www.bilibili.com/video/$t"
-        ;;
-    av[0-9]*)
-        [[ "$t" =~ ^av[0-9]+$ ]] ||
-            die "'$t' is not a Bilibili handle (expected a BV id, an av id, or a URL)"
-        TARGET_URL="https://www.bilibili.com/video/$t"
-        ;;
-    am[0-9]*)
-        die "'$t' is an audio menu — use --items to list its tracks"
-        ;;
-    *)
-        die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
-        ;;
-    esac
-
-    local menu_id
-    menu_id=$(container_id "$TARGET_URL")
-    if [[ -n "$menu_id" ]]; then
-        die "'$t' is an audio menu — use --items to list its tracks"
-    fi
-
-    parse_start_seconds "$TARGET_URL"
-}
-
 # The ?t= seconds a handle carries, floored to a whole second, or "" when it carries none.
 #
 # This engine parses the timestamp ITSELF, and that asymmetry with yt-resolve is measured,
@@ -588,6 +549,35 @@ parse_start_seconds() {
     TARGET_START=${v%%.*}
 }
 
+# The part number carried in ?p=N, or empty when N <= 1 or missing.
+url_part_number() {
+    local u=$1 q="" p=""
+    case "$u" in
+    *\?*) q="${u#*\?}" ;;
+    esac
+    q="${q%%#*}"
+    case "&$q" in
+    *[\&]p=*)
+        p="${q##*p=}"
+        p="${p%%&*}"
+        ;;
+    esac
+    if [[ "$p" =~ ^[0-9]+$ ]] && ((p > 1)); then
+        printf '%s' "$p"
+    fi
+}
+
+# An audio single handle (/audio/au<digits>), or empty.
+url_audio_id() {
+    local u="${1%%#*}"
+    u="${u%%\?*}"
+    u="${u%/}"
+    local seg="${u##*/}"
+    if [[ "$seg" =~ ^au[0-9]+$ ]]; then
+        printf '%s' "$seg"
+    fi
+}
+
 # The BV/av id inside a normalised watch URL, or empty when it carries none.
 #
 # `--parts` is the one verb here whose input grammar is NARROWER than stream resolution's:
@@ -623,6 +613,81 @@ target_id() {
         [[ "$seg" =~ ^(BV[A-Za-z0-9]{10}|av[0-9]+)$ ]] || seg=""
     fi
     printf '%s' "$seg"
+}
+
+# A handle is either a URL or one of this site's two id spellings.
+# Every accepted handle collapses to its canonical form:
+#   - Video: `https://www.bilibili.com/video/BV...` (or with `?p=N` when N > 1)
+#   - Audio track: `https://www.bilibili.com/audio/au...`
+#   - Short link: `https://b23.tv/...` (query stripped)
+#
+# All tracking parameters (spm_id_from, vd_source, share_source, etc.) are stripped,
+# keeping persistent stores and history records idempotent across copy-pasting and searching.
+normalize_target() {
+    local t=$1 host vid part au_id
+    case "$t" in
+    http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
+        ;;
+    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
+        t="https://$t"
+        ;;
+    BV*)
+        [[ "$t" =~ ^BV[A-Za-z0-9]{10}$ ]] ||
+            die "'$t' is not a BV id (expected BV followed by 10 characters)"
+        TARGET_URL="https://www.bilibili.com/video/$t"
+        return 0
+        ;;
+    av[0-9]*)
+        [[ "$t" =~ ^av[0-9]+$ ]] ||
+            die "'$t' is not a Bilibili handle (expected a BV id, an av id, or a URL)"
+        TARGET_URL="https://www.bilibili.com/video/$t"
+        return 0
+        ;;
+    am[0-9]*)
+        die "'$t' is an audio menu — use --items to list its tracks"
+        ;;
+    *)
+        die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
+        ;;
+    esac
+
+    local menu_id
+    menu_id=$(container_id "$t")
+    if [[ -n "$menu_id" ]]; then
+        die "'$t' is an audio menu — use --items to list its tracks"
+    fi
+
+    parse_start_seconds "$t"
+
+    vid=$(target_id "$t")
+    if [[ -n "$vid" ]]; then
+        part=$(url_part_number "$t")
+        if [[ -n "$part" ]]; then
+            TARGET_URL="https://www.bilibili.com/video/$vid?p=$part"
+        else
+            TARGET_URL="https://www.bilibili.com/video/$vid"
+        fi
+        return 0
+    fi
+
+    au_id=$(url_audio_id "$t")
+    if [[ -n "$au_id" ]]; then
+        TARGET_URL="https://www.bilibili.com/audio/$au_id"
+        return 0
+    fi
+
+    host=$(url_host "$t")
+    case "$host" in
+    b23.tv | *.b23.tv)
+        TARGET_URL="${t%%\?*}"
+        return 0
+        ;;
+    esac
+
+    TARGET_URL="$t"
 }
 
 # --items' OWN handle grammar, BESIDE normalize_target rather than inside it. The two answer

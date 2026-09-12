@@ -1481,8 +1481,12 @@ THEME_HELP=$(shell/uting -h 2>&1 || true)
 THEME_USAGE_FLAG=$(printf '%s\n' "$THEME_HELP" | tr '\n' ' ' |
     sed -e 's/.*Palette: //' -e 's/\. Every theme.*//' -e 's/(default)//' |
     tr '|' '\n' | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' ')
-THEME_USAGE_ENV=$(printf '%s\n' "$THEME_HELP" |
-    sed -n 's/.*YT_THEME=\([a-z|]*\).*/\1/p' | tr '|' '\n' | sort | tr '\n' ' ')
+# Joined into one line BEFORE the cut, the way the flag's list above already is: fourteen
+# names is 128 columns on one help line, so the env list wraps like the flag's does, and a
+# per-line regex would have read only the first half and called the other half a drift.
+THEME_USAGE_ENV=$(printf '%s\n' "$THEME_HELP" | tr '\n' ' ' |
+    sed -e 's/.*YT_THEME=//' -e 's/ *Palette family.*//' |
+    tr '|' '\n' | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' ')
 report "usage()'s --theme list == the gate's" "$THEME_GATE_SET" "$THEME_USAGE_FLAG"
 report "usage()'s YT_THEME list == the gate's" "$THEME_GATE_SET" "$THEME_USAGE_ENV"
 # Not vacuous: the gate set must really hold names, or all three could agree on nothing.
@@ -1535,9 +1539,19 @@ rm -rf "$CFGD"
 # discriminating bound: unreachable for a one-second wait, and four times the ~130 ms the
 # tty-timed reader takes. It is spent as ONE sleep and ONE capture rather than a poll loop —
 # a loop's own forks would inflate the very window being measured.
+tmux_ok() {
+    command -v tmux >/dev/null 2>&1 || return 1
+    local _probe="ctest-probe-$$"
+    if tmux new-session -d -s "$_probe" "exit 0" 2>/dev/null; then
+        tmux kill-session -t "$_probe" 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
 echo
 echo "── a paste is text, not keys ──────────────────────────────────────"
-if ! command -v tmux >/dev/null 2>&1; then
+if ! tmux_ok; then
     echo "  skip  (needs tmux for a real tty)"
 else
     PS_TS="ctest-paste-$$"
@@ -2321,7 +2335,7 @@ pane_lacks() { ! pane_has "$1"; }
 # one it returned to. Both halves, because a view that never changed still shows the second.
 pane_back()  { pane_lacks "$1" && pane_has "$2"; }
 cfg_has()    { grep -qE "$1" "$TUI_CFG"; }
-if ! command -v tmux >/dev/null 2>&1; then
+if ! tmux_ok; then
     echo "  skip  (needs tmux for a real tty)"
 else
     TS="ctest-tui-$$"
@@ -2839,9 +2853,31 @@ else
     tmux send-keys -t "$TS" Enter
     byname=$(poll_until 10 pane_has "playlist='seeded-list'")
     report "1 opens that playlist by number" 1 "$byname"
+
+    # R renames the playlist currently on screen
+    tmux send-keys -t "$TS" R
+    poll_until 10 pane_has "New name for playlist" >/dev/null
+    tmux send-keys -t "$TS" "renamed-list" Enter
+    renamed=$(poll_until 10 pane_has "playlist='renamed-list'")
+    report "R renames the playlist on screen" 1 "$renamed"
+
     tmux send-keys -t "$TS" b
     backed=$(poll_until 10 pane_back "playlist='" "query='")
     report "b again leaves it for search" 1 "$backed"
+
+    # reopen the renamed playlist and test D (delete playlist)
+    tmux send-keys -t "$TS" b
+    poll_until 10 pane_has '1\. renamed-list' >/dev/null
+    tmux send-keys -t "$TS" 1 Enter
+    poll_until 10 pane_has "playlist='renamed-list'" >/dev/null
+
+    tmux send-keys -t "$TS" D
+    poll_until 10 pane_has "Delete playlist" >/dev/null
+    tmux send-keys -t "$TS" y
+    del_backed=$(poll_until 10 pane_back "playlist='" "query='")
+    report "D deletes the playlist and returns to search" 1 "$del_backed"
+    del_stored=$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')
+    report "…and the playlist file is deleted from store" 0 "$del_stored"
 
     # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
     # the middle one is the point: a view that opened carrying only what the LIST already

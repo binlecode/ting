@@ -449,6 +449,82 @@ is_own_host() {
     return 1
 }
 
+# Extract the 11-character video ID from any YouTube URL shape:
+#   - youtu.be/<id>
+#   - .../watch?v=<id>
+#   - .../embed/<id>
+#   - .../v/<id>
+#   - .../shorts/<id>
+#   - .../live/<id>
+url_video_id() {
+    local u=$1 q="" vid="" path=""
+    u="${u#*://}"
+    u="${u%%#*}"
+    local rem="${u#*/}"
+    case "$u" in
+    */*) path="${rem%%\?*}" ;;
+    *) path="" ;;
+    esac
+    case "$u" in
+    *\?*) q="${u#*\?}" ;;
+    esac
+
+    case "&$q" in
+    *[\&]v=*)
+        vid="${q##*v=}"
+        vid="${vid%%&*}"
+        ;;
+    esac
+
+    if [[ -z "$vid" ]]; then
+        case "$path" in
+        embed/* | v/* | shorts/* | live/*)
+            vid="${path#*/}"
+            vid="${vid%%/*}"
+            ;;
+        *)
+            local host="${u%%/*}"
+            case "$host" in
+            youtu.be | *.youtu.be)
+                vid="${path%%/*}"
+                ;;
+            esac
+            ;;
+        esac
+    fi
+
+    if [[ "$vid" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+        printf '%s' "$vid"
+    fi
+}
+
+url_time_param() {
+    local u=$1 q="" t=""
+    case "$u" in
+    *\?*) q="${u#*\?}" ;;
+    esac
+    q="${q%%#*}"
+    case "&$q" in
+    *[\&]t=*)
+        t="${q##*t=}"
+        t="${t%%&*}"
+        ;;
+    *[\&]start=*)
+        t="${q##*start=}"
+        t="${t%%&*}"
+        ;;
+    esac
+    if [[ -z "$t" ]]; then
+        case "$1" in
+        *#*t=*)
+            t="${1##*t=}"
+            t="${t%%&*}"
+            ;;
+        esac
+    fi
+    printf '%s' "$t"
+}
+
 # A handle is either a URL on one of this engine's hosts, or this engine's own media id.
 # Knowing that a YouTube id is exactly 11 characters of [A-Za-z0-9_-] is ENGINE knowledge —
 # it is precisely what the player gave up when it stopped being a YouTube tool, so both the
@@ -457,18 +533,42 @@ is_own_host() {
 # A URL from another site is a USAGE error (1), not an extraction failure (2+): nothing was
 # attempted and nothing is retryable — the caller named the wrong engine, the same mistake
 # `--engine nope` makes, and it scores the same.
+#
+# Every accepted handle collapses to the canonical form `https://www.youtube.com/watch?v=ID`
+# (optionally keeping a valid `t=` offset for start-time extraction). All tracking parameters
+# (feature, si, pp, app, ab_channel, etc.) are stripped, keeping the persistent stores idempotent.
 normalize_target() {
-    local t=$1 host
+    local t=$1 host vid tval
     case "$t" in
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
             die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: ut-play --engine NAME)"
-        TARGET_URL="$t"
+        vid=$(url_video_id "$t")
+        if [[ -n "$vid" ]]; then
+            tval=$(url_time_param "$t")
+            if [[ -n "$tval" ]]; then
+                TARGET_URL="https://www.youtube.com/watch?v=$vid&t=$tval"
+            else
+                TARGET_URL="https://www.youtube.com/watch?v=$vid"
+            fi
+        else
+            TARGET_URL="$t"
+        fi
         ;;
     youtube.com/* | www.youtube.com/* | m.youtube.com/* | music.youtube.com/* | \
         youtu.be/* | youtube-nocookie.com/* | www.youtube-nocookie.com/*)
-        TARGET_URL="https://$t"
+        vid=$(url_video_id "https://$t")
+        if [[ -n "$vid" ]]; then
+            tval=$(url_time_param "https://$t")
+            if [[ -n "$tval" ]]; then
+                TARGET_URL="https://www.youtube.com/watch?v=$vid&t=$tval"
+            else
+                TARGET_URL="https://www.youtube.com/watch?v=$vid"
+            fi
+        else
+            TARGET_URL="https://$t"
+        fi
         ;;
     *)
         [[ "$t" =~ ^[A-Za-z0-9_-]{11}$ ]] ||

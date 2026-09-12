@@ -483,6 +483,13 @@ sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality_sort_for_t
 URL，或本引擎自己的媒体 id 形状，用的是**显式清单，不是子串匹配**：`*.youtube.com` 命中
 `music.youtube.com` 而拒绝 `evilyoutube.com`，后者会被一个光秃秃的 `*youtube.com*` 放过去。
 
+**输入句柄统一收敛至 Canonical URL，剔除所有追踪参数。** 任何进入 `normalize_target` 的合法句柄，
+均被剥除外部平台注入的追踪参数（YouTube 的 `feature`、`si`、`pp`、`ab_channel` 等，Bilibili 的 `spm_id_from`、
+`vd_source`、`share_*` 等），统一折叠为该引擎的标准规范短链（`ne-resolve` 的 `song?id=N`、`yt-resolve` 的 `watch?v=ID`、
+`bili-resolve` 的 `video/BV...`，仅在 B 站多 P 视频且 `p > 1` 时保留合法分 P 参数 `?p=N`）。
+这保障了从浏览器复制粘贴的链接与从搜索结果导出的条目具备完全逐字节一致的 URL，彻底消除了持久化歌单库与
+收听历史在跨调用存储时的污染与查重幂等断裂。
+
 **来自另一个站点的 URL 是用法错误（1），不是抽取失败（2+）。** 什么都还没试、也没有什么可重试
 的 —— 调用方点错了引擎，这与 `--engine nope` 是同一个错误，因此记同样的分。这堵上了一个**能用**
 的洞，而"能用"正是这一类洞难被看见的原因：没有白名单，任何 http(s) URL 都会被交给 yt-dlp
