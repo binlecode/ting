@@ -26,7 +26,7 @@
 #
 #   Grouped by SCOPE, not by prefix. The YT_ prefix is historical and does NOT mean
 #   YouTube-specific: YT_THEME and YT_LANG are read only by uting, YT_ASCII by uting and
-#   all four engine scripts, YT_ASCII_VO by ut-play — and neither uting nor ut-play knows
+#   all six engine scripts, YT_ASCII_VO by ut-play — and neither uting nor ut-play knows
 #   what a source is. THIS FILE is the authority on every key's meaning and default;
 #   ARCH-cli-contract.md「配置面」 holds the chain and the rules that span files.
 #

@@ -109,7 +109,7 @@ export UT_CONFIG="$UT_TEST_TMP/config"
 # a new session inherits the tmux SERVER's environment, not this shell's, which is why the
 # TUI section passes its own knobs explicitly — and it does not reach whatever a future check
 # forks in a way nobody predicted here. That gap used to be harmless because nothing in the
-# suite WROTE a config; uting now writes six preference keys back to the user's file, so an
+# suite WROTE a config; uting now writes eleven preference keys back to the user's file, so an
 # unisolated caller does not merely read a developer's config, it edits it, and the value it
 # leaves is one they never chose.
 #
@@ -1422,6 +1422,11 @@ report "the player still answers with YT_IPC_SOCK set" "0" \
     "$(UT_CONFIG="$CFG" rc shell/ut-play --stop --all -j)"
 report "the file did not create the hijack socket" "absent" \
     "$([ -e "$CFGD/hijack.sock" ] && echo present || echo absent)"
+
+# UT_VERSION is the constant from VERSION; a config file cannot overwrite it.
+printf 'UT_VERSION=fake\n' > "$CFG"
+report "UT_VERSION in config is refused" "$UT_VER" \
+    "$(UT_CONFIG="$CFG" shell/uting --version | awk '{print $NF}')"
 
 # A TYPO MUST BE LOUD. An emptied cycle would otherwise abort on the first keypress (an empty
 # array expansion under set -u aborts on bash 3.2) and an unknown member would put a mode the
