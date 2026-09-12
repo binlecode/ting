@@ -520,10 +520,6 @@ do_rename() {
     local from to
     from=$(playlist_file "$NAME")
     to=$(playlist_file "$NEW_NAME")
-    [[ -f "$from" ]] || fail 4 not_found "no such playlist: $NAME"
-    if [[ -f "$to" ]] && [[ "$NAME" != "$NEW_NAME" ]]; then
-        fail 4 exists "a playlist named '$NEW_NAME' already exists"
-    fi
     # BOTH playlists, and in LEXICOGRAPHIC order. Locking only the source left the
     # destination writable by a concurrent --add, which this then overwrote; taking them in
     # a fixed order is what keeps two renames pointed at each other from deadlocking.
@@ -533,6 +529,10 @@ do_rename() {
         lock_playlist "$NAME"; lock_playlist "$NEW_NAME"
     else
         lock_playlist "$NEW_NAME"; lock_playlist "$NAME"
+    fi
+    [[ -f "$from" ]] || fail 4 not_found "no such playlist: $NAME"
+    if [[ -f "$to" ]] && [[ "$NAME" != "$NEW_NAME" ]]; then
+        fail 4 exists "a playlist named '$NEW_NAME' already exists"
     fi
     read_playlist "$from" "$NAME"
     local json
