@@ -128,10 +128,10 @@
   **问题分析**：`ne-resolve` 已将所有句柄规整为 `song?id=N`，但 `bili-resolve` 与 `yt-resolve` 遇到完整链接时直接保留 `spm_id_from`、`vd_source`、`feature=shared` 等脏参数存盘，导致同一视频从浏览器复制与从搜索获取在存储库中产生完全不同的 URL 副本。
   **方案细节**：在各引擎的 `normalize_target` 中统一剔除追踪参数，规范化为平台标准短链。
 
-- **【中高 ROI】B 站音频区（`au` 号）歌词管线打通。**
-  **收益**：中。补齐 B 站音源的字幕/歌词能力，与 YouTube / 网易云实现 `--transcript` 能力对齐。
+- **【中低 ROI】B 站音频区（`au` 号）歌词管线打通。**
+  **收益**：中低。实测抽检显示多数曲目无歌词且返回零时间戳 LRC，属于“能取的取到”单点补齐（P3），非全量对齐。
   **成本**：低。yt-dlp 底层 `BilibiliAudioIE` 已暴露 `song.lyric`；信封管线已存在；仅需接通解析入口。
-  **待决问题**：将 yt-dlp 暴露的音频区歌词对接到 `bili-resolve --transcript`。
+  **待决问题**：零时间戳 LRC 的跨引擎 `-J` 信封形状（是否允许 `start: null` 加宽）。
   **前置问题**：界定音频区与视频区搜索结果的命令与参数边界（音频区 URL / 纯 `au` 数字识别）。详见 [`docs/PLAN-bili-audio-lyrics.md`](PLAN-bili-audio-lyrics.md)。
 
 - **【中高 ROI】TUI 补齐歌单删除与重命名交互（对齐底层 `--del` / `--rename`）。**
