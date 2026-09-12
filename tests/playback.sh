@@ -22,7 +22,7 @@
 # median between tracks at 4.3s) and ~19s is the listening-log section playing a 19-second
 # track out to its own end rather than seeking there — that section cannot seek, because
 # `duration` is null on a live stream and a check must not go green or red on whether the
-# fixture was streaming that afternoon. Neither half is reducible without a stand-in, and this
+# track was streaming that afternoon. Neither half is reducible without a stand-in, and this
 # file has none. The rest is the sites', which is why the total is quoted as a range and the
 # parts are not re-attributed without being re-measured.
 #
@@ -82,7 +82,7 @@ export UT_CONFIG="$UT_TEST_TMP/config"
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
 U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
 U2=${YT_TEST_URL2:-https://www.youtube.com/watch?v=8S0FDjFBj8o}
-# The second engine's fixture: an old-format BV with 76M views, picked to outlive the rig.
+# The second engine's handle: an old-format BV with 76M views, picked to outlive the rig.
 BV=${YT_TEST_BILI:-BV1fx411N7bU}
 
 pass=0; fail=0; FAILED=""
@@ -214,6 +214,17 @@ report "ambiguous --stop stopped nothing" 2 "$(shell/ut-play --status -j | jq '.
 # targeted ones below do -- wait for player 1's socket first (see wait_for_sock).
 sock1=$(printf '%s' "$o1" | jq -r '.sock // empty')
 wait_for_sock "$sock1" || bad "player 1's IPC socket never appeared -- the checks below are moot"
+# The socket the line above just proved live, read back out of --status. A caller that never
+# saw the -d envelope has no other way to learn it: uting adopting a background player at
+# startup is the real one, and the alternative -- rebuilding "$STATE_DIR/mpv-$id.sock" in a
+# second script -- is the duplication the envelope exists to prevent (ARCH-player.md「运行时 IPC」).
+# Asserted as the SAME path rather than as "a socket exists", because a --status that answered
+# with a plausible path it built itself would pass the weaker check and still be the bug.
+st_sock=$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.sock // ""')
+report "--status hands back the live socket" "$sock1" "$st_sock"
+st_log=$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.log // ""')
+report "…and a log path that is really there" 1 \
+    "$([ -n "$st_log" ] && [ -f "$st_log" ] && echo 1 || echo 0)"
 report "--set-volume --id"    0 "$(shell/ut-play --set-volume 40 --id "$id1" -j >/dev/null 2>&1; echo $?)"
 # Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
 report "only the target moved" "40" \
@@ -658,19 +669,16 @@ report "a launch records its loop mode" "one" \
 shell/ut-play --stop --all -j >/dev/null 2>&1
 wait_no_players
 no_orphans "no orphan mpv after a repeat launch"
-# NOT checked here: that a stopped queue files no tombstone. Tried and pulled: disable the
-# child's `stopped` branch outright and failed[] is STILL empty, so the check was green against
-# broken code. contract.sh drives the tombstone boundaries from fixtures instead, which is
-# where a rule about what the REAPER records belongs.
+# The failure tombstone check lives at the end of this file, driven by a real failing player.
 
 echo "── the listening log, written by a player that really played ─────"
-# contract.sh drives ut-history's own contract from fixtures. The WIRING — that a track
+# The WIRING — that a track
 # ending makes a row exist — can only be proved where a real track really ends, so it is
 # proved on a track chosen to end: 19 seconds, permanent and public, the same handle
 # contract.sh resolves. A seek to the end of one of the long tracks above would be cheaper
 # and it is what the queue section does, but it cannot carry this claim: `duration` is null
 # on a live stream, and this file must not have a check that goes green or red depending on
-# whether the fixture was streaming that afternoon.
+# whether the track was streaming that afternoon.
 SHORT=${YT_TEST_SHORT:-https://www.youtube.com/watch?v=jNQXAC9IVRw}
 # How many rows this one track has, out of an envelope already in hand. Every claim below is
 # keyed by its url rather than by a total: this file leaves players stopping in the background
@@ -738,6 +746,27 @@ if wait_for_sock "$sock4"; then
 else
     bad "the UT_HISTORY=0 player never started — the off switch is untested"
 fi
+
+echo "── the death record: real player failure and reaping ───────────────"
+# When a real detached player fails (e.g. an unresolvable handle), the mpv child exits with an
+# error, detached_epitaph records the exit event, and ut-play --status reaps it into .failed[].
+# No synthetic json, no fake log stubs: real mpv, real failure, real reaper.
+f_out=$(shell/ut-play -d -j --engine yt -- "https://www.youtube.com/watch?v=00000000000" 2>/dev/null)
+f_id=$(printf '%s' "$f_out" | jq -r '.id // empty')
+report "failing player launched" 0 "$([ -n "$f_id" ] && echo 0 || echo 1)"
+wait_failed() {
+    local id=$1 i
+    for i in $(seq 1 40); do
+        [ "$(shell/ut-play --status -j 2>/dev/null | jq -r --arg i "$id" '[.failed[]|select(.id==$i)]|length')" = "1" ] && return 0
+        sleep 0.25
+    done
+    return 1
+}
+report "reaper puts dead player in failed[]" 0 "$(wait_failed "$f_id" && echo 0 || echo 1)"
+report "death records non-zero exit code" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$f_id" '.failed[]|select(.id==$i)|.exit_code > 0' >/dev/null 2>&1; echo $?)"
+report "death record identifies engine" "yt" \
+    "$(shell/ut-play --status -j | jq -r --arg i "$f_id" '.failed[]|select(.id==$i)|.engine')"
 
 echo
 printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"

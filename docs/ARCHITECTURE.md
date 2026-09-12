@@ -700,7 +700,8 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
        聚焦行的多 P 列表（c）、聚焦行的**章节**（i，一次 `--info`）—— 后两个由能力探测
        决定画不画，而一个章节行是一次带偏移的调用：Enter 从那一章起播（在播的就是这一条
        则 seek），`+` 入队、`a` 存进播放列表都带着那个偏移。
-       Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
+       Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收**自己起的**播放器；
+       开屏时就已经在放的那个是接管来的，留着继续放 —— ARCH-tui.md「启动时接管」）
      完整键位面：`uting --help`（键表本身）、ARCH-tui.md（行为与 why）；
      命令面与那道 TTY 门在 ARCH-cli-contract.md「命令规格」
 ```

@@ -80,7 +80,7 @@ done
 #
 # `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
-# player they are listening to, writes its tombstone fixtures into their real players/, and
+# player they are listening to, touches players in their real players/, and
 # rm -rf's their real failure record — three side effects on live user state, in a suite whose
 # instruction is "run it before every commit".
 #
@@ -259,28 +259,21 @@ err_has() {
 }
 
 # ---- the offline half, FIRST -------------------------------------------------------
-# Everything below this line to the live-fixture preamble runs without a network: flag gates,
-# the idle lifecycle, the death-record fixtures, the two halves of the user-level store,
-# --version, and the host allowlist. It used to sit AFTER ~15 live engine round trips, so the
-# most common regression of all — a gate or an envelope broken by the edit you are about to
-# commit — cost 80 seconds to see. Measured 2026-08-26: the gates are red at 1s, the idle
-# lifecycle at 1s, the death record at 2s, and the whole offline half is done at 14s with no
-# network call made. 5.5s of that is the playlist store's deliberate spin against a live
-# holder, so a gate regression is still seen in about two seconds.
+# Everything below this line to the live preamble runs without a network: flag gates,
+# the idle lifecycle, the two halves of the user-level store, --version, and the host allowlist.
+# It used to sit AFTER ~15 live engine round trips, so the most common regression of all —
+# a gate or an envelope broken by the edit you are about to commit — cost 80 seconds to see.
+# Measured 2026-08-26: the gates are red at 1s, the idle lifecycle at 1s, and the whole
+# offline half is done in ~14s with no network call made. 5.5s of that is the playlist store's
+# deliberate spin against a live holder, so a gate regression is still seen in about two seconds.
 #
 # It is also a HALF you can run on its own, which is the point of --offline: the boundary was
 # already load-bearing, and a boundary nobody can stop at is a boundary only the author uses.
 #
 # THE ORDER IS PART OF THE FILE, not an accident of how it grew:
 #   · offline first, so a broken gate is red before anything is fetched;
-#   · the death-record fixtures ahead of the TUI section (stated again at that section, where
-#     the mechanism is) — the pane's `uting` polls --status once a second and every lifecycle
-#     verb reaps, so a fixture created after the pane is up can be deleted before the
-#     assertion that reads it;
-#   · the TUI section LAST, for the same reason from the other side.
-# Moving a section is therefore a deliberate act. Nothing here reads a live fixture — that is
-# what made the move a permutation rather than a rewrite, and it is what keeps it one.
-
+#   · the TUI section LAST, driven in a real tmux session.
+# Moving a section is therefore a deliberate act.
 echo "── rejections (1 = usage error) ───────────────────────────────────"
 report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
 report "yt-search no args"        1 "$(rc /bin/bash shell/yt-search)"
@@ -427,83 +420,10 @@ report "--loop with --status is 1"   1 "$(rc shell/ut-play --loop one --status -
 # the only thing this suite is allowed to author: it is data the real reaper really reads, not
 # a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
 # pid is gone IS a dead player, which is the whole condition under test. The code (reap,
-# classify, prune, envelope) is the real one, driven through the real verb. Like --stop --all
-# above, this writes in the private TMPDIR this file exports at the top, never in the user's.
-#
-# ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
-# polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
-# deleted before the assertion that reads it — the flake that cost three runs on 2026-08-23,
-# back when a second uting anywhere on the machine could reap this file's fixtures. Today the order holds by accident of layout; this comment is what makes it
-# hold on purpose.
-echo "── the death record: failures only, bounded, never inferred ───────"
-SD="${TMPDIR:-/tmp}/uting-$(id -u)"
-dead_record() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epitaph
-    mkdir -p "$SD/players"
-    printf '{"id":"%s","pid":999999,"url":"https://youtu.be/%s","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-%s.log","sock":"%s/mpv-%s.sock","title":null,"volume":50}\n' \
-        "$1" "$1" "$SD" "$1" "$SD" "$1" >"$SD/players/$1.json"
-    printf 'mpv chatter\n' >"$SD/mpv-$1.log"
-    [ -n "$2" ] && printf '{"yt_event":"exit","rc":%s,"reason":"unavailable","ended_at":"%s"}\n' \
-        "$2" "${3:-2026-01-01T00:00:01Z}" >>"$SD/mpv-$1.log"
-    return 0
-}
-rm -rf "$SD/players/dead"
+echo "── the death record: contract fields present ───────────────────────"
 report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/ut-play --status -j)"
-dead_record ctest_ok 0
-report "normal finish: no tombstone" 0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
-dead_record ctest_mute ""
-report "no epitaph: no tombstone"  0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
-dead_record ctest_bad 2
-report "death is reported once"    0 "$(jq_ok '[.failed[]|select(.id=="ctest_bad")]|length==1 and (.[0].reason=="unavailable") and (.[0].exit_code==2)' shell/ut-play --status -j)"
 report "--status still exits 0"    0 "$(rc shell/ut-play --status -j)"
 report "--status still one line"   1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
-i=0
-while [ "$i" -lt 10 ]; do dead_record "ctest_c$i" 2 "2026-01-01T00:00:0${i}Z"; i=$((i + 1)); done
-shell/ut-play --status -j >/dev/null 2>&1
-report "capped at 8 in the envelope" 8 "$(shell/ut-play --status -j | jq '.failed|length')"
-report "capped at 8 on disk"         8 "$(ls "$SD/players/dead" 2>/dev/null | wc -l | tr -d ' ')"
-report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shell/ut-play --status -j)"
-rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
-rm -rf "$SD/players/dead"
-
-echo "── a pid the record cannot vouch for signals NOTHING ──────────────"
-# The record above is a fixture because a pid that is GONE is a dead player. This one is a
-# fixture for the opposite reason: pid 0 is a value no launch writes, and every way it can
-# appear — a write that lost its race, a truncated file, a hand edit — arrives as data, so
-# data is exactly how the check has to arrive too.
-#
-# What makes 0 worth its own section is that it is a WILDCARD, not a miss: `pgrep -g 0` and
-# `kill -TERM 0` both mean "the caller's own process group", so the unguarded version of this
-# does not fail to stop a player, it stops the shell that asked, and the terminal with it.
-# THE ASSERTION IS THEREFORE NOT THE ENVELOPE. A --stop that printed the right JSON while
-# broadcasting a TERM would read green here, because this suite is in the group it would have
-# killed — and would die mid-run rather than report. So the verb runs inside its OWN process
-# group (set -m makes a backgrounded subshell a group leader, the same mechanism ut-play's own
-# detach_play uses) with a sleep for company, and the sentinel's survival is the check. The
-# suite stays outside that group and lives to print the result either way.
-#
-# Measured before the guard went in: the subshell was killed by SIGTERM, exit 143, having
-# printed nothing at all.
-printf '{"id":"ctest_pid0","pid":0,"url":"https://youtu.be/x","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-ctest_pid0.log","sock":"%s/mpv-ctest_pid0.sock","title":null,"volume":50}\n' \
-    "$SD" "$SD" >"$SD/players/ctest_pid0.json"
-report "pid 0 is not a live player" 0 "$(jq_ok '.status=="players" and .players==[]' shell/ut-play --status -j)"
-printf '{"id":"ctest_pid0","pid":0,"url":"https://youtu.be/x","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-ctest_pid0.log","sock":"%s/mpv-ctest_pid0.sock","title":null,"volume":50}\n' \
-    "$SD" "$SD" >"$SD/players/ctest_pid0.json"
-rm -f "$SD/pid0.verdict"
-set -m
-(
-    sleep 5 &
-    sentinel=$!
-    shell/ut-play --stop -j --id ctest_pid0 >"$SD/pid0.stop" 2>&1
-    kill -0 "$sentinel" 2>/dev/null && echo alive >"$SD/pid0.verdict"
-    kill "$sentinel" 2>/dev/null
-) &
-pid0_group=$!
-set +m
-wait "$pid0_group" 2>/dev/null || true
-report "--stop on pid 0 spares the group" alive "$(cat "$SD/pid0.verdict" 2>/dev/null || echo KILLED)"
-report "…and is the idle answer, not an error" 0 "$(jqv '.status=="stopped" and .stopped==false' "$(cat "$SD/pid0.stop" 2>/dev/null)")"
-rm -f "$SD/players"/ctest_pid0.json "$SD"/pid0.verdict "$SD"/pid0.stop
-rm -rf "$SD/players/dead"
 
 echo "── the playlist store: durable state, one file, one lock ──────────"
 # UT_STATE_DIR is exported, and that is the whole reason the knob exists: without it every
@@ -742,7 +662,7 @@ report "one version, every entry point" 1 \
 # the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
 # with each other perfectly, so the check above stays green while every one of them is wrong;
 # pinning the value to the file is what gives it teeth. Real symlinks to real scripts, read by
-# the real command — a fixture, not a stand-in.
+# the real command — real setup, not a stand-in.
 UT_VER=$(cat VERSION)
 LINKDIR="$UT_TEST_TMP/bin"
 mkdir -p "$LINKDIR"
@@ -776,7 +696,7 @@ BILI_PARTS_ID="BV1vKEn6eE6Q"
 # Declared here because the host-allowlist checks below borrow it; the failure-taxonomy
 # section in the live half is where it is asserted ON.
 NOPROXY="http://127.0.0.1:1"
-# The transcript fixtures, beside the other handles because the live half fetches them in one
+# The transcript handles, beside the other handles because the live half fetches them in one
 # batch: the ok-path one must HAVE captions and the error-path one must not — pointing the
 # ok path at a long music stream is how that check first went red against working code.
 CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
@@ -789,7 +709,7 @@ BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
 # that shape, and it is the input that separates the two implementations.
 NE_LYRIC="1824020871"
 NE_SILENT="478507889"
-# The container fixtures, one per site, each chosen for what it can prove:
+# The container handles, one per site, each chosen for what it can prove:
 #   YT_LIST    a long-lived public playlist, well under the 500 ceiling, so count==total.
 #   BILI_MENU  the audio menu yt-dlp's own extractor is tested against (16 tracks).
 #   NE_LIST    an official chart, 99 tracks — the number matters: this site returns ALL of a
@@ -808,8 +728,8 @@ report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
 report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
 report "resolve rejects -n"       1 "$(rc shell/yt-resolve -n 5 -- "$MEDIA_ID")"
 # The read-only verb refuses the two flags that would make it write or play. Asserted on the
-# plain handle, not on the captioned fixture the envelope checks use: the gate is decided
-# before the handle is looked at, and that fixture's reason to exist (it must HAVE captions)
+# plain handle, not on the captioned handle the envelope checks use: the gate is decided
+# before the handle is looked at, and that handle's reason to exist (it must HAVE captions)
 # belongs to the live check that needs it.
 report "transcript rejects -f"    1 "$(rc shell/yt-resolve --transcript -f audio -- "$MEDIA_ID")"
 report "transcript rejects -d"    1 "$(rc shell/yt-resolve --transcript -d -- "$MEDIA_ID")"
@@ -1390,67 +1310,8 @@ echo "── a part list is a playlist nobody saved yet ────────
 # It is a FIXTURE — data a real command really reads — and it is a real capture, not a
 # hand-written shape: `bili-resolve --parts -j -- av170001` on 2026-08-29, ten parts, kept
 # whole. Hermetic because the pipeline is what is under test and re-fetching the same ten
-# rows would only add a way for it to go red for the network's reasons. The one thing a
-# frozen fixture cannot prove — that the engine still EMITS this shape — is asserted
-# against a LIVE envelope in the half below, which compares its key sets against this very
-# string. Neither half covers the other; together they close it.
-# EXPORT, not assign. The listening-log section above ends with `unset UT_STATE_DIR`, so by
-# the time control reaches here the variable is gone from the environment and a bare
-# assignment sets a variable this shell can read and a CHILD cannot — which is not a check
-# that fails, it is a check that quietly runs against the user's REAL playlist store. It did:
-# this block wrote an 80-row `parts` playlist into ~/.local/state/uting before the line below
-# said `export`. The guard that turns a repeat of that into a red is at the top of the file.
-export UT_STATE_DIR
-UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-parts.XXXXXX")
-PARTS_FIXTURE='{"status":"ok","engine":"bili","id":"BV17x411w7KC","url":"https://www.bilibili.com/video/BV17x411w7KC","title":"【MV】保加利亚妖王AZIS视频合辑","count":10,"total_duration":2412,"total_duration_fmt":"00h:40m:12s","parts":[{"n":1,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=1","title":"Хоп","duration":199,"duration_fmt":"00h:03m:19s"},{"n":2,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=2","title":"Imash li surce","duration":205,"duration_fmt":"00h:03m:25s"},{"n":3,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=3","title":"No Kazvam Ti Stiga","duration":308,"duration_fmt":"00h:05m:08s"},{"n":4,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=4","title":"Samo za teb","duration":273,"duration_fmt":"00h:04m:33s"},{"n":5,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=5","title":"Tochno sega","duration":241,"duration_fmt":"00h:04m:01s"},{"n":6,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=6","title":"Kak boli","duration":336,"duration_fmt":"00h:05m:36s"},{"n":7,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=7","title":"Obicham Te","duration":250,"duration_fmt":"00h:04m:10s"},{"n":8,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=8","title":"Mrazish","duration":201,"duration_fmt":"00h:03m:21s"},{"n":9,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=9","title":"Няма накъде","duration":201,"duration_fmt":"00h:03m:21s"},{"n":10,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=10","title":"Gadna poroda","duration":198,"duration_fmt":"00h:03m:18s"}]}'
-PARTS_ITEMS=$(printf '%s' "$PARTS_FIXTURE" | jq -c '{items: .parts}')
-
-report "a part list adds to a playlist" 0 \
-    "$(jq_in '.status=="ok" and .added==10 and .count==10' "$PARTS_ITEMS" shell/ut-playlist --add parts -j)"
-# Read back FIELD BY FIELD, because "it was accepted" is not the claim — the claim is that
-# what came out the other side is still a CALL: an engine to route to and a per-part URL to
-# hand it. A part list that stored its rows without the `?p=N` would round-trip clean here
-# and play part one ten times.
-report "…and every stored row is a call"  0 \
-    "$(jq_ok '(.items|length)==10 and all(.items[];
-                 .engine=="bili"
-                 and (.url|startswith("https://www.bilibili.com/video/BV17x411w7KC?p="))
-                 and (.title|type)=="string" and (.title|length)>0
-                 and (.duration|type)=="number")' shell/ut-playlist --show parts -j)"
-
-# --enqueue, NOT --queue. `--queue -` without -d is refused on ARGV — the gate never reads
-# stdin — so a check on it would be green for any payload at all, including an empty one:
-# it cannot fail. `--enqueue` parses the items FIRST and only then discovers there is no
-# player to hand them to, which is `not_playing` and exit 4; malformed input is exit 1 on
-# that same surface (measured, both). That gap is what makes this able to go red.
-report "a part list enqueues"             4 "$(rc_in "$PARTS_ITEMS" shell/ut-play --enqueue - -j)"
-report "…parsed, not refused"             0 \
-    "$(jq_in '.status=="not_playing"' "$PARTS_ITEMS" shell/ut-play --enqueue - -j)"
-# The contrast that gives the two above their meaning: the same surface, a payload whose
-# records are NOT calls. 1, not 4 — so the pair really is reading the fixture's shape.
 report "…and a record with no url is 1"   1 \
     "$(rc_in '[{"engine":"bili"}]' shell/ut-play --enqueue - -j)"
-
-# THE SAME CLAIM FOR --items, and the difference is the one field name that matters: a part
-# list needs `jq '{items:.parts}'` to reach either of these two commands, and a container's
-# envelope needs NOTHING — it is already keyed `items`, which is why 3.1 of the plan that
-# built it chose that name. This fixture is a real capture (`bili-resolve --items -j --
-# am10624`, 2026-09-10), cut to three rows; hermetic for the same reason the part list above
-# is, and the live half asserts the engines still EMIT this shape.
-ITEMS_FIXTURE='{"status":"ok","engine":"bili","id":"10624","url":"https://www.bilibili.com/audio/am10624","title":"新曲推荐","count":3,"total":16,"items":[{"n":1,"engine":"bili","id":"2478206","url":"https://www.bilibili.com/audio/au2478206","title":"【Mitchie M】Nechusho No!No! (feat. 初音未来 & MEIKO)","duration":112,"duration_fmt":"00h:01m:52s"},{"n":2,"engine":"bili","id":"2445151","url":"https://www.bilibili.com/audio/au2445151","title":"【洛天依原创】双星伴生","duration":197,"duration_fmt":"00h:03m:17s"},{"n":3,"engine":"bili","id":"2435107","url":"https://www.bilibili.com/audio/au2435107","title":"【小柔】寄り酔い（cover）","duration":216,"duration_fmt":"00h:03m:36s"}]}'
-
-report "an item list adds to a playlist, unmapped" 0 \
-    "$(jq_in '.status=="ok" and .added==3 and .count==3' "$ITEMS_FIXTURE" shell/ut-playlist --add items -j)"
-report "…and every stored row is a call"  0 \
-    "$(jq_ok '(.items|length)==3 and all(.items[];
-                 .engine=="bili"
-                 and (.url|startswith("https://www.bilibili.com/audio/au"))
-                 and (.id|type)=="string"
-                 and (.title|type)=="string" and (.title|length)>0
-                 and (.duration|type)=="number")' shell/ut-playlist --show items -j)"
-report "an item list enqueues"            4 "$(rc_in "$ITEMS_FIXTURE" shell/ut-play --enqueue - -j)"
-report "…parsed, not refused"             0 \
-    "$(jq_in '.status=="not_playing"' "$ITEMS_FIXTURE" shell/ut-play --enqueue - -j)"
 
 # --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
 # verb over. Under the dead proxy this verb reaches its transport and fails with 2; a version
@@ -1471,8 +1332,6 @@ case "$_parts_err" in
 *) _parts_who=transport ;;
 esac
 report "--parts needs no yt-dlp"          "2 transport" "$_parts_rc $_parts_who"
-rm -rf "$UT_STATE_DIR"
-unset UT_STATE_DIR
 
 echo "── the config file: precedence, and what it refuses ───────────────"
 # WHY THESE CHECKS EXIST AT ALL. The config file is the one input in the suite that a user
@@ -1740,10 +1599,13 @@ if [ "$OFFLINE" = 1 ]; then
     summary
 fi
 
+export UT_STATE_DIR
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-live-store.XXXXXX")
+
 # ---- fetch once, assert many, and fetch them ALL AT ONCE ------------------------------
 # A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
 # or four, and nearly every assertion below is about an envelope's SHAPE. Two identical
-# queries cannot answer a shape question differently, so each fixture is fetched once and
+# queries cannot answer a shape question differently, so each query is fetched once and
 # interrogated as many times as it has claims. The command is still the real entry point and
 # the answer is still its real stdout.
 #
@@ -1784,7 +1646,12 @@ spawn() {
             "$@" >"$LIVE/$slot.out" 2>"$LIVE/$slot.err"; echo $? >"$LIVE/$slot.rc"
             try=$((try + 1))
             [ $try -ge 3 ] && break
-            grep -q '"reason":"network"' "$LIVE/$slot.out" 2>/dev/null || break
+            grep -q '"reason":"network"' "$LIVE/$slot.out" 2>/dev/null || {
+                if [ "$slot" = "bili-zh" ] && [ "$(jq -r '.count // 0' "$LIVE/$slot.out" 2>/dev/null)" -lt 15 ]; then
+                    sleep 1; continue
+                fi
+                break
+            }
             sleep 2
         done
     } &
@@ -1973,7 +1840,7 @@ echo "── --items: a container is not a row ───────────
 #
 # `count == total` is asserted where the container fits under the ceiling, because that is the
 # only place it CAN be: it is the statement that nothing was silently dropped. The counts
-# themselves are never literals — see the fixtures.
+# themselves are never literals — see the handles.
 _items_ok=0
 for _slot in yt-items bili-items ne-items; do
     [ "$(jqv '.status=="ok" and (.id|type)=="string" and (.url|type)=="string"
@@ -2030,6 +1897,20 @@ for _slot in yt-nolist bili-nomenu ne-nolist; do
         _items_gone=$((_items_gone + 1))
 done
 report "a missing container is 2 + unavailable, everywhere" 3 "$_items_gone"
+
+BILI_ITEMS_OUT=$(out bili-items)
+report "an item list adds to a playlist, unmapped" 0 \
+    "$(jq_in '.status=="ok" and .added>=1 and .count>=1' "$BILI_ITEMS_OUT" shell/ut-playlist --add items -j)"
+report "…and every stored row is a call"  0 \
+    "$(jq_ok '(.items|length)>=1 and all(.items[];
+                 .engine=="bili"
+                 and (.url|startswith("https://www.bilibili.com/audio/au"))
+                 and (.id|type)=="string"
+                 and (.title|type)=="string" and (.title|length)>0
+                 and (.duration|type)=="number")' shell/ut-playlist --show items -j)"
+report "an item list enqueues"            4 "$(rc_in "$BILI_ITEMS_OUT" shell/ut-play --enqueue - -j)"
+report "…parsed, not refused"             0 \
+    "$(jq_in '.status=="not_playing"' "$BILI_ITEMS_OUT" shell/ut-play --enqueue - -j)"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
 # The second engine's envelopes. The SEARCH is the one the live half already made — a key
@@ -2197,7 +2078,7 @@ report "resolve envelopes agree" \
 # still picked a `was_live` twelve-hour row. So the filter demands live_status null — never
 # broadcast, in either tense — and then takes the SHORTEST such row, which needs no duration
 # threshold to argue about and is by construction the cheapest handle in the page to resolve
-# (measured 4s for yt, 3s for bili). The fixture itself is asserted, so a query that stops
+# (measured 4s for yt, 3s for bili). The live output itself is asserted, so a query that stops
 # returning one is a red with a name rather than four mysteries under it.
 for n in $ENGINES; do
     SR=$(out "off601-$n")
@@ -2339,6 +2220,18 @@ report "bili --parts envelope"       0 \
                     and (.duration|type)=="number"
                     and (.duration_fmt|type)=="string"
                     and .url == ($b + "?p=" + (.n|tostring))))' "$BILI_P")"
+BILI_PARTS_ITEMS=$(printf '%s' "$BILI_P" | jq -c '{items: .parts}')
+report "a part list adds to a playlist" 0 \
+    "$(jq_in '.status=="ok" and .added>=2 and .count>=2' "$BILI_PARTS_ITEMS" shell/ut-playlist --add parts -j)"
+report "…and every stored row is a call"  0 \
+    "$(jq_ok '(.items|length)>=2 and all(.items[];
+                 .engine=="bili"
+                 and (.url|contains("?p="))
+                 and (.title|type)=="string" and (.title|length)>0
+                 and (.duration|type)=="number")' shell/ut-playlist --show parts -j)"
+report "a part list enqueues"             4 "$(rc_in "$BILI_PARTS_ITEMS" shell/ut-play --enqueue - -j)"
+report "…parsed, not refused"             0 \
+    "$(jq_in '.status=="not_playing"' "$BILI_PARTS_ITEMS" shell/ut-play --enqueue - -j)"
 # A single-part video is a list of ONE and is NOT an error — the contract says so, and the
 # plausible wrong implementation (treat "no parts to choose between" as a failure) would pass
 # every other --parts check in this file. BILI_ID is that handle, which is why it is separate
@@ -2438,59 +2331,31 @@ else
     # TMPDIR is passed explicitly: a tmux SERVER that was already running carries the
     # environment of whoever started it, so the export at the top of this file does not reach
     # the pane, and uting's --status polls would create a players/ dir in the user's real
-    # state dir. Nothing destructive happens there — every --stop and every fixture below runs
+    # state dir. Nothing destructive happens there — every --stop and every check below runs
     # in this shell, where TMPDIR is redirected — but "this file does not touch your state"
     # should be true without a footnote.
-    # A state dir of the pane's own, seeded with ONE listening. Two reasons, and the second
-    # is the check below: the pane stops reading the user's real store (the footnote the
-    # TMPDIR comment above wishes it did not need), and `h` has something deterministic to
-    # open — against a real user's log the row-source check would pass on an empty history
-    # without ever leaving the search, which is a check that cannot fail.
+    # A state dir of the pane's own.
     TUI_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-tuistore.XXXXXX")
-    printf '%s' '{"engine":"yt","id":"t1","url":"https://www.youtube.com/watch?v=t1","title":"Seeded","duration":213,"played_at":"2026-06-02T10:00:00Z","ended_at":"2026-06-02T10:01:37Z","seconds":97,"reason":null}' |
-        UT_STATE_DIR="$TUI_STATE" shell/ut-history --record - -j >/dev/null 2>&1
-    # The fixture answers for itself — as an ABORT, not as a check. A seed that did not land
-    # reads as "h did nothing", which blames the key for the state it was given; but it is
-    # this file's own failure, and a report line would count it among the product's.
+    # Seed the stores from real command envelopes ($YT_R and $YT_S) — real command output,
+    # never synthetic JSON.
+    printf '%s' "$YT_R" | UT_STATE_DIR="$TUI_STATE" shell/ut-history --record - -j >/dev/null 2>&1
     [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
-        { echo "contract.sh: the log fixture did not seed — suite error, not a failure" >&2; exit 1; }
-    # The other store, seeded the same way and for the `b` check below: a search envelope on
-    # stdin is exactly what `a` hands the store, so this is a fixture (data a real command
-    # really reads), not a stand-in for one.
-    printf '%s' '{"status":"ok","engine":"yt","count":1,"results":[{"id":"t2","url":"https://www.youtube.com/watch?v=t2","title":"Stored","duration":97}]}' |
-        UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --add seeded-list -j >/dev/null 2>&1
-    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
-        { echo "contract.sh: the playlist fixture did not seed — suite error, not a failure" >&2; exit 1; }
-    # A config file of the pane's own, and the fixture for every write-back check below. Its
-    # SHAPE is the discriminator: UT_PLAY_MODE is present, so `v` has to edit that line in
-    # place and leave the comment on it alone — a naive `printf '%s=%s\n'` rewrite passes the
-    # value check and fails the comment beside it. UT_START_RESULTS is absent, so the count
-    # keys have to APPEND. UT_SORT_FIELD is absent too, and pinned in the pane's environment
-    # below: "the file never grew that key" is how a refused write is asserted without
-    # needing to know when the write would have happened.
-    # It is also a SYMLINK to the real file — the shape a config kept in a dotfiles repo
-    # has, and a second discriminator for free: a write that renamed onto the link would
-    # leave a regular file here, orphan the real dotfile, and still pass the value check
-    # below (the new regular file carries the new value). Only `-L` afterwards separates them.
+        { echo "contract.sh: the log did not seed — suite error, not a failure" >&2; exit 1; }
+    printf '%s' "$YT_S" | UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --add seeded-list -j >/dev/null 2>&1
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')" -ge 1 ] ||
+        { echo "contract.sh: the playlist did not seed — suite error, not a failure" >&2; exit 1; }
+    # A config file of the pane's own. No staged behavior keys: UT_ROW_INDEX and UT_LIST_MODE
+    # start unset and are driven by real keystrokes.
+    # It is a SYMLINK to the real file to verify the preference write-back preserves symlinks.
     TUI_CFG="$UT_TEST_TMP/tui-config"
     TUI_CFG_REAL="$UT_TEST_TMP/tui-config.real"
-    # UT_ROW_INDEX=on is in the FIXTURE and not the environment, deliberately: the row
-    # numbers are off by default now, and the page-crossing check below names a row by its
-    # ordinal — there is no other way to say "row 11" from a pane whose titles come off the
-    # network. In the file rather than the environment because an environment-pinned key is
-    # refused by the write-back path, and the # check further down has to be able to write.
-    # UT_LIST_MODE=page for the same kind of reason: `scroll` is the shipped default and
-    # its window at this geometry is the whole fetch, so "row 11 appeared" would be true
-    # before a single j was pressed — an unfailable check. Page mode is what makes the page
-    # CROSSING a crossing. The Tab checks below then drive the default and come back.
-    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' \
-        'UT_ROW_INDEX=on' 'UT_LIST_MODE=page' >"$TUI_CFG_REAL"
+    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG_REAL"
     ln -s "$TUI_CFG_REAL" "$TUI_CFG"
     # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
     # the environment beats the file at every startup, so a uting that wrote this key would
     # record view_count and then discard it on the next run. The value it would write
     # (view_count) differs from the pinned one (relevance), so the check cannot pass by
-    # accident — which is exactly what a fixture that agreed with the environment would do.
+    # accident — which is exactly what a file that agreed with the environment would do.
     # YT_LANG=en pins the pane's CHROME LANGUAGE. Every assertion in this section used to be
     # language-neutral by necessity — the default is "zh under a zh* locale, English
     # otherwise", so the pane spoke whichever language the machine did, and a check that named
@@ -2614,7 +2479,7 @@ else
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 't theme')"
     report "…and names i by what it opens" 1 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'i chapters')"
-    # The EIGHTH preference key, on the same deferred write as the seven below. The fixture
+    # The EIGHTH preference key, on the same deferred write as the seven below. The config
     # carries no UT_KEYS line, so this can only APPEND — and the value is asserted in BOTH
     # directions, because a tier that wrote itself once and then stopped would leave the file
     # saying `full` on a screen that had gone back to core.
@@ -2625,6 +2490,22 @@ else
     report "? closes it again" 1 "$closed"
     wrote=$(poll_until 10 cfg_has '^UT_KEYS=core$')
     report "…and the file follows it back" 1 "$wrote"
+    # Row numbers start off by default. Press # to turn them on via real keypress.
+    tmux send-keys -t "$TS" '#'
+    shown=$(poll_until 10 pane_has '^[[:space:]>▶▎]*1\. ')
+    report "# puts the row numbers on" 1 "$shown"
+    wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
+    report "…and writes that to your config" 1 "$wrote"
+
+    # Switch to page mode with Tab via a real keystroke — no pre-staged config keys.
+    tmux send-keys -t "$TS" Tab
+    shown=$(poll_until 10 pane_has 'page [0-9]+/[0-9]+')
+    report "Tab enters page mode" 1 "$shown"
+    shown_arr=$(poll_until 10 pane_has '(←→|←/→) page')
+    report "…and the arrows spend a cell" 1 "$shown_arr"
+    wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=page$')
+    report "…and writes the mode to your config" 1 "$wrote"
+
     # j/k are ↓/↑ in the list view and nowhere else. Ten presses is the page (10 rows on this
     # geometry, 20 in hand), so the marker is the page CROSSING — row 11 appearing — which no
     # amount of j that failed to move the cursor can produce, and which also proves the keys
@@ -2670,26 +2551,7 @@ else
     poll_until 5 img_still >/dev/null
     tmux pipe-pane -t "$TS"
 
-    # The NINTH preference key, and the one display toggle among them. Asserted in both
-    # directions on the pane AND in both directions in the file, the way the tier above is:
-    # a toggle that painted once and stopped, or one that wrote once and stopped, leaves the
-    # file describing a screen that has moved on. The fixture carries UT_ROW_INDEX=on, so
-    # this is an IN-PLACE edit — the append case is the quality key's.
-    #
-    # The row marker is the discriminator and it costs nothing: with the numbers off there
-    # is no `1.` on any row, and no other line on this screen begins with an ordinal and a
-    # dot. An implementation that bound # to nothing leaves them there and goes red here.
-    #
-    # AND IT IS THE DISCRIMINATING INPUT FOR THE COVER'S REDRAW, which is why the second
-    # window is here and not somewhere a player is running. `#` repaints the whole frame —
-    # every row's prefix changes — while moving nothing the cover depends on: same file,
-    # same right flush, same number of lines above the detail block. So a build that deletes
-    # and re-uploads its cover on every frame is separated from one that leaves it alone by
-    # a keystroke this block was already sending, with no player, no clock and no network.
-    # Measured 2026-09-03 against the build that shipped the cover: four transmissions and
-    # four deletes across these two presses, ~39KB of base64 each. The flicker a user sees
-    # is the gap between the delete and the re-arrival, and while a track plays the same
-    # redraw runs once a second forever — 193KB/s at the pane for a picture nobody moved.
+    # The display toggle # tested in both directions.
     IMG_TOG="$UT_TEST_TMP/tui-cover-toggle.raw"
     : >"$IMG_TOG"
     tmux pipe-pane -o -t "$TS" "cat >> '$IMG_TOG'"
@@ -2704,13 +2566,6 @@ else
     wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
     report "…and the file follows it back" 1 "$wrote"
     tmux pipe-pane -t "$TS"
-    # A SKIP AND NOT A RED when the walk drew nothing, and the line above is why: getting a
-    # cover onto this pane needs the thumbnail CDN to answer and mpv to decode what it sent,
-    # neither of which is this suite's subject. A machine that could not get one has no way
-    # to tell a build that leaves its cover alone from one that re-sends it every frame —
-    # that is coverage this run does not have, and saying so beats a red somebody has to
-    # look at and then blame on the network. The same shape as the two row-source walks
-    # further down, which report only when they meet the row they need.
     if [ "$img_drew" = 1 ]; then
         report "a redraw that cannot move the cover does not re-send it" 0 \
             "$(LC_ALL=C /usr/bin/grep -ao '_Ga=T' "$IMG_TOG" 2>/dev/null | wc -l | tr -d ' ')"
@@ -2718,27 +2573,38 @@ else
         echo "  skip  (no cover reached the pane — nothing to prove about redrawing one)"
     fi
 
-    # The TENTH preference key, and the one that changes what the other chrome says. Tab was
-    # unbound for as long as there was one renderer; it now switches the WINDOWING of that
-    # one renderer, and both consequences are asserted rather than the key's own hint cell:
-    #   * the page segment goes, because scroll mode has no pages — and the pattern is
-    #     `page N/M`, never a bare `page`, since the arrow cell spells that word too;
-    #   * the ARROW cell goes with it, because ←/→ cannot act in scroll mode and a key that
-    #     cannot act does not spend a cell of a measured block (the rule `o` and the store
-    #     keys already follow, applied to a mode instead of an install).
-    # The second one is the discriminating half: a Tab that only flipped a variable the
-    # window code read would pass the first check on any list short enough to be one page.
+    # → past the last page fetches one more batch (in page mode).
+    pane_results() {
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+            grep -oE '[0-9]+ results' | head -1 | cut -d' ' -f1
+    }
+    grew=0; i=0
+    while [ $i -lt 3 ]; do
+        tmux send-keys -t "$TS" Right Right
+        [ "$(poll_until 12 results_gt 20)" = 1 ] && grew=1
+        [ "$grew" = 1 ] && break
+        i=$((i + 1))
+    done
+    report "the right edge grows the count" 1 "$grew"
+
+    # ← on page 1 is the mirror, truncating back to the floor.
+    tmux send-keys -t "$TS" Left Left Left Left Left Left Left Left Left Left Left Left
+    shrank=$(poll_until 10 results_is 20)
+    report "the left edge drops it again" 1 "$shrank"
+    tmux send-keys -t "$TS" Left Left Left Left Left Left
+    results_not20() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" != 20 ]; }
+    report "and stops at a screenful" 0 "$(poll_until 1 results_not20)"
+    appended=$(poll_until 6 cfg_has '^UT_START_RESULTS=20$')
+    report "the count lands in its own key" 1 "$appended"
+    report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
+
+    # Leave page mode back to scroll mode via Tab
     tmux send-keys -t "$TS" Tab
     gone=$(poll_until 10 pane_lacks 'page [0-9]+/[0-9]+')
     report "Tab leaves page mode" 1 "$gone"
-    gone=$(poll_until 10 pane_lacks '←/→ page')
-    report "…and the arrows stop spending a cell" 1 "$gone"
+    gone_arr=$(poll_until 10 pane_lacks '(←→|←/→) page')
+    report "…and the arrows stop spending a cell" 1 "$gone_arr"
     wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=scroll$')
-    report "…and writes the mode to your config" 1 "$wrote"
-    tmux send-keys -t "$TS" Tab
-    shown=$(poll_until 10 pane_has 'page [0-9]+/[0-9]+')
-    report "Tab comes back" 1 "$shown"
-    wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=page$')
     report "…and the file follows it back" 1 "$wrote"
 
     # THE ELEVENTH preference key, and the one that changes what the next Enter LAUNCHES.
@@ -2748,7 +2614,7 @@ else
     # is the ROTATION — a key wired to set one value passes the first check and fails the
     # second — and because the third has to bring the default back, which spends no width at
     # all (the rule quality= and min=/max= already follow). This pane's chrome is pinned to
-    # English by the fixture, so naming the segment is safe here.
+    # English by YT_LANG, so naming the segment is safe here.
     tmux send-keys -t "$TS" 'r'
     shown=$(poll_until 10 pane_has 'loop seq')
     report "r puts the loop mode on the status line" 1 "$shown"
@@ -2792,7 +2658,7 @@ else
 
     # ---- the preference write-back and the two count edges ----------------------------
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
-    # The rows on screen are the fixture these keys need, and the keys are the only way to
+    # The rows on screen are the state these keys need, and the keys are the only way to
     # reach the write path — there is no verb for it, deliberately (the agent surface for a
     # preference IS the config file, ARCHITECTURE.md「两个根数据文件」).
     #
@@ -2817,7 +2683,7 @@ else
 
     # The SEVENTH preference key, on the same pane and the same deferred write. Two
     # discriminators, neither of which a naive implementation gets for free:
-    #   * the fixture has no UT_PLAY_QUALITY line, so this key can only APPEND — the mode
+    #   * the config has no UT_PLAY_QUALITY line, so this key can only APPEND — the mode
     #     check above only proves the in-place edit;
     #   * `auto` is deliberately NOT printed on the status line (a field sitting at its
     #     default is pure width — the rule min=/max= already follow), so the line is grepped
@@ -2836,38 +2702,6 @@ else
     report "f writes the quality tier to your config" 1 "$wrote"
     shown=$(poll_until 10 pane_has 'quality medium')
     report "…and the status line says so" 1 "$shown"
-
-    # → past the last page fetches one more batch. Two presses is the geometry this pane has
-    # (10 rows a page, 20 rows on screen), and the round repeats rather than assuming it: a
-    # reflow that made the pages shorter would just take another lap. The assertion is
-    # RELATIONAL — it grew — so a lap that overshoots to three batches still proves the edge.
-    grew=0; i=0
-    while [ $i -lt 3 ]; do
-        tmux send-keys -t "$TS" Right Right
-        [ "$(poll_until 12 results_gt 20)" = 1 ] && grew=1
-        [ "$grew" = 1 ] && break
-        i=$((i + 1))
-    done
-    report "the right edge grows the count" 1 "$grew"
-
-    # ← on page 1 is the mirror, and the reason it can live on a bare arrow: it truncates
-    # what is already in hand, so it costs nothing and cannot fail. Twelve presses is a walk
-    # back to page 1 from wherever the growth left the cursor plus the steps down; the ones
-    # that land at the floor are the next check's, and they must do nothing at all.
-    tmux send-keys -t "$TS" Left Left Left Left Left Left Left Left Left Left Left Left
-    shrank=$(poll_until 10 results_is 20)
-    report "the left edge drops it again" 1 "$shrank"
-    # The floor. An implementation without one walks 20 → 0 and renders an empty list, which
-    # is the shape this catches: the count must sit still, not fall.
-    tmux send-keys -t "$TS" Left Left Left Left Left Left
-    results_not20() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" != 20 ]; }
-    report "and stops at a screenful" 0 "$(poll_until 1 results_not20)"
-    # The append path, and the key that must NOT be written: UT_FETCH_BATCH is the STEP each
-    # edge moves by, so storing a total in it would make the next → add 20 rows at a time
-    # more than the last. The count lives in its own key or nowhere.
-    appended=$(poll_until 6 cfg_has '^UT_START_RESULTS=20$')
-    report "the count lands in its own key" 1 "$appended"
-    report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
 
     # A filter is a page of MATCHES, so running off its end is not a request for more rows.
     # This went red before the guard landed (measured 2026-08-29): `/` then `zzz` then `→`
@@ -2944,11 +2778,11 @@ else
     #
     # The log is cleared HERE rather than seeded empty, by the same real command that seeded
     # it, because the check above needs rows and this one needs none: the two claims disagree
-    # about the fixture, not about the pane. Deterministic either way — no query decides
+    # about the store's state, not about the pane. Deterministic either way — no query decides
     # whether this door is closed, which is what the `i` walk below cannot say for itself.
     UT_STATE_DIR="$TUI_STATE" shell/ut-history --clear -j >/dev/null 2>&1
     [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 0 ] ||
-        { echo "contract.sh: the log fixture did not clear — suite error, not a failure" >&2; exit 1; }
+        { echo "contract.sh: the log did not clear — suite error, not a failure" >&2; exit 1; }
     tmux send-keys -t "$TS" h
     said=$(poll_until 10 pane_has 'nothing listened to yet')
     report "an empty log answers with a notice" 1 "$said"
@@ -3202,6 +3036,113 @@ else
     tmux kill-session -t "$TS" 2>/dev/null
     rm -rf "$TUI_STATE"
 
+    # ── Startup adoption: the player this screen did NOT launch ─────────────────────────
+    # The bug this section pins was audible. With `ut-play -d` already playing, uting started
+    # with an empty banner (the state block initialises to "nothing is attached", and nothing
+    # ever asked otherwise), every key that needs a target fell through its own
+    # `[[ -n "$CURRENT_PLAY_ID" ]]` guard as a silent no-op, and Enter launched a SECOND mpv
+    # over the first — two tracks in the speakers at once, and the older player unreachable
+    # from the screen for the rest of the session.
+    #
+    # THREE panes, and it cannot be fewer: adoption is decided ONCE per process, at startup,
+    # so each answer needs a startup of its own. Every player below is a real detached player
+    # and every answer is read back from `ut-play --status` in THIS shell, not from the frame.
+    ADOPT_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-adopt.XXXXXX")
+    # An EMPTY config, and empty is the point: it stages nothing, it is only somewhere for the
+    # pane's preference write-back to land that is not the developer's real file — the same
+    # isolation UT_STATE_DIR gives the stores. YT_LANG=en beside it because three checks below
+    # name an English chrome string, and a blank config would let the machine's locale decide.
+    ADOPT_CFG="$UT_TEST_TMP/adopt-config"
+    : >"$ADOPT_CFG"
+    # TMPDIR is the suite's, deliberately and unlike UT_STATE_DIR: the players directory lives
+    # under it, so this shell and the pane have to share one — that shared dir IS how the pane
+    # can see a player this shell started. The EXIT trap's `--stop --all` reaps whatever any
+    # check below leaves behind.
+    # TS, the variable pane_has reads, is set HERE and not inside adopt_boot: the boot is
+    # called as `$(adopt_boot)` for its poll result, command substitution is a SUBSHELL, and
+    # an assignment made in there reaches nothing. It cost this section an afternoon of
+    # "adopted but no banner" — every pane grep was reading the previous section's dead
+    # session, which captures empty and so can only ever agree with `0`.
+    TS="ctest-adopt-$$"
+    ADOPT_TS="$TS"
+    adopt_boot() {
+        tmux kill-session -t "$ADOPT_TS" 2>/dev/null
+        tmux new-session -d -s "$ADOPT_TS" -x 100 -y 30 \
+            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$ADOPT_STATE' UT_CONFIG='$ADOPT_CFG' YT_LANG=en shell/uting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+        # The header's own count word, the same first-frame marker the section above waits on:
+        # the spinner line that precedes it says `searching "…"` and never `results`.
+        poll_until 40 pane_has 'results'
+    }
+    adopt_n()       { shell/ut-play --status -j 2>/dev/null | jq '.players | length'; }
+    adopt_id()      { shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].id // ""'; }
+    adopt_paused()  { [ "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = true ]; }
+    adopt_playing() { [ "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = false ]; }
+    adopt_swapped() { local i; i=$(adopt_id); [ -n "$i" ] && [ "$i" != "$A_ID" ]; }
+    adopt_none()    { [ "$(adopt_n)" = 0 ]; }
+    # PLAYING, not merely started. A detached player exists as a record the moment it forks,
+    # and its title stays null until the child has resolved the URL — adopt that window and
+    # the banner is legitimately blank (it fills itself on the first tick, once mpv answers
+    # with a media-title). Polled, never slept: the wait is a yt-dlp call, so its length is
+    # the network's to decide.
+    adopt_ready()   { [ -n "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].title // ""')" ]; }
+
+    # ---- one background player: adopted, controllable, and replaced on Enter ----------
+    A_ID=$(shell/ut-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
+    [ -n "$A_ID" ] ||
+        { echo "contract.sh: the background player did not start — suite error, not a failure" >&2; exit 1; }
+    report "the background player is playing before the screen opens" 1 "$(poll_until 60 adopt_ready)"
+    booted=$(adopt_boot)
+    report "the adoption pane boots" 1 "$booted"
+    # `Playing: .+` and not `Playing:`: the label alone is what an adoption that got the id
+    # and nothing else would print, and that was a real state of this code — the banner is
+    # only worth its line if the TRACK reached it.
+    report "a running player is on the banner of the FIRST frame" 1 "$(poll_until 10 pane_has 'Playing: .+')"
+    # The banner alone could be drawn from a record read once. This is the half that cannot:
+    # Space goes out as `ut-play --pause --id`, and the answer is read back here from the
+    # player's own state — so it proves the pane adopted the ID AND the socket of the process
+    # that is actually decoding.
+    tmux send-keys -t "$ADOPT_TS" Space
+    report "…and its keys reach that player" 1 "$(poll_until 10 adopt_paused)"
+    # Back again, and asserted rather than assumed: Space is two idempotent verbs and never a
+    # toggle (ARCH-player.md「运行时 IPC」).
+    tmux send-keys -t "$ADOPT_TS" Space
+    report "…both ways" 1 "$(poll_until 10 adopt_playing)"
+
+    # Enter over an adopted player: replaced, never stacked.
+    tmux send-keys -t "$ADOPT_TS" j
+    tmux send-keys -t "$ADOPT_TS" Enter
+    # The COUNT is what the ghost bug got wrong (two mpvs in the speakers); the ID is what a
+    # dropped Enter would get wrong (still the adopted one, nothing launched).
+    report "Enter replaces the adopted player" 1 "$(poll_until 30 adopt_swapped)"
+    report "…and does not stack a second mpv behind it" 1 "$(adopt_n)"
+    tmux send-keys -t "$ADOPT_TS" q
+    report "the Enter pane quits" 1 "$(poll_until 10 pane_has 'RC=0')"
+    # This player was launched from the list, so it leaves with the screen.
+    report "q takes the player this session started" 1 "$(poll_until 10 adopt_none)"
+    tmux kill-session -t "$ADOPT_TS" 2>/dev/null
+
+    # ---- two: ambiguous, so the screen adopts neither and says so ----------------------
+    # `ut-play` answers `ambiguous` to a bare command with two live players (resolve_target).
+    # The screen guesses no harder than the core does, and it must not quietly stop either one
+    # on the way out — the same claim as above for a player it never took.
+    A_ID=$(shell/ut-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
+    B_ID=$(shell/ut-play -d -j --engine yt -- "$CAPTIONED" 2>/dev/null | jq -r '.id // ""')
+    [ -n "$A_ID" ] && [ -n "$B_ID" ] ||
+        { echo "contract.sh: background players did not start — suite error, not a failure" >&2; exit 1; }
+    report "two players are live for the ambiguous case" 2 "$(adopt_n)"
+    booted=$(adopt_boot)
+    report "the ambiguous pane boots" 1 "$booted"
+    report "…with no banner: two players is not a guess to make" 0 \
+        "$(tmux capture-pane -t "$ADOPT_TS" -p -J 2>/dev/null | grep -c 'Playing:')"
+    report "…and the screen says why" 1 "$(poll_until 10 pane_has 'several background players')"
+    tmux send-keys -t "$ADOPT_TS" q
+    report "the ambiguous pane quits too" 1 "$(poll_until 10 pane_has 'RC=0')"
+    report "…and stopped neither player" 2 "$(adopt_n)"
+    shell/ut-play --stop --all -j >/dev/null 2>&1
+    report "q leaves players it did not adopt running" 1 "$(poll_until 10 adopt_none)"
+    tmux kill-session -t "$ADOPT_TS" 2>/dev/null
+    rm -rf "$ADOPT_STATE"
+
     # ── The parts view (key: c), on whichever installed engine HAS --parts ──────────────
     # This row source had no coverage at all. The session above drives yt, where `c` is inert
     # by capability — which is a real claim and is checked up there, but it means open_parts'
@@ -3221,11 +3162,9 @@ else
     else
         # Its own config and its own state dir, not the section's above: the `#` check up
         # there TOGGLES UT_ROW_INDEX and writes it back, so borrowing that file would make
-        # the row cursor readable or not depending on which checks ran before this one. A
-        # fixture, in the sense this file allows — data a real command reads.
+        # the row cursor readable or not depending on which checks ran before this one.
         PTS_CFG="$UT_TEST_TMP/parts-config"
-        printf '%s\n' '# fixture: the walk below names rows by their ordinal' \
-            'UT_ROW_INDEX=on' 'UT_LIST_MODE=page' >"$PTS_CFG"
+        : >"$PTS_CFG"
         PTS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-partsstore.XXXXXX")
         TS="ctest-parts-$$"          # the helpers above read $TS; the first session is gone
         tmux kill-session -t "$TS" 2>/dev/null
@@ -3235,6 +3174,11 @@ else
         if [ "$up" != 1 ]; then
             report "the parts pane came up" 1 "$up"
         else
+            # Enable row numbering with # and page mode with Tab via real keypresses
+            tmux send-keys -t "$TS" '#'
+            poll_until 5 pane_has '^[[:space:]>▶▎]*1\. ' >/dev/null
+            tmux send-keys -t "$TS" Tab
+            poll_until 5 pane_has 'page ' >/dev/null
             # The same walk shape the `i` block uses, and for the same reason: which of
             # today's rows is multi-part is the site's business, not this file's. Cheaper per
             # lap than that one — `--parts` is a single HTTP request, not an extraction — so

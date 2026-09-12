@@ -251,7 +251,8 @@ Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-con
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
   --status  {status:"players", players:[{id,pid,url,engine,mode,volume,paused,position,
-            duration,title,selected,selected_resolution,media,started_at,queue}],
+            duration,title,selected,selected_resolution,media,loop,started_at,queue,
+            sock,log}],
             failed:[{id,url,engine,mode,started_at,ended_at,exit_code,reason}]}
             volume/paused/position/duration are read live off the player (null = could
             not ask); selected is the format the ENGINE picked, backfilled after the
@@ -261,8 +262,10 @@ Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-con
             property does not apply (audio-only has no video_codec) or is not yet known;
             bitrates are bits per second and are demuxer estimates. engine and url
             together are the CALL that is playing (\`ut-play --engine E -- URL\`), and
-            both follow the queue from track to track; failed lists players that died on
-            their own
+            both follow the queue from track to track; sock/log are the same two paths
+            -d -j hands back, so a caller that did not start the player (a TUI adopting
+            one) can control it without rebuilding the state-dir layout; failed lists
+            players that died on their own
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
@@ -2150,6 +2153,11 @@ do_status() {
                 # The queue comes off disk rather than the socket: it is the PLAYER's state,
                 # not mpv's — mpv is told one URL at a time and never learns there is a list.
                 queue_snapshot "${LIVE_PLAYER_IDS[$i]}"
+                # sock/log ride along for the same reason the -d envelope carries them: a
+                # caller that wants to CONTROL a player it did not start (uting adopting a
+                # background player at startup) needs the socket, and the only other way to
+                # get it is to rebuild "$STATE_DIR/mpv-$id.sock" in a second script — the
+                # duplication this envelope exists to prevent. ARCH-player.md「运行时 IPC」.
                 parts+=("$(jq -c \
                     --argjson live "${LP_VOLUME:-null}" \
                     --argjson paused "${LP_PAUSED:-null}" \
@@ -2160,7 +2168,8 @@ do_status() {
                     '{id, pid, url, engine, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
                       title, selected, selected_resolution, media: $media,
-                      loop: (.loop // "off"), started_at, queue: $queue}' \
+                      loop: (.loop // "off"), started_at, queue: $queue,
+                      sock, log}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The

@@ -293,10 +293,13 @@ append to.
 
 **Functional tests only.** A command-line tool is tested by running it and reading its exit
 code and its stdout, which is all these do — no rig layer, no screen model, no pty harness,
-no unit tier, and **no mock, fake, stub or stand-in of any kind**. The only thing the suite
-authors is a *fixture*: data a real command really reads. Anything that would *run* in place
-of a component is out, peers included — a claim needing a real peer is proved where the real
-one runs, or it is not claimed. Each file's header says what it proves; run either one directly.
+no unit tier, and **no fixture, mock, fake, stub or stand-in of any kind** — all tests
+are real functional tests. Tests drive real entry points, send real network requests, parse
+real envelopes, and manage real processes; no synthetic state files, no pre-baked fixture
+responses, and no staged configuration keys. Anything that would run in place of a component
+or fake its output is out, peers included — a claim needing a real peer or external service is
+proved against the real one, or it is not claimed. Each file's header says what it proves; run
+either one directly.
 
 | Suite | What it is for |
 |---|---|

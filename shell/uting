@@ -596,7 +596,8 @@ Keys (List View):
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   ?        show more / fewer keys (also ？). The hint block has two tiers:
            `core` is this view's own job, `full` is every key above. UT_KEYS pins it
-  q        quit (stops background playback on exit)
+  q        quit (stops a player this session started; a player that was already
+           running when uting opened is adopted on the banner and left running)
 
   The eleven settings these keys change — engine, sort field, playback mode, quality tier,
   theme, chrome language, the result count, the key-hint tier, row numbers, the list mode
@@ -1838,6 +1839,7 @@ set_ui_lang() {
         S_LOOP="循环"; S_LOOP_ACT="循环"; S_LOOP_OFF="关"; S_LOOP_SEQ="顺序"; S_LOOP_ONE="单曲"
         S_LOOP_NEXT="（下次起播生效）"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
+        S_ADOPT_ACT="播放器"; S_ADOPT_MANY="后台有多个播放器在跑，没有接管（ut-play --status 可以看）"
         S_PREF_ACT="配置"
         S_PREF_PINNED="由环境变量固定，没有写入配置文件"
         S_PREF_FAILED="配置文件写不了，这次改的偏好没有存下来"
@@ -1879,6 +1881,7 @@ set_ui_lang() {
         S_LOOP="loop"; S_LOOP_ACT="Loop"; S_LOOP_OFF="off"; S_LOOP_SEQ="seq"; S_LOOP_ONE="one"
         S_LOOP_NEXT=" (from next play)"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
+        S_ADOPT_ACT="Player"; S_ADOPT_MANY="several background players are running, none adopted (ut-play --status lists them)"
         S_PREF_ACT="Config"
         S_PREF_PINNED="is fixed by the environment — not written to your config"
         S_PREF_FAILED="could not be written — this session's preferences were not saved"
@@ -2168,6 +2171,11 @@ CURRENT_PLAY_LOADING=0
 # time-pos=77390 duration=77403 percent-pos=99.98.
 CURRENT_PLAY_IS_LIVE=0
 CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed readout
+# Did this session START the player, or find one already running and adopt it
+# (probe_active_player)? ONE path asks: the exit trap. Every other path — s, Enter, the
+# liveness poll, every verb — treats an adopted player exactly like a launched one, because
+# it is one: same id, same socket, same verbs.
+CURRENT_PLAY_ADOPTED=0
 
 # ── The item one `<engine>-resolve --info` describes (key: i) ───────────────────────────
 # `i` is the DOOR, and the fetch behind it is what keeps this from being a second spelling of
@@ -3561,6 +3569,105 @@ apply_player_record() {
     return 0
 }
 
+# The session this screen opens into may ALREADY have a player: `ut-play -d` from a shell, a
+# queue started by an agent, or a previous uting whose player outlived it (that is what
+# detached playback is for). Nothing used to ask. The first frame then drew an empty banner
+# over a track that was audibly playing, every key that needs a target fell through its
+# `[[ -n "$CURRENT_PLAY_ID" ]]` guard as a silent no-op, and Enter launched a SECOND mpv over
+# the first — two tracks in the speakers at once, and the older player unreachable from this
+# screen for the rest of the session, because its id was never here to stop it with.
+#
+# ONE fork, once, before the first frame. The 0/1/many split is not this file's invention: it
+# is ut-play's own resolve_target rule reached from the client side, so "which player does a
+# command with no --id mean" has ONE answer in this suite. Exactly one live player is
+# unambiguous and gets adopted; two or more is `ambiguous` there and this screen guesses no
+# harder than the core does — it says so in a notice and leaves the banner empty, and the
+# next Enter is then the user's own explicit choice of what should be playing.
+#
+# The socket comes out of the ENVELOPE, never rebuilt from "$STATE_DIR/mpv-$id.sock": the
+# same rule the launch path follows, and the reason --status carries sock at all
+# (ARCH-player.md「运行时 IPC」).
+probe_active_player() {
+    local out n rec id pid sock paused pos pkey i
+    out=$("$PLAY_BIN" --status -j 2>/dev/null) || return 0
+    n=$(printf '%s' "$out" | jq -r '.players | length' 2>/dev/null) || return 0
+    [[ "$n" =~ ^[0-9]+$ ]] || return 0
+    if ((n != 1)); then
+        if ((n > 1)); then store_notice "$S_ADOPT_ACT:" "$S_ADOPT_MANY"; fi
+        return 0
+    fi
+    rec=$(printf '%s' "$out" | jq -c '.players[0]' 2>/dev/null) || return 0
+    [[ -n "$rec" ]] || return 0
+    # `(.pid // "" | tostring)`, not `(.pid | tostring // "")`: the second parses as
+    # `.pid | (tostring // "")` and turns a null pid into the STRING "null", which
+    # check_player_alive then hands to `kill -0` on the first tick — the adoption would undo
+    # itself one second after the first frame. US for the same reason start_playback uses it.
+    IFS="$US" read -r id pid sock paused pos < <(
+        printf '%s' "$rec" | jq -r '[(.id // ""), (.pid // "" | tostring), (.sock // ""),
+                                     (if .paused then "1" else "0" end),
+                                     (.position // "" | tostring)] | join("\u001f")' 2>/dev/null
+    ) || true
+    # Same pair the launch path requires: without an id there is nothing to command and
+    # without a socket nothing to read. -S is deliberately NOT tested — a player still on its
+    # way up has a record before mpv has bound the socket, and every reader of the path
+    # already guards on -S per tick, so it simply starts answering when it appears.
+    [[ -n "$id" && -n "$sock" ]] || return 0
+
+    CURRENT_PLAY_ID="$id"
+    CURRENT_PLAY_PID="$pid"
+    CURRENT_PLAY_SOCK="$sock"
+    CURRENT_PLAY_PAUSED="$paused"
+    # Not "Starting": this player is already up, and the loading state is a claim about a
+    # launch THIS screen made and is waiting on. player_check_ready would have nothing to
+    # resolve it against.
+    CURRENT_PLAY_LOADING=0
+    CURRENT_PLAY_ADOPTED=1
+    # Title, duration, url, engine and the queue counters go through the one ingest point,
+    # not through a second copy of the same jq: an adopted title has to be the SAME cleaned
+    # spelling as the row it will be drawn over (apply_player_record).
+    apply_player_record "$rec"
+    # A player adopted in the seconds before its child has resolved has a record with a null
+    # title, and a banner that says "Playing:" and nothing else names nothing. The url is what
+    # this screen knows in that window — it is the other half of the CALL, it is already here,
+    # and the record's own title replaces it on the first tick (fetch_play_times' tripwire
+    # fires against an empty CURRENT_PLAY_MPV_TITLE as soon as mpv has one).
+    [[ -n "$CURRENT_PLAY_TITLE" ]] || CURRENT_PLAY_TITLE="$CURRENT_PLAY_URL"
+    # Where the player is, not when it started: the elapsed readout counts from
+    # CURRENT_PLAY_STARTED, so a player found 40 minutes into a track has to be attached with
+    # a start stamp 40 minutes in the past or the banner would restart its clock at 0:00.
+    local now
+    now=$(date +%s 2>/dev/null || echo 0)
+    pos=${pos%%.*}                                 # mpv answers e.g. 137.402
+    if [[ "$pos" =~ ^[0-9]+$ ]]; then
+        CURRENT_PLAY_STARTED=$((now - pos))
+    else
+        CURRENT_PLAY_STARTED=$now
+    fi
+    # Liveness is the one fact the record cannot carry: mpv reports a live stream's duration
+    # as the live edge, so nothing in the envelope distinguishes it from a long file (see
+    # CURRENT_PLAY_IS_LIVE). The list is asked instead — the same source the launch path uses
+    # (the row's own live_status) — matched on handle_key's normalised handle, which is how
+    # the renderer already decides "the player holds this row". A player on a track that is
+    # not in this list keeps the static readout, exactly as it did before adoption existed.
+    if [[ -n "$CURRENT_PLAY_URL" ]]; then
+        handle_key "$CURRENT_PLAY_URL"; pkey="$HANDLE_KEY"
+        for ((i = 0; i < NUM_ENTRIES; i++)); do
+            handle_key "${urls[$i]:-}"
+            if [[ "$HANDLE_KEY" == "$pkey" ]]; then
+                if [[ "${R_LIVE[$i]:-}" == "is_live" ]]; then
+                    CURRENT_PLAY_IS_LIVE=1
+                    CURRENT_PLAY_DURATION="$GL_LIVE"
+                fi
+                break
+            fi
+        done
+    fi
+    # The first tick's tripwire fires once against an empty CURRENT_PLAY_MPV_TITLE and
+    # re-reads the record — one fork, and the right one: it is also how a track that changed
+    # between this probe and the first frame gets noticed.
+    return 0
+}
+
 # `+` — append the focused row to the RUNNING player's queue. The player owns the queue, so
 # this is one verb call and no state of our own; the envelope answers with the queue it wrote,
 # which is what the status line then counts.
@@ -3679,6 +3786,7 @@ clear_play_state() {
     CURRENT_PLAY_LOADING=0
     CURRENT_PLAY_IS_LIVE=0
     CURRENT_PLAY_STARTED=0
+    CURRENT_PLAY_ADOPTED=0
     # The list reads the whole PT_* triple now — the rail reads PT_PCT to decide
     # live-vs-static, and the banner tail reads PT_CUR/PT_TOTAL — so all three clear here or
     # a stale one keeps drawing a position for a player that no longer exists. PT_CUR is the
@@ -3820,6 +3928,14 @@ cleanup_on_exit() {
         # Said twice on purpose: the copy printed at the moment of failure was wiped by the
         # next redraw, and nothing repaints after this one.
         printf '%s %s\n' "$S_PREF_ACT:" "$S_PREF_FAILED"
+    fi
+    # What this session STARTED, this session takes with it. A player it ADOPTED is the other
+    # case and the opposite answer: `ut-play -d` put it there precisely to outlive a terminal,
+    # and a screen opened to look at it must not be the thing that kills it. The user's own
+    # stop is unchanged and one key away — `s` goes through stop_current_playback like any
+    # other, and clears the flag with the rest of the state.
+    if ((CURRENT_PLAY_ADOPTED)); then
+        return 0
     fi
     stop_current_playback
 }
@@ -7447,6 +7563,11 @@ if ((rc != 0)); then
     fi
 fi
 apply_search_results
+# After the rows exist, because the adopted track may be one of them (the liveness lookup in
+# there), and before the first frame, because an empty banner over a playing track is the
+# whole bug. It is also the last thing that may fork before the tty changes hands.
+probe_active_player
+
 
 # From here on every keystroke belongs to the UI, so take the driver's echo out of the way.
 # After the trap is installed, never before: the restore has to be reachable from every exit.
