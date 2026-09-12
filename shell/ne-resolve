@@ -227,6 +227,8 @@ TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_st
 CONTAINER_KIND=""    # album | playlist — which endpoint pair --items will spend
 CONTAINER_ID=""      # the container's numeric id
 CONTAINER_URL=""     # the canonical container URL it normalises to
+CURSOR=""            # the --cursor token as the caller typed it, "" when absent
+CURSOR_OFFSET=0      # the item offset it decodes to; 0 is the first batch
 FMT=""               # the yt-dlp format string the mode resolves to
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
@@ -1186,10 +1188,17 @@ JQ_ITEM_FILTER='
 # `count` is what survived and `total` is what the site SAYS the container holds. The gap covers
 # both truncation and filtered-out rows, and the envelope does not add a key to tell them apart:
 # the answer to either is the same, ask for a smaller container or accept less.
+#
+# `has_more` is NOT that key: it answers whether the CONTAINER holds rows past this batch — never
+# whether rows were filtered out of it — and `next_cursor` is how to ask for them. A VIP-only
+# album that lists zero rows still says has_more false, because there is nothing more to fetch;
+# the filter is what emptied it, and `total` already says so. ARCH-engine.md「容器（--items）」.
 JQ_ITEMS='
 {status: "ok", engine: $engine, id: $id, url: $url, title: $title,
  count: ($rows | length),
  total: $total,
+ has_more: $has_more,
+ next_cursor: $next_cursor,
  items: [ $rows | to_entries[]
           | .key as $i | .value as $r
           | ($r.id | tostring) as $sid
@@ -1209,7 +1218,11 @@ items_album_rows() {
     ITEMS_TITLE=$(jq -r '.album.name // empty' "$body" 2>/dev/null) || ITEMS_TITLE=""
     ITEMS_TOTAL=$(jq -r '.album.size // "null"' "$body" 2>/dev/null) || ITEMS_TOTAL="null"
     [[ "$ITEMS_TOTAL" =~ ^[0-9]+$ ]] || ITEMS_TOTAL="null"
-    ITEMS_RAW=$(jq -c --argjson max "$ITEMS_MAX" '[(.songs // [])[]] | .[0:$max]' "$body" 2>/dev/null) ||
+    # The cursor cuts the SAME one response rather than buying a second: this endpoint hands the
+    # whole album over in one go, so a batch here is a window on what already arrived, and the
+    # ceiling is only ever reached by an album longer than 500 tracks.
+    ITEMS_RAW=$(jq -c --argjson max "$ITEMS_MAX" --argjson off "$CURSOR_OFFSET" \
+        '[(.songs // [])[]] | .[$off:($off + $max)]' "$body" 2>/dev/null) ||
         items_fail "unknown"
     ITEMS_BODY="$body"
     ITEMS_BODY_KEY="songs"
@@ -1230,8 +1243,13 @@ items_playlist_rows() {
     ITEMS_TOTAL=$(jq -r '.playlist.trackCount // "null"' "$body" 2>/dev/null) || ITEMS_TOTAL="null"
     [[ "$ITEMS_TOTAL" =~ ^[0-9]+$ ]] || ITEMS_TOTAL="null"
 
+    # THE ID LIST IS WHERE THE CURSOR BITES, and it is the cheap place for it: this response
+    # carries every id the playlist holds (measured: 1266 of them) and only a handful of full
+    # records, so a batch is a window on the ids and the records are bought for that window
+    # alone. One request more per batch, never the whole playlist twice.
     local ids n
-    ids=$(jq -c --argjson max "$ITEMS_MAX" '[(.playlist.trackIds // [])[].id] | .[0:$max]' "$body" 2>/dev/null) ||
+    ids=$(jq -c --argjson max "$ITEMS_MAX" --argjson off "$CURSOR_OFFSET" \
+        '[(.playlist.trackIds // [])[].id] | .[$off:($off + $max)]' "$body" 2>/dev/null) ||
         items_fail "unknown"
     n=$(printf '%s' "$ids" | jq 'length' 2>/dev/null) || n=0
 
@@ -1299,8 +1317,20 @@ resolve_items() {
         items_fail "unknown"
     title_arg="null"
     [[ -n "$ITEMS_TITLE" ]] && title_arg=$(jq -nc --arg t "$ITEMS_TITLE" '$t')
+
+    # has_more reads the RAW batch, before the access filter: how many upstream rows this call
+    # took, against what the site says the container holds.
+    local taken has_more=false next_cursor="null"
+    taken=$(printf '%s' "$ITEMS_RAW" | jq 'length' 2>/dev/null) || taken=0
+    [[ "$taken" =~ ^[0-9]+$ ]] || taken=0
+    if [[ "$ITEMS_TOTAL" != "null" ]] && ((CURSOR_OFFSET + taken < ITEMS_TOTAL)) && ((taken > 0)); then
+        has_more=true
+        next_cursor="\"o:$((CURSOR_OFFSET + taken))\""
+    fi
+
     env_json=$(jq -nc --argjson rows "$rows" --arg engine "$ENGINE_NAME" --arg id "$CONTAINER_ID" \
         --arg url "$CONTAINER_URL" --argjson title "$title_arg" --argjson total "$ITEMS_TOTAL" \
+        --argjson has_more "$has_more" --argjson next_cursor "$next_cursor" \
         "$JQ_PRELUDE $JQ_ACCESS $JQ_ITEMS" 2>/dev/null) ||
         items_fail "unknown"
 
@@ -1373,7 +1403,7 @@ Usage:
   ne-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <song id | URL>
   ne-resolve --info [-j|-J] -- <song id | URL>
   ne-resolve --transcript [-j|-J] -- <song id | URL>
-  ne-resolve --items [-j|-J] -- <album URL | playlist URL>
+  ne-resolve --items [--cursor TOKEN] [-j|-J] -- <album URL | playlist URL>
   ne-resolve --auth [-j]
 
 The handle is a NetEase song URL or the bare numeric song id (what `ne-search -j` returns as
@@ -1402,7 +1432,10 @@ Options:
            number cannot say what it identifies. Every element is an item record, so the list
            pipes into ut-playlist --add and ut-play --queue unmapped. Rows are filtered by
            access exactly as search rows are (see NE_INCLUDE_VIP), because a stored row has
-           to be playable. At most 500 tracks
+           to be playable. At most 500 tracks per call — has_more/next_cursor say whether
+           there are more and how to ask
+  --cursor TOKEN  Continue an --items listing: pass back the next_cursor of the envelope
+           before it. Opaque, and the same shape in every engine of this suite
   --auth   Report the cookie decision: which browser profile playback will read, and whether
            it exists here. No network, no handle. Says cookies are SENT, not that they are
            accepted — an expired login still reports "cookie"
@@ -1433,11 +1466,14 @@ Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segm
   ("纯音乐，请欣赏") as well as by its documented `nolyric` flag, because measured 2026-09-02
   the flag fires on almost none of them.
 
-Items JSON (--items -j): {status,engine,id,url,title,count,total,
+Items JSON (--items -j): {status,engine,id,url,title,count,total,has_more,next_cursor,
                           items:[{n,engine,id,url,title,duration,duration_fmt}]}
   count is what survived; total is what the site says the container holds. They differ when
   the container is longer than the cap and when rows were filtered out by access, and the
   envelope does not say which — the answer to either is the same.
+  has_more says whether the CONTAINER holds rows beyond this batch (never whether rows were
+  filtered out of it), and next_cursor is the token to ask for them with — null exactly when
+  has_more is false. n numbers the rows of THIS batch, from 1.
   An album is ONE request. A playlist is two or more: the site returns all of a playlist's
   track ids but only a handful of full records, so the rest are fetched in batches of 100 and
   put back in the playlist's own order.
@@ -1516,6 +1552,15 @@ while (($#)); do
         set_action items --items
         shift
         ;;
+    --cursor=*)
+        CURSOR="${1#*=}"
+        shift
+        ;;
+    --cursor)
+        [[ $# -ge 2 ]] || { echo "ne-resolve: --cursor requires a value" >&2; exit 1; }
+        CURSOR="$2"
+        shift 2
+        ;;
     --auth)
         set_action auth --auth
         shift
@@ -1590,7 +1635,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "ne-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --items --auth)" >&2
+        echo "ne-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --items --cursor --auth)" >&2
         exit 1
         ;;
     *)
@@ -1642,6 +1687,18 @@ fi
 # gating layer exists to reject rather than ignore (ARCH-cli-contract.md「门模型」).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
+fi
+
+# THE CURSOR IS A TOKEN THIS ENGINE MINTED, so both ways of getting it wrong are answered here,
+# before a packet is spent: it belongs to --items (no other verb has batches), and it has one
+# shape. The shape is the same in all three engines — `o:` and an item offset — so a cursor
+# handed to the wrong engine is caught in argv instead of a request later
+# (ARCH-engine.md「容器（--items）」).
+if [[ -n "$CURSOR" ]]; then
+    [[ "$ACTION" == "items" ]] || die "--cursor continues an --items listing — pass --items"
+    [[ "$CURSOR" =~ ^o:[0-9]+$ ]] ||
+        die "'$CURSOR' is not a cursor — pass back the next_cursor an --items envelope handed you"
+    CURSOR_OFFSET="${CURSOR#o:}"
 fi
 
 # -J is the RAW yt-dlp record, and --auth never runs yt-dlp: there is no raw record for it to

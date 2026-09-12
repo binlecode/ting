@@ -175,14 +175,17 @@ COLOR_MODE="auto"
 OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
 TARGET_URL=""        # the watch URL it normalises to
-CONTAINER_ID=""      # the list id --items resolves to (PL… / OLAK5uy_…)
-CONTAINER_URL=""     # the canonical playlist URL that id normalises to
+CONTAINER_ID=""      # the list id --items resolves to (PL… / OLAK5uy_… / UU…), or a channel handle
+CONTAINER_URL=""     # the canonical playlist or channel-videos URL that id normalises to
+CURSOR=""            # the --cursor token as the caller typed it, "" when absent
+CURSOR_OFFSET=0      # the item offset it decodes to; 0 is the first batch
 
-# One yt-dlp call, capped. --playlist-end takes this number, and there is no flag for it:
-# `-n` is a search flag this engine refuses, and a second spelling of it would be a whole
-# contract for one edge case. A caller learns it was truncated from the envelope, where
-# `count` below `total` says so (measured: a 4749-video list answers 500 with total 4749).
-# ARCH-engine.md「容器（--items）」.
+# One yt-dlp call, capped. --playlist-items takes this number as the END of the slice, and
+# there is still no flag for it: `-n` is a search flag this engine refuses, and a second
+# spelling of it would be a whole contract for one edge case. A caller learns it was truncated
+# from the envelope, where `count` below `total` says so (measured: a 4749-video list answers
+# 500 with total 4749) — and asks for the REST with the cursor the envelope hands back, which
+# is the one thing a ceiling alone could never express. ARCH-engine.md「容器（--items）」.
 ITEMS_MAX=500
 FMT=""               # the yt-dlp format string the mode resolves to
 SUB_LANG=""
@@ -596,20 +599,66 @@ url_list_id() {
     printf '%s' "$v"
 }
 
-# ONLY BOUNDED CONTAINERS. `PL…` (a playlist) and `OLAK5uy_…` (an album) have a last item;
-# `RD…` (Mix radio), `UU…`/`LL`/`FL…` (a channel's uploads, likes, favourites) and a channel
-# URL do not — they are generated as far as you keep asking. A thing with no end cannot be
-# imported: `total` would be a lie and the ceiling would decide the contents. So they are
-# refused by NAME, with the reason, rather than half-read. ARCH-engine.md「容器（--items）」.
+# WHAT A CONTAINER HANDLE LOOKS LIKE. `PL…` (a playlist), `OLAK5uy_…` (an album) and `UU…`
+# (a channel's uploads) are list ids; `@handle`, `/channel/UC…`, `/c/…` and `/user/…` are
+# channels. An 11-character video id is none of them, and neither is a bare word.
+#
+# ONE SHAPE IS STILL REFUSED, and the reason is STABILITY rather than length: a mix (`RD…`) is
+# generated per request, so two calls are not two pages of one list — there is nothing a cursor
+# could promise not to repeat. A channel's uploads, by contrast, measured identical across
+# segmented reads (2026-09-12: `--playlist-items 1:3` + `4:6` equals `1:6`, id for id), which
+# is exactly the property paging needs. `LL`/`FL…` are not named here at all: they need a login,
+# and an engine that refuses them by name would be guessing about cookies it can see — with one,
+# they read; without, yt-dlp says so and that is an upstream failure, not a usage error.
 #
 # The prefix is checked and the LENGTH is not: the measured `PLLdzS5ShOfOw` carries 11
 # characters after `PL` where a list made today carries 32. Length is not this site's
 # invariant; the prefix is.
-container_is_bounded() {
-    case "$1" in
-    PL* | OLAK5uy_*) [[ "$1" =~ ^(PL|OLAK5uy_)[A-Za-z0-9_-]+$ ]] && return 0 ;;
+container_is_list_id() {
+    [[ "$1" =~ ^(PL|OLAK5uy_|UU|UL|LL|FL)[A-Za-z0-9_-]*$ ]]
+}
+
+# A CHANNEL, NORMALISED TO ITS VIDEOS TAB — or "" when the handle is not a channel at all.
+#
+# The tab is not decoration. Measured 2026-09-12: a bare `@handle` flat-lists as THREE rows of
+# `_type: playlist` (Videos / Live / Shorts) and not one video, so a caller who typed a channel
+# and got no tab would be answered `count: 0` about a channel with hundreds of uploads. Naming
+# the tab here is the same move `--no-playlist` makes on the stream verb: say which of the
+# several things this handle could mean.
+channel_videos_url() {
+    local t=$1 path="" seg="" rest=""
+    case "$t" in
+    http://* | https://*)
+        rest="${t#*://}"
+        rest="${rest#*/}"
+        path="${rest%%\?*}"
+        path="${path%%#*}"
+        ;;
+    @*) path="$t" ;;
+    UC[A-Za-z0-9_-]*) path="channel/$t" ;;
+    *) printf '' ; return 0 ;;
     esac
-    return 1
+    path="${path#/}"
+    path="${path%/}"
+    [[ -n "$path" ]] || { printf '' ; return 0 ; }
+
+    # Drop a tab segment the caller may have typed, then name the one this verb means.
+    case "$path" in
+    */videos | */streams | */shorts | */playlists | */featured | */community | */podcasts)
+        path="${path%/*}"
+        ;;
+    esac
+    case "$path" in
+    @*)
+        [[ "$path" =~ ^@[A-Za-z0-9_.-]+$ ]] || { printf '' ; return 0 ; }
+        ;;
+    channel/* | c/* | user/*)
+        seg="${path#*/}"
+        [[ "$seg" =~ ^[A-Za-z0-9_.-]+$ ]] || { printf '' ; return 0 ; }
+        ;;
+    *) printf '' ; return 0 ;;
+    esac
+    printf 'https://www.youtube.com/%s/videos' "$path"
 }
 
 # --items' OWN handle grammar, BESIDE normalize_target rather than inside it: the two answer
@@ -636,10 +685,27 @@ normalize_container() {
     *) id="$t" ;;
     esac
 
+    # A channel is tried only where no list id was found, so `watch?v=…&list=PL…` on a channel
+    # URL still means the list the caller named.
+    if [[ -z "$id" ]]; then
+        local cu
+        cu=$(channel_videos_url "$t")
+        if [[ -n "$cu" ]]; then
+            CONTAINER_ID="$t"
+            CONTAINER_URL="$cu"
+            return 0
+        fi
+    fi
+
     [[ -n "$id" ]] ||
-        die "'$t' carries no list id — --items takes a playlist or album URL (…/playlist?list=PL…), the list= of a watch URL, or the bare list id"
-    container_is_bounded "$id" ||
-        die "'$id' is not a bounded container — --items reads a playlist (PL…) or an album (OLAK5uy_…). A mix (RD…), a channel's uploads (UU…), likes (LL) or favourites (FL…) have no last item, so there is nothing to import"
+        die "'$t' carries no list id — --items takes a playlist or album URL (…/playlist?list=PL…), a channel (…/@handle), the list= of a watch URL, or the bare list id"
+    case "$id" in
+    RD*)
+        die "'$id' is a mix — it is generated on every request and has no last item, so two calls are not two pages of one list and there is nothing stable to import"
+        ;;
+    esac
+    container_is_list_id "$id" ||
+        die "'$id' is not a container — --items reads a playlist (PL…), an album (OLAK5uy_…), a channel's uploads (UU…) or a channel (…/@handle). A single video is what the stream verb takes"
     CONTAINER_ID="$id"
     CONTAINER_URL="https://www.youtube.com/playlist?list=$id"
 }
@@ -1139,7 +1205,10 @@ transcript_fail() {
 resolve_items() {
     ensure_scratch
 
-    local cmd=(yt-dlp --flat-playlist -J --playlist-end "$ITEMS_MAX")
+    # The slice this batch asks for. Without a cursor it is 1:500 — the same rows --playlist-end
+    # returned before — and with one it starts where the last envelope said it stopped.
+    local start=$((CURSOR_OFFSET + 1)) end=$((CURSOR_OFFSET + ITEMS_MAX))
+    local cmd=(yt-dlp --flat-playlist -J --playlist-items "$start:$end")
     # Cookies for the same reason --info takes them: a caller's own unlisted playlist is
     # readable with the login it already configured, and this verb makes no other use of it.
     if ((${#COOKIE_ARGS[@]} > 0)); then
@@ -1166,9 +1235,32 @@ resolve_items() {
         return 0
     fi
 
+    # HOW MANY RAW ENTRIES CAME BACK decides whether there is a next batch, and it is counted
+    # BEFORE the item filter: `has_more` answers about the container, not about how many of its
+    # rows are playable (ARCH-engine.md「容器（--items）」).
+    #
+    # `playlist_count` is only sometimes there, and that is a measurement rather than a quirk to
+    # route around (2026-09-12, @RickAstleyYT): asking for `1:6` of a 138-video channel answers
+    # `playlist_count: null`, asking for `10000:10005` answers `playlist_count: 138` with no
+    # entries. The site tells the count when the walk reaches the end and not before — so `total`
+    # is null while a batch is full, and truthful on the batch that runs out.
+    local raw_n total="null" has_more=false next_cursor="null" next_off
+    raw_n=$(printf '%s' "$raw" | jq -r '(.entries // []) | length' 2>/dev/null) || raw_n=0
+    [[ "$raw_n" =~ ^[0-9]+$ ]] || raw_n=0
+    total=$(printf '%s' "$raw" | jq -r '.playlist_count // "null"' 2>/dev/null) || total="null"
+    [[ "$total" =~ ^[0-9]+$ ]] || total="null"
+    next_off=$((CURSOR_OFFSET + raw_n))
+    if ((raw_n >= ITEMS_MAX)); then
+        has_more=true
+        [[ "$total" != "null" ]] && ((next_off >= total)) && has_more=false
+    fi
+    [[ "$has_more" == true ]] && next_cursor="\"o:$next_off\""
+
     local env_json
     env_json=$(printf '%s' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg id "$CONTAINER_ID" \
-        --arg url "$CONTAINER_URL" "$JQ_PRELUDE $JQ_ITEMS" 2>/dev/null) ||
+        --arg url "$CONTAINER_URL" --argjson total "$total" \
+        --argjson has_more "$has_more" --argjson next_cursor "$next_cursor" \
+        "$JQ_PRELUDE $JQ_ITEMS" 2>/dev/null) ||
         items_fail "unknown"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -1233,7 +1325,9 @@ def item_url: if (.url | type) == "string" and (.url | startswith("http"))
 | {status: "ok", engine: $engine, id: (.id // $id), url: $url,
    title: (.title // null),
    count: ($rows | length),
-   total: (.playlist_count // null),
+   total: $total,
+   has_more: $has_more,
+   next_cursor: $next_cursor,
    items: [ $rows | to_entries[]
             | .key as $i | .value as $r
             | {n: ($i + 1), engine: $engine, id: $r.id,
@@ -1288,7 +1382,7 @@ Usage:
   yt-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <video-id | URL>
   yt-resolve --info [-j|-J] -- <video-id | URL>
   yt-resolve --transcript [--sub-lang L] [-j|-J] -- <video-id | URL>
-  yt-resolve --items [-j|-J] -- <list-id | playlist URL>
+  yt-resolve --items [--cursor TOKEN] [-j|-J] -- <list-id | playlist URL | channel>
   yt-resolve --auth [-j]
 
 The handle is either a YouTube URL or an 11-character video id (what `yt-search -j`
@@ -1306,12 +1400,15 @@ Options:
   --transcript  Caption track as clean text, ready to drop into a prompt
   --sub-lang L  Caption language(s): a comma-separated PRIORITY CHAIN
                 (default: en,zh-Hans,zh,ja)
-  --items  List the videos of a playlist (PL…) or album (OLAK5uy_…) — one yt-dlp call.
-           Takes the list id, a playlist URL, or the list= of a watch URL; a mix (RD…) or a
-           channel's uploads (UU…/LL/FL…) is refused, having no last item. Every element is
-           an item record, so the list pipes into ut-playlist --add and ut-play --queue
-           unmapped. At most 500 videos; count below total means the list is longer than
-           that, or held entries this engine could not play
+  --items  List the videos of a playlist (PL…), an album (OLAK5uy_…), a channel's uploads
+           (UU…) or a channel (…/@handle, …/channel/UC…) — one yt-dlp call. Takes the id,
+           the URL, or the list= of a watch URL; a channel is read at its videos tab. A mix
+           (RD…) is refused: it is regenerated per request, so its pages would not line up.
+           Every element is an item record, so the list pipes into ut-playlist --add and
+           ut-play --queue unmapped. At most 500 videos per call — has_more/next_cursor say
+           whether there are more and how to ask
+  --cursor TOKEN  Continue an --items listing: pass back the next_cursor of the envelope
+           before it. Opaque, and the same shape in every engine of this suite
   --auth   Report the cookie decision: which browser profile playback will read, and
            whether it exists here. No network, no handle. Says cookies are SENT, not
            that they are accepted — an expired login still reports "cookie"
@@ -1331,11 +1428,15 @@ Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","form
 Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
                         duration_fmt,view_count,like_count,live_status,description,chapters}
 Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segment_count,text}
-Items JSON (--items -j): {status,engine,id,url,title,count,total,
+Items JSON (--items -j): {status,engine,id,url,title,count,total,has_more,next_cursor,
                           items:[{n,engine,id,url,title,duration,duration_fmt}]}
   count is what came back; total is what the site says the list holds. They differ when the
   list is longer than the cap or when an entry was private, deleted or otherwise unplayable,
   and the envelope does not say which — the fix for either is the same.
+  has_more says whether the CONTAINER holds rows beyond this batch (never whether rows were
+  filtered out of it), and next_cursor is the token to ask for them with — null exactly when
+  has_more is false. total is null when the site has not said the count yet: on a channel it
+  arrives with the batch that reaches the end. n numbers the rows of THIS batch, from 1.
   -J returns the raw --flat-playlist record, entries unfiltered — a private or deleted one is
   dropped from -j's items and is still in there.
   A `list=` is expanded ONLY by this verb. Every other verb here still passes
@@ -1400,6 +1501,15 @@ while (($#)); do
     --items)
         set_action items --items
         shift
+        ;;
+    --cursor=*)
+        CURSOR="${1#*=}"
+        shift
+        ;;
+    --cursor)
+        [[ $# -ge 2 ]] || { echo "yt-resolve: --cursor requires a value" >&2; exit 1; }
+        CURSOR="$2"
+        shift 2
         ;;
     --auth)
         set_action auth --auth
@@ -1474,7 +1584,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "yt-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --sub-lang --items --auth)" >&2
+        echo "yt-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --sub-lang --items --cursor --auth)" >&2
         exit 1
         ;;
     *)
@@ -1529,6 +1639,18 @@ if [[ -n "$SUB_LANG" ]]; then
     [[ "$SUB_LANG" =~ ^[A-Za-z0-9][A-Za-z0-9_,.-]*$ ]] ||
         die "--sub-lang takes a comma-separated list of language tags (e.g. en or zh-Hans,en)"
 fi
+# THE CURSOR IS A TOKEN THIS ENGINE MINTED, so both ways of getting it wrong are answered here,
+# before a packet is spent: it belongs to --items (no other verb has batches), and it has one
+# shape. The shape is the same in all three engines — `o:` and an item offset — so a cursor
+# handed to the wrong engine is caught in argv instead of a request later
+# (ARCH-engine.md「容器（--items）」).
+if [[ -n "$CURSOR" ]]; then
+    [[ "$ACTION" == "items" ]] || die "--cursor continues an --items listing — pass --items"
+    [[ "$CURSOR" =~ ^o:[0-9]+$ ]] ||
+        die "'$CURSOR' is not a cursor — pass back the next_cursor an --items envelope handed you"
+    CURSOR_OFFSET="${CURSOR#o:}"
+fi
+
 # The mirror of that check, and the other half of the gate ut-play used to hold for
 # --transcript: -f / -S pick a FORMAT, and only stream resolution resolves one. Next to
 # --info or --transcript they were accepted and quietly did nothing, which is precisely

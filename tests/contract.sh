@@ -722,6 +722,24 @@ NE_SILENT="478507889"
 YT_LIST="PLLdzS5ShOfOw"
 BILI_MENU="am10624"
 NE_LIST="https://music.163.com/playlist?id=19723756"
+# The video-side containers, added with the cursor. Each is here for a property the audio ones
+# cannot state:
+#   BILI_FAV     a public favourites list holding BOTH of the rows this site keeps in one and a
+#                player cannot open — a dead upload (attr bit 0, and a REAL duration, so the
+#                playable judgement alone would let it through) and an OGV episode (type 24,
+#                whose bvid does not name a /video/ page). count below total is those being
+#                dropped, which is the only place that claim can be made against real data.
+#   BILI_SEASON  a creator's collection: a second endpoint, a second page size, and the only
+#                one of the three whose "does not exist" is answered in the body code.
+#   YT_CHANNEL   a channel small enough to finish in one batch — the case that proves total is
+#                filled in when the walk reaches the end (it is null while a batch is full).
+#   YT_BIG       a channel far past the ceiling: the only handle here that can exercise a
+#                cursor at all, since a container under 500 never mints one.
+# No count is asserted as a literal here either, for the same reason as above.
+BILI_FAV="ml148005847"
+BILI_SEASON="https://space.bilibili.com/946974/lists/3097767?type=season"
+YT_CHANNEL="https://www.youtube.com/@RickAstleyYT/videos"
+YT_BIG="https://www.youtube.com/@TED/videos"
 
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
@@ -780,13 +798,19 @@ report "bili --parts takes ONE handle" 1 \
 # claim (a container verb that had to ask the site whether a handle was a container would
 # cost a request per typo).
 report "--items refuses a video id"     0 \
-    "$(err_has 'not a bounded container' shell/yt-resolve --items -- "$MEDIA_ID")"
-# A mix and a channel's uploads are REFUSED BY NAME rather than half-read: they have no last
-# item, so `total` would be a lie and the ceiling would decide the contents.
+    "$(err_has 'not a container' shell/yt-resolve --items -- "$MEDIA_ID")"
+# A MIX IS REFUSED BY NAME, and it is the one shape that stayed refused after channels were let
+# in: a mix is regenerated on every request, so two calls are not two pages of one list and a
+# cursor over it could promise nothing. A channel's uploads measured identical across segmented
+# reads, which is exactly the property that made them admissible.
 report "--items refuses an endless list" 0 \
     "$(err_has 'no last item' shell/yt-resolve --items -- RDdQw4w9WgXcQ)"
 report "--items refuses a BV id"        0 \
-    "$(err_has 'not a Bilibili audio menu' shell/bili-resolve --items -- "$BILI_ID")"
+    "$(err_has 'not a Bilibili container' shell/bili-resolve --items -- "$BILI_ID")"
+# A SERIES IS NOT A COLLECTION on this site — different endpoint, same-looking URL — so it is
+# refused by name rather than read with the wrong one and answered with someone else's videos.
+report "--items refuses a bili series"  0 \
+    "$(err_has 'is a series' shell/bili-resolve --items -- 'https://space.bilibili.com/946974/lists/12345?type=series')"
 # The third site's own reason, and it is not fussiness: `song`, `album` and `playlist` ids
 # share no namespace here, so a bare number cannot say what it identifies. The song verb
 # accepts one only because it has already decided what it means.
@@ -1026,6 +1050,20 @@ for n in $ENGINES; do
         _items_gate=$((_items_gate + 1))
 done
 report "every --items refuses no handle, two handles, two verbs" "$NENG" "$_items_gate"
+
+# THE CURSOR IS ARGV, so both ways of getting it wrong cost no request — and this is stated over
+# every discovered engine because the token's whole point is being ONE shape across them: an
+# engine that minted its own spelling would take a sibling's cursor to the network and fail
+# there instead of here. The handle is deliberately junk: a cursor decided before the handle is
+# a cursor decided before anything is spent.
+_cursor_gate=0
+for n in $ENGINES; do
+    [ "$(rc "shell/$n-resolve" --cursor o:10 -- x)" = 1 ] &&
+        [ "$(rc "shell/$n-resolve" --items --cursor nope -- x)" = 1 ] &&
+        [ "$(err_has 'is not a cursor' "shell/$n-resolve" --items --cursor p:2 -- x)" = 0 ] &&
+        _cursor_gate=$((_cursor_gate + 1))
+done
+report "every --cursor needs --items and one token shape" "$NENG" "$_cursor_gate"
 
 # THE READ-ONLY RESOLVE VERBS ARE HELD TO THE SAME RULE, and this replaces three lines that
 # named ONE engine's ONE verb: `--info` — the verb EVERY engine has — had no coverage at all.
@@ -1713,7 +1751,15 @@ spawn yt-items     shell/yt-resolve   --items -j -- "$YT_LIST"
 spawn bili-items   shell/bili-resolve --items -j -- "$BILI_MENU"
 spawn ne-items     env NE_INCLUDE_VIP=1 shell/ne-resolve --items -j -- "$NE_LIST"
 spawn ne-items-def shell/ne-resolve   --items -j -- "$NE_LIST"
+spawn bili-fav     shell/bili-resolve --items -j -- "$BILI_FAV"
+spawn bili-season  shell/bili-resolve --items -j -- "$BILI_SEASON"
+spawn yt-channel   shell/yt-resolve   --items -j -- "$YT_CHANNEL"
+# The two halves of one cursor round trip, fired TOGETHER: the second is not waiting on the
+# first's token, it asserts that the token the first hands out is the offset the second reads.
+spawn yt-big1      shell/yt-resolve   --items -j -- "$YT_BIG"
+spawn yt-big2      shell/yt-resolve   --items -j --cursor o:500 -- "$YT_BIG"
 spawn yt-nolist    shell/yt-resolve   --items -j -- PLzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+spawn bili-nofav   shell/bili-resolve --items -j -- ml999999999999
 spawn bili-nomenu  shell/bili-resolve --items -j -- am999999999
 spawn ne-nolist    shell/ne-resolve   --items -j -- "https://music.163.com/album?id=999999999"
 for n in $ENGINES; do
@@ -1911,6 +1957,80 @@ for _slot in yt-nolist bili-nomenu ne-nolist; do
         _items_gone=$((_items_gone + 1))
 done
 report "a missing container is 2 + unavailable, everywhere" 3 "$_items_gone"
+# The fourth shape of "not there", and it is its own check because its evidence is the thinnest
+# of the four: a favourites list nobody created answers 200 / code 0 / message "OK" and says so
+# only by leaving `data.title` null (measured 2026-09-12). An engine reading the code or the
+# status is green everywhere else and wrong here.
+report "a favourites list that is not there is 2 too" 2 "$(src bili-nofav)"
+report "…and says unavailable" 0 \
+    "$(jqv '.status=="error" and .reason=="unavailable"' "$(out bili-nofav)")"
+
+echo "── --items: the video side, and the cursor ────────────────────────"
+# THE SAME ENVELOPE OVER THE SITES' OTHER LISTS. The keys are the audio containers' keys plus
+# the two the cursor added, and the item records are the same records — which is the claim:
+# a favourites list and a collection reach ut-playlist through the same pipe an audio menu does,
+# with the site's own video ids in them.
+_vid_ok=0
+for _slot in bili-fav bili-season yt-channel; do
+    [ "$(jqv '.status=="ok" and (.title|type)=="string"
+              and (.count|type)=="number" and (.count|tostring|test("^[0-9]+$"))
+              and (.items|length)==.count
+              and ([.items[].n]==[range(1; (.count+1))])
+              and all(.items[];
+                      (.engine|type)=="string" and (.url|startswith("http"))
+                      and (.id|type)=="string" and (.id|length)>0
+                      and (.duration|type)=="number" and .duration>0)' "$(out $_slot)")" = 0 ] &&
+        _vid_ok=$((_vid_ok + 1))
+done
+report "every video container is a list of calls too" 3 "$_vid_ok"
+# Both Bilibili video containers name their rows the way RESOLVING one of them does — the BV
+# spelling, not the favourites list's own numeric id and not a bangumi link.
+report "bili video items are /video/BV urls" 0 \
+    "$(jqv 'all(.items[]; (.url|test("^https://www\\.bilibili\\.com/video/BV[A-Za-z0-9]+$")))' "$(out bili-fav)")"
+report "…the collection's too" 0 \
+    "$(jqv 'all(.items[]; (.url|test("^https://www\\.bilibili\\.com/video/BV[A-Za-z0-9]+$")))' "$(out bili-season)")"
+# THE TWO ROWS A FAVOURITES LIST HOLDS THAT NOTHING CAN PLAY, and the input is what proves the
+# judgement: this list really contains dead uploads and OGV episodes (measured), so `count` has
+# to come back under `total` and neither kind may appear among the items. A build that filtered
+# on duration alone passes nothing here — the dead rows carry real durations.
+report "a favourites list drops what cannot be played" 0 \
+    "$(jqv '.count < .total and .total > 10
+            and ([.items[] | select(.title == "已失效视频")] | length) == 0
+            and ([.items[] | select(.url | contains("bangumi"))] | length) == 0' "$(out bili-fav)")"
+# A collection is the control for that claim: same envelope, same row shape, nothing to drop.
+report "a collection lists all of itself" 0 \
+    "$(jqv '.count == .total and .total > 1' "$(out bili-season)")"
+# A CHANNEL IS ADMISSIBLE, which is this change's whole point — it used to exit 1 by name. The
+# small one finishes inside one batch, and that is where `total` stops being null: yt-dlp reports
+# playlist_count when the walk reaches the end and not before (measured 2026-09-12).
+report "a channel's uploads import, tail and all" 0 \
+    "$(jqv '.status=="ok" and (.total|type)=="number" and .count<=.total
+            and .has_more==false and .next_cursor==null' "$(out yt-channel)")"
+# THE CURSOR, on the only kind of container that can mint one: a full batch says there is more
+# and hands back the offset to ask with.
+report "a full batch hands back a cursor" 0 \
+    "$(jqv '.count==500 and .has_more==true and .next_cursor=="o:500" and .total==null' "$(out yt-big1)")"
+report "…and the batch it names starts at 501" 0 \
+    "$(jqv '.status=="ok" and .count>0 and .items[0].n==1' "$(out yt-big2)")"
+# THE PROPERTY THAT MAKES PAGING WORTH ANYTHING, and it cannot be read off one envelope: the two
+# batches must not overlap. Read as two documents, compared by hand, like the VIP pair above.
+_b1=$(printf '%s' "$(out yt-big1)" | jq -r '[.items[].id] | join(" ")' 2>/dev/null) || _b1=""
+_b2=$(printf '%s' "$(out yt-big2)" | jq -r '[.items[].id] | join(" ")' 2>/dev/null) || _b2=""
+_overlap=$(printf '%s\n%s\n' "$_b1" "$_b2" | jq -R -s '
+    (split("\n") | map(select(length > 0) | split(" "))) as $p
+    | if ($p | length) == 2 then (($p[0]) - (($p[0]) - ($p[1])) | length) else -1 end' 2>/dev/null) || _overlap=-1
+report "two batches share no row" 0 "$_overlap"
+# THE ENVELOPE INVARIANT, over every container this suite fetched: has_more is a boolean, and
+# next_cursor is null exactly when it is false. Stated across all six because a key that is
+# right on the container that needed it and absent on the others is the shape of drift that
+# makes a caller test for the key instead of reading it.
+_cursor_shape=0
+for _slot in yt-items bili-items ne-items bili-fav bili-season yt-channel yt-big1; do
+    [ "$(jqv '(.has_more|type)=="boolean"
+              and (if .has_more then (.next_cursor|test("^o:[0-9]+$")) else .next_cursor==null end)' "$(out $_slot)")" = 0 ] &&
+        _cursor_shape=$((_cursor_shape + 1))
+done
+report "has_more and next_cursor answer together" 7 "$_cursor_shape"
 
 BILI_ITEMS_OUT=$(out bili-items)
 report "an item list adds to a playlist, unmapped" 0 \

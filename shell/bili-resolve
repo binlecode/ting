@@ -174,6 +174,33 @@ OF_MENU_ENDPOINT="https://www.bilibili.com/audio/music-service-c/web/song/of-men
 ITEMS_PAGE=100
 ITEMS_MAX=500
 
+# THE VIDEO-SIDE CONTAINER ENDPOINTS — a favourites list and a collection, each with its own
+# host, its own page size and its own way of saying "does not exist" (measured 2026-09-12):
+#
+#   fav/folder/info      the list's own record, and the EXISTENCE check: a media_id nobody ever
+#                        created answers 200 / `code: 0` / `data.title: null`, so here too the
+#                        code says nothing and the shape says everything.
+#   fav/resource/list    the entries, `ps` capped at 40 (`ps=41` answers `code -400`). It carries
+#                        its OWN `data.has_more`, which is why this engine does not derive one
+#                        for favourites: the site is the authority on its own tail.
+#   seasons_archives_list  a collection's videos, `page_size` capped at 100 (`101` -> `-400`).
+#                        This one DOES answer existence in the code (`-404`, "啥都木有"), so no
+#                        second request buys anything. It also ignores `mid` entirely — the same
+#                        season_id answers identically for mid 0, 1 and the real uploader — so
+#                        the uid in the URL is carried for the canonical url and nothing else.
+#
+# The space endpoint is the one request in this file that needs a REFERER OF ITS OWN: bare curl
+# answers `{"code":-352}`, and a desktop UA plus `Referer: https://space.bilibili.com/` clears it
+# (measured both ways, 2026-09-12). No buvid, no signature, no cookie.
+#
+# UNPREFIXED, like every other endpoint constant here and for the same reason.
+FAV_INFO_ENDPOINT="https://api.bilibili.com/x/v3/fav/folder/info"
+FAV_LIST_ENDPOINT="https://api.bilibili.com/x/v3/fav/resource/list"
+SEASON_ENDPOINT="https://api.bilibili.com/x/polymer/web-space/seasons_archives_list"
+SPACE_REFERER="https://space.bilibili.com/"
+FAV_PAGE=40
+SEASON_PAGE=100
+
 # Cookies (login) are ON by default (browser: chrome). On this site they buy AUDIO QUALITY
 # rather than access: an account — more so a premium one — is offered Hi-Res / Dolby /
 # lossless renditions that an anonymous client is not, and this suite's main use is
@@ -250,8 +277,12 @@ OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
 TARGET_URL=""        # the watch URL it normalises to
 TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_start_seconds
-CONTAINER_ID=""      # the am id --items resolves to, digits only
-CONTAINER_URL=""     # the canonical menu URL those digits normalise to
+CONTAINER_KIND=""    # am | fav | season | series — which container the handle named
+CONTAINER_ID=""      # the id --items resolves to, digits only
+CONTAINER_MID=""     # the uploader id a collection URL carried, "" for the other kinds
+CONTAINER_URL=""     # the canonical container URL those digits normalise to
+CURSOR=""            # the --cursor token as the caller typed it, "" when absent
+CURSOR_OFFSET=0      # the item offset it decodes to; 0 is the first batch
 FMT=""               # the yt-dlp format string the mode resolves to
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
@@ -496,20 +527,116 @@ is_own_host() {
     return 1
 }
 
-# The audio-menu id a container handle carries, or "". A menu is `/audio/am<digits>` and
-# nothing else on this site is, so unlike target_id there is no query-string spelling to fall
-# back to: the prefix is the whole grammar.
-container_id() {
-    local u="${1%%#*}" seg
-    u="${u%%\?*}"
-    u="${u%/}"
-    seg="${u##*/}"
-    case "$u" in
-    */audio/am[0-9]*) ;;
-    *) seg="" ;;
+# One query parameter's value, or "". Split by hand and ANCHORED, like parse_start_seconds
+# below and for the same two reasons: an unquoted expansion would glob, and ${var//pat/} is
+# quadratic on bash 3.2 (CLAUDE.md).
+query_value() {
+    local q=$1 key=$2 v=""
+    case "&$q" in
+    *"&$key="*)
+        v="${q##*"$key="}"
+        v="${v%%&*}"
+        ;;
     esac
-    [[ "$seg" =~ ^am[0-9]+$ ]] || seg=""
-    printf '%s' "${seg#am}"
+    printf '%s' "$v"
+}
+
+# WHICH CONTAINER IS THIS, if any. Sets CONTAINER_KIND / CONTAINER_ID / CONTAINER_MID and
+# returns 0; returns 1 and decides nothing when the handle names no container. It neither dies
+# nor makes a request, because TWO verbs ask it different questions: --items asks which
+# container this is, and stream resolution asks only whether it is one — so that it can say so
+# instead of handing a list to yt-dlp and printing an empty stream.
+#
+# FOUR SHAPES, one per thing this site calls a list:
+#   am<id>                                   an audio menu (the original one)
+#   ml<id>  /medialist/detail/ml<id>         a favourites list
+#   space…/<uid>/favlist?fid=<fid>           the same list as the browser spells it
+#   space…/<uid>/lists/<sid>?type=season     a collection, and …/channel/collectiondetail?sid=
+#
+# THE favlist URL NEEDS ARITHMETIC, and it is measured rather than reasoned: the browser URL
+# carries the uploader's `fid`, while every API here takes `media_id`, and the two are related
+# by `media_id = fid * 100 + uid % 100` (checked against four real lists, 2026-09-12, 4/4).
+# Without it the shape a person actually copies out of the address bar would be the one spelling
+# this verb could not read.
+#
+# A SERIES IS NOT A COLLECTION (`?type=series`): it has its own endpoint, so it is recognised
+# here only to be refused by name — a wrong list is worse than a rejected one.
+container_from_handle() {
+    local t=$1 u="" path="" q="" seg="" mid="" sid="" fid=""
+    case "$t" in
+    am[0-9]*)
+        [[ "$t" =~ ^am[0-9]+$ ]] || return 1
+        CONTAINER_KIND="am"; CONTAINER_ID="${t#am}"; CONTAINER_MID=""
+        return 0
+        ;;
+    ml[0-9]*)
+        [[ "$t" =~ ^ml[0-9]+$ ]] || return 1
+        CONTAINER_KIND="fav"; CONTAINER_ID="${t#ml}"; CONTAINER_MID=""
+        return 0
+        ;;
+    http://* | https://*) u="$t" ;;
+    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | space.bilibili.com/* | b23.tv/*)
+        u="https://$t"
+        ;;
+    *) return 1 ;;
+    esac
+
+    path="${u#*://}"
+    path="${path#*/}"
+    case "$path" in *\?*)
+        q="${path#*\?}"
+        path="${path%%\?*}"
+        ;;
+    esac
+    path="${path%%#*}"
+    path="${path%/}"
+    seg="${path##*/}"
+
+    case "$path" in
+    */audio/am[0-9]* | audio/am[0-9]*)
+        [[ "$seg" =~ ^am[0-9]+$ ]] || return 1
+        CONTAINER_KIND="am"; CONTAINER_ID="${seg#am}"; CONTAINER_MID=""
+        return 0
+        ;;
+    */medialist/detail/ml[0-9]* | medialist/detail/ml[0-9]*)
+        [[ "$seg" =~ ^ml[0-9]+$ ]] || return 1
+        CONTAINER_KIND="fav"; CONTAINER_ID="${seg#ml}"; CONTAINER_MID=""
+        return 0
+        ;;
+    esac
+
+    # Everything left is a space.bilibili.com path, which always opens with the uploader's uid.
+    mid="${path%%/*}"
+    [[ "$mid" =~ ^[0-9]+$ ]] || return 1
+    case "$path" in
+    */favlist)
+        fid=$(query_value "$q" fid)
+        [[ "$fid" =~ ^[0-9]+$ ]] || return 1
+        CONTAINER_KIND="fav"; CONTAINER_MID="$mid"
+        CONTAINER_ID=$((fid * 100 + mid % 100))
+        return 0
+        ;;
+    */channel/collectiondetail)
+        sid=$(query_value "$q" sid)
+        [[ "$sid" =~ ^[0-9]+$ ]] || return 1
+        CONTAINER_KIND="season"; CONTAINER_ID="$sid"; CONTAINER_MID="$mid"
+        return 0
+        ;;
+    */channel/seriesdetail)
+        CONTAINER_KIND="series"; CONTAINER_ID=""; CONTAINER_MID="$mid"
+        return 0
+        ;;
+    */lists/[0-9]*)
+        [[ "$seg" =~ ^[0-9]+$ ]] || return 1
+        if [[ "$(query_value "$q" type)" == "series" ]]; then
+            CONTAINER_KIND="series"; CONTAINER_ID="$seg"; CONTAINER_MID="$mid"
+            return 0
+        fi
+        CONTAINER_KIND="season"; CONTAINER_ID="$seg"; CONTAINER_MID="$mid"
+        return 0
+        ;;
+    esac
+    return 1
 }
 
 # The ?t= seconds a handle carries, floored to a whole second, or "" when it carries none.
@@ -646,18 +773,19 @@ normalize_target() {
         TARGET_URL="https://www.bilibili.com/video/$t"
         return 0
         ;;
-    am[0-9]*)
-        die "'$t' is an audio menu — use --items to list its tracks"
+    am[0-9]* | ml[0-9]*)
+        die "'$t' is a container, not a video — use --items to list what is in it"
         ;;
     *)
         die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
         ;;
     esac
 
-    local menu_id
-    menu_id=$(container_id "$t")
-    if [[ -n "$menu_id" ]]; then
-        die "'$t' is an audio menu — use --items to list its tracks"
+    # A CONTAINER URL IS REFUSED BY NAME rather than half-resolved. Handing one to yt-dlp is
+    # what this guards: an album URL comes back status "ok" with an empty stream list, which is
+    # the one answer a caller cannot act on. ARCH-engine.md「容器（--items）」.
+    if container_from_handle "$t"; then
+        die "'$t' is a container, not a video — use --items to list what is in it"
     fi
 
     parse_start_seconds "$t"
@@ -698,27 +826,26 @@ normalize_target() {
 # usage error at every verb and must be reported before this engine's opinion about what a
 # container looks like. tests/contract.sh reads that ordering off every read-only verb.
 normalize_container() {
-    local t=$1 host id=""
+    local t=$1 host
     case "$t" in
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
             die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
-        id=$(container_id "$t")
-        ;;
-    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
-        id=$(container_id "https://$t")
-        ;;
-    am[0-9]*)
-        [[ "$t" =~ ^am[0-9]+$ ]] ||
-            die "'$t' is not an audio menu id (expected am followed by digits)"
-        id="${t#am}"
         ;;
     esac
-    [[ -n "$id" ]] ||
-        die "'$t' is not a Bilibili audio menu — --items takes an am id or a bilibili.com/audio/am<id> URL (for the parts of one video, that is --parts)"
-    CONTAINER_ID="$id"
-    CONTAINER_URL="https://www.bilibili.com/audio/am$id"
+
+    container_from_handle "$t" ||
+        die "'$t' is not a Bilibili container — --items takes an audio menu (am<id>), a favourites list (ml<id> or a favlist URL) or a collection URL (space.bilibili.com/<uid>/lists/<sid>?type=season). For the parts of one video, that is --parts"
+
+    case "$CONTAINER_KIND" in
+    am) CONTAINER_URL="https://www.bilibili.com/audio/am$CONTAINER_ID" ;;
+    fav) CONTAINER_URL="https://www.bilibili.com/medialist/detail/ml$CONTAINER_ID" ;;
+    season) CONTAINER_URL="https://space.bilibili.com/$CONTAINER_MID/lists/$CONTAINER_ID?type=season" ;;
+    series)
+        die "'$t' is a series, not a collection — this site keeps the two in different endpoints and --items reads collections (…/lists/<sid>?type=season)"
+        ;;
+    esac
 }
 
 # ==============================================================================
@@ -1284,44 +1411,22 @@ resolve_parts() {
 # would come back silently short. Two GETs this file already knows how to make cost no python
 # start.
 
-# The transport, twin of fetch_view_once and writing the SAME three globals, so
-# classify_view_error reads either endpoint and no second error table grows here.
-fetch_menu_info_once() {
-    local id=$1 body=$2
+# ONE TRANSPORT FOR EVERY CONTAINER ENDPOINT, twin of fetch_view_once and writing the SAME
+# three globals, so classify_view_error reads all four endpoints and no second error table
+# grows here. The referer is a parameter because it is the one header that differs: the audio
+# endpoints want the site root, and the space endpoint answers `-352` to anything else
+# (measured 2026-09-12).
+items_http_get() {
+    local body=$1 referer=$2 url=$3
+    shift 3
     local cmd=(
         curl -sS --compressed
         --max-time 15 --retry 0
         -o "$body" -w '%{http_code}'
-        -G "$MENU_INFO_ENDPOINT"
+        -G "$url"
         -H "User-Agent: $BILI_UA"
-        -H "Referer: $VIEW_REFERER"
-        --data-urlencode "sid=$id"
-    )
-
-    VIEW_CURL_RC=0
-    VIEW_HTTP=$("${cmd[@]}" 2>/dev/null) || VIEW_CURL_RC=$?
-    VIEW_CODE=""
-    if [[ -s "$body" ]]; then
-        VIEW_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || VIEW_CODE=""
-    fi
-    ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
-}
-
-# One page of tracks. `pn` and `ps` go through --data-urlencode like the sid, not because a
-# number needs escaping but because the whole query is built one way here and an exception is
-# how the one that does need it gets missed.
-fetch_of_menu_once() {
-    local id=$1 pn=$2 ps=$3 body=$4
-    local cmd=(
-        curl -sS --compressed
-        --max-time 15 --retry 0
-        -o "$body" -w '%{http_code}'
-        -G "$OF_MENU_ENDPOINT"
-        -H "User-Agent: $BILI_UA"
-        -H "Referer: $VIEW_REFERER"
-        --data-urlencode "sid=$id"
-        --data-urlencode "pn=$pn"
-        --data-urlencode "ps=$ps"
+        -H "Referer: $referer"
+        "$@"
     )
 
     VIEW_CURL_RC=0
@@ -1347,9 +1452,156 @@ items_fail() {
     exit 2
 }
 
-# Every page's rows, in order, cut to the ceiling. The cut is here rather than in the loop so
-# that -J and -j answer about the same rows.
-JQ_ITEM_ROWS='[ .[] | (.data.data // [])[] ] | .[0:$max]'
+# WHAT THE THREE CONTAINERS DIFFER BY, and it is only ever these six things — so there is one
+# paging loop below rather than three. Each collector fills these in, then calls it.
+ITEMS_PAGE_SIZE=0       # the site's cap for this endpoint, measured, never a guess
+ITEMS_PAGE_PARAM=""     # pn | page_num
+ITEMS_SIZE_PARAM=""     # ps | page_size
+ITEMS_ROWS_PATH=""      # jq path to the rows on one page
+ITEMS_TOTAL_PATH=""     # jq path to the count the site reports
+ITEMS_MORE_PATH=""      # jq path to the site's OWN has_more, "" where it has none
+
+ITEMS_TITLE=""          # the container's own name
+ITEMS_TOTAL="null"      # what the site says it holds
+ITEMS_RAW="[]"          # this batch's rows, upstream shape, unfiltered
+ITEMS_TAKEN=0           # how many of them there are — the cursor's arithmetic, not the envelope's
+ITEMS_HAS_MORE=false
+ITEMS_PAGES=()
+
+# THE PAGING LOOP. Pages are spent only while there is reason to: a short page is the last page,
+# the site's own count says when the list is complete, its own has_more says so where it has one,
+# and the batch ceiling stops a very long list. A page past the end answers an empty array
+# (measured on all three), so the loop cannot run away on a site that keeps saying yes.
+#
+# THE BATCH IS THE CEILING ROUNDED DOWN TO A WHOLE PAGE (480 for a favourites list of 40s, 500
+# for the two 100s). That rounding is what keeps a cursor honest: every offset this verb hands
+# out lands on a page boundary, so continuing costs no re-reading and no overlap. A cursor that
+# does NOT land on one is still answered correctly — the loop starts at the page holding it and
+# drops the rows before it — because a caller is allowed to have kept an old token.
+items_page_loop() {
+    local endpoint=$1 referer=$2
+    shift 2
+    local batch=$((ITEMS_MAX / ITEMS_PAGE_SIZE * ITEMS_PAGE_SIZE))
+    local pn=$((CURSOR_OFFSET / ITEMS_PAGE_SIZE + 1))
+    local skip=$((CURSOR_OFFSET % ITEMS_PAGE_SIZE))
+    local page on_page=0 accum=0 i=0 fetched=0 upstream=""
+
+    ITEMS_PAGES=()
+    while :; do
+        i=$((i + 1))
+        page="$SCRATCH_DIR/items-$i.json"
+        items_http_get "$page" "$referer" "$endpoint" "$@" \
+            --data-urlencode "$ITEMS_PAGE_PARAM=$pn" \
+            --data-urlencode "$ITEMS_SIZE_PARAM=$ITEMS_PAGE_SIZE" ||
+            items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+        ITEMS_PAGES+=("$page")
+
+        on_page=$(jq -r "($ITEMS_ROWS_PATH // []) | length" "$page" 2>/dev/null) || on_page=0
+        [[ "$on_page" =~ ^[0-9]+$ ]] || on_page=0
+        if ((i == 1)); then
+            ITEMS_TOTAL=$(jq -r "$ITEMS_TOTAL_PATH // \"null\"" "$page" 2>/dev/null) || ITEMS_TOTAL="null"
+            [[ "$ITEMS_TOTAL" =~ ^[0-9]+$ ]] || ITEMS_TOTAL="null"
+        fi
+        if [[ -n "$ITEMS_MORE_PATH" ]]; then
+            upstream=$(jq -r "$ITEMS_MORE_PATH // empty" "$page" 2>/dev/null) || upstream=""
+        fi
+
+        accum=$((accum + on_page))
+        fetched=$((accum - skip))
+        ((on_page < ITEMS_PAGE_SIZE)) && break
+        ((fetched >= batch)) && break
+        [[ "$upstream" == "false" ]] && break
+        [[ "$ITEMS_TOTAL" != "null" ]] && ((CURSOR_OFFSET + fetched >= ITEMS_TOTAL)) && break
+        pn=$((pn + 1))
+    done
+
+    ITEMS_RAW=$(jq -c -s --argjson skip "$skip" --argjson max "$batch" \
+        "[ .[] | ($ITEMS_ROWS_PATH // [])[] ] | .[\$skip:] | .[0:\$max]" \
+        "${ITEMS_PAGES[@]}" 2>/dev/null) || items_fail "unknown"
+    ITEMS_TAKEN=$(printf '%s' "$ITEMS_RAW" | jq 'length' 2>/dev/null) || ITEMS_TAKEN=0
+    [[ "$ITEMS_TAKEN" =~ ^[0-9]+$ ]] || ITEMS_TAKEN=0
+
+    # has_more ANSWERS ABOUT THE CONTAINER, not about how many rows survived the filter
+    # (ARCH-engine.md「容器（--items）」). Three sources, in the order of how much they know:
+    # rows already fetched but cut off by the ceiling settle it outright; then the site's own
+    # flag where it publishes one; then the count it reported.
+    if ((fetched > ITEMS_TAKEN)); then
+        ITEMS_HAS_MORE=true
+    elif [[ -n "$upstream" ]]; then
+        ITEMS_HAS_MORE="$upstream"
+    elif [[ "$ITEMS_TOTAL" != "null" ]] && ((CURSOR_OFFSET + ITEMS_TAKEN < ITEMS_TOTAL)); then
+        ITEMS_HAS_MORE=true
+    else
+        ITEMS_HAS_MORE=false
+    fi
+    [[ "$ITEMS_HAS_MORE" == "true" ]] || ITEMS_HAS_MORE=false
+}
+
+# The audio menu. Its own record answers EXISTENCE, and it has to: an am id nobody created comes
+# back 200 / code 0 / msg "success" / data null (measured 2026-09-10), so the body code is no
+# answer and the id is judged by the SHAPE of what came back. Checked before the tracks, so a
+# typo costs one request and is reported as a statement about the HANDLE.
+items_am_rows() {
+    local info="$SCRATCH_DIR/menu-info.json"
+    items_http_get "$info" "$VIEW_REFERER" "$MENU_INFO_ENDPOINT" \
+        --data-urlencode "sid=$CONTAINER_ID" ||
+        items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+    jq -e '(.data | type) == "object"' "$info" >/dev/null 2>&1 ||
+        items_fail "unavailable"
+    ITEMS_TITLE=$(jq -r '.data.title // empty' "$info" 2>/dev/null) || ITEMS_TITLE=""
+
+    ITEMS_PAGE_SIZE=$ITEMS_PAGE
+    ITEMS_PAGE_PARAM="pn"
+    ITEMS_SIZE_PARAM="ps"
+    ITEMS_ROWS_PATH=".data.data"
+    ITEMS_TOTAL_PATH=".data.totalSize"
+    ITEMS_MORE_PATH=""
+    items_page_loop "$OF_MENU_ENDPOINT" "$VIEW_REFERER" --data-urlencode "sid=$CONTAINER_ID"
+}
+
+# The favourites list. Same two-request shape as the audio menu and for the same reason — the
+# entry endpoint cannot tell "no such list" from "an empty one", and folder/info answers by
+# shape (`data.title: null`, measured 2026-09-12).
+#
+# WHAT IT CANNOT TELL APART, and this is a limit rather than an omission: an EMPTY list and one
+# this anonymous client may not see return the same body (`code: 0`, `medias: null`,
+# `has_more: false`). So a private list is reported as an empty container. The alternative would
+# be guessing from a login this engine's HTTP half deliberately does not hold.
+items_fav_rows() {
+    local info="$SCRATCH_DIR/fav-info.json"
+    items_http_get "$info" "$VIEW_REFERER" "$FAV_INFO_ENDPOINT" \
+        --data-urlencode "media_id=$CONTAINER_ID" ||
+        items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+    jq -e '(.data.title | type) == "string"' "$info" >/dev/null 2>&1 ||
+        items_fail "unavailable"
+    ITEMS_TITLE=$(jq -r '.data.title // empty' "$info" 2>/dev/null) || ITEMS_TITLE=""
+
+    ITEMS_PAGE_SIZE=$FAV_PAGE
+    ITEMS_PAGE_PARAM="pn"
+    ITEMS_SIZE_PARAM="ps"
+    ITEMS_ROWS_PATH=".data.medias"
+    ITEMS_TOTAL_PATH=".data.info.media_count"
+    ITEMS_MORE_PATH=".data.has_more"
+    items_page_loop "$FAV_LIST_ENDPOINT" "$VIEW_REFERER" \
+        --data-urlencode "media_id=$CONTAINER_ID" --data-urlencode "platform=web"
+}
+
+# The collection. ONE request per page and no existence check of its own, because this endpoint
+# is the one that answers in the code: a season_id nobody created comes back `-404` (measured
+# 2026-09-12), which classify_view_error already reads as unavailable.
+items_season_rows() {
+    ITEMS_PAGE_SIZE=$SEASON_PAGE
+    ITEMS_PAGE_PARAM="page_num"
+    ITEMS_SIZE_PARAM="page_size"
+    ITEMS_ROWS_PATH=".data.archives"
+    ITEMS_TOTAL_PATH=".data.page.total"
+    ITEMS_MORE_PATH=""
+    items_page_loop "$SEASON_ENDPOINT" "$SPACE_REFERER" \
+        --data-urlencode "mid=${CONTAINER_MID:-0}" \
+        --data-urlencode "season_id=$CONTAINER_ID" \
+        --data-urlencode "sort_reverse=false"
+    ITEMS_TITLE=$(jq -r '.data.meta.name // empty' "${ITEMS_PAGES[0]}" 2>/dev/null) || ITEMS_TITLE=""
+}
 
 # A row is an item only if it can be PLAYED and can say how long it is: an id that builds a url
 # and a numeric duration. Same judgement a search row passes (ARCH-cli-contract.md「数据契约」),
@@ -1358,14 +1610,42 @@ JQ_ITEM_ROWS='[ .[] | (.data.data // [])[] ] | .[0:$max]'
 JQ_ITEM_FILTER='[ .[] | select((.id | type) == "number" and .id > 0
                                and (.duration | type) == "number") ]'
 
+# The video side needs two more, and BOTH are measurements rather than defensive habits
+# (2026-09-12, over two independent public lists):
+#
+#   type == 2      a favourites list is not all videos. `type: 24` rows are OGV episodes whose
+#                  `link` is /bangumi/play/ep…, and they carry a bvid that does NOT name a
+#                  /video/BV… page — a row built from one would point somewhere else.
+#   attr bit 0     a dead upload stays in the list as `title: "已失效视频"` with attr 1 or 9 —
+#                  and with a REAL duration (4410 / 104 / 17215 / 593073 seconds were measured).
+#                  So the playable judgement below cannot catch it, the title is a site string
+#                  this file will not depend on, and the bit is the invariant.
+JQ_FAV_FILTER='[ .[]
+  | select((.type // 0) == 2)
+  | select(((.attr // 0) % 2) == 0)
+  | select((.bvid | type) == "string" and (.bvid | length) > 0)
+  | select((.duration | type) == "number" and .duration > 0) ]'
+
+JQ_SEASON_FILTER='[ .[]
+  | select((.bvid | type) == "string" and (.bvid | length) > 0)
+  | select((.duration | type) == "number" and .duration > 0) ]'
+
 # `count` is what came back and `total` is what the site SAYS it holds, and the gap between them
 # is the whole reason a container needs its own envelope: it covers both truncation (the ceiling
 # above) and rows dropped by the filter, and the envelope does not add a key to tell those apart.
-JQ_ITEMS='
+#
+# `has_more` is NOT that key. It answers a different question — whether the CONTAINER has rows
+# past this batch — and `next_cursor` is how to ask for them. `n` numbers the rows of THIS
+# batch: it is the envelope's own count, and the cursor is what joins two envelopes.
+JQ_ITEMS_HEAD='
 {status: "ok", engine: $engine, id: $id, url: $url,
- title: ($info[0].data.title // null),
+ title: (if $title == "" then null else $title end),
  count: ($rows | length),
  total: $total,
+ has_more: $has_more,
+ next_cursor: $next_cursor,'
+
+JQ_AUDIO_ITEMS="$JQ_ITEMS_HEAD"'
  items: [ $rows | to_entries[]
           | .key as $i | .value as $r
           | ($r.id | tostring) as $sid
@@ -1376,65 +1656,62 @@ JQ_ITEMS='
              duration_fmt: (($r.duration | fmt_dur) // null)} ]}
 '
 
+# The video side's records name a video the way resolving one does: the BV id, and the /video/
+# URL built from it — the same pair `bili-resolve -j -- .../video/BV…` reports, so a record
+# stored out of this envelope and a record resolved directly are the same row.
+JQ_VIDEO_ITEMS="$JQ_ITEMS_HEAD"'
+ items: [ $rows | to_entries[]
+          | .key as $i | .value as $r
+          | {n: ($i + 1), engine: $engine, id: $r.bvid,
+             url: ("https://www.bilibili.com/video/" + $r.bvid),
+             title: ($r.title // null),
+             duration: ($r.duration // null),
+             duration_fmt: (($r.duration | fmt_dur) // null)} ]}
+'
+
 resolve_items() {
     ensure_scratch
 
-    local info="$SCRATCH_DIR/menu-info.json"
-    if ! fetch_menu_info_once "$CONTAINER_ID" "$info"; then
-        items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
-    fi
-    # THE EXISTENCE CHECK, and it reads the shape because the code cannot answer it: an am id
-    # nobody created comes back 200 / code 0 / msg "success" / data null (measured 2026-09-10).
-    # Checked here rather than after the tracks, so a typo costs one request and is reported as
-    # a statement about the HANDLE instead of as an empty menu.
-    jq -e '(.data | type) == "object"' "$info" >/dev/null 2>&1 ||
-        items_fail "unavailable"
-
-    # Pages are spent only while there is reason to: a short page is the last page, `total` says
-    # when the list is complete, and the ceiling stops a very long menu. A page past the end
-    # answers code 0 with an empty array (measured), so the loop cannot run away on a site that
-    # keeps saying yes.
-    local pages=() page pn=1 on_page=0 accum=0 total="null"
-    while :; do
-        page="$SCRATCH_DIR/of-menu-$pn.json"
-        if ! fetch_of_menu_once "$CONTAINER_ID" "$pn" "$ITEMS_PAGE" "$page"; then
-            items_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
-        fi
-        pages+=("$page")
-        on_page=$(jq -r '(.data.data // []) | length' "$page" 2>/dev/null) || on_page=0
-        [[ "$on_page" =~ ^[0-9]+$ ]] || on_page=0
-        if ((pn == 1)); then
-            total=$(jq -r '.data.totalSize // "null"' "$page" 2>/dev/null) || total="null"
-            [[ "$total" =~ ^[0-9]+$ ]] || total="null"
-        fi
-        accum=$((accum + on_page))
-        ((on_page < ITEMS_PAGE)) && break
-        ((accum >= ITEMS_MAX)) && break
-        [[ "$total" != "null" ]] && ((accum >= total)) && break
-        pn=$((pn + 1))
-    done
-
-    local raw_rows
-    raw_rows=$(jq -c -s --argjson max "$ITEMS_MAX" "$JQ_ITEM_ROWS" "${pages[@]}" 2>/dev/null) ||
-        items_fail "unknown"
+    local filter="$JQ_ITEM_FILTER" project="$JQ_AUDIO_ITEMS"
+    case "$CONTAINER_KIND" in
+    fav)
+        items_fav_rows
+        filter="$JQ_FAV_FILTER"
+        project="$JQ_VIDEO_ITEMS"
+        ;;
+    season)
+        items_season_rows
+        filter="$JQ_SEASON_FILTER"
+        project="$JQ_VIDEO_ITEMS"
+        ;;
+    *)
+        items_am_rows
+        ;;
+    esac
 
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
         # The body that CARRIES the items, at full fidelity — the same rule --parts -J follows,
-        # and the reason menu/info's body does not appear here: it serves only the top-level
-        # title. When more than one page was spent, every page's rows replace page one's
-        # `.data.data`, because a -J that answered about less than -j would be the one output
-        # mode that loses information by widening.
-        jq -c --argjson rows "$raw_rows" '.data.data = $rows' "${pages[0]}" ||
+        # and the reason the container's own record does not appear here: it serves only the
+        # top-level title. When more than one page was spent, every page's rows replace page
+        # one's, because a -J that answered about less than -j would be the one output mode that
+        # loses information by widening. It is THIS batch's body: the cursor keys live in the
+        # envelope, so paging is something -j can do and -J cannot.
+        jq -c --argjson rows "$ITEMS_RAW" "$ITEMS_ROWS_PATH = \$rows" "${ITEMS_PAGES[0]}" ||
             items_fail "unknown"
         return 0
     fi
 
+    local next_cursor="null"
+    [[ "$ITEMS_HAS_MORE" == "true" ]] && next_cursor="\"o:$((CURSOR_OFFSET + ITEMS_TAKEN))\""
+
     local rows env_json
-    rows=$(printf '%s' "$raw_rows" | jq -c "$JQ_ITEM_FILTER" 2>/dev/null) ||
+    rows=$(printf '%s' "$ITEMS_RAW" | jq -c "$filter" 2>/dev/null) ||
         items_fail "unknown"
-    env_json=$(jq -nc --slurpfile info "$info" --argjson rows "$rows" \
+    env_json=$(jq -nc --argjson rows "$rows" \
         --arg engine "$ENGINE_NAME" --arg id "$CONTAINER_ID" --arg url "$CONTAINER_URL" \
-        --argjson total "$total" "$JQ_PRELUDE $JQ_ITEMS" 2>/dev/null) ||
+        --arg title "$ITEMS_TITLE" --argjson total "$ITEMS_TOTAL" \
+        --argjson has_more "$ITEMS_HAS_MORE" --argjson next_cursor "$next_cursor" \
+        "$JQ_PRELUDE $project" 2>/dev/null) ||
         items_fail "unknown"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -1443,8 +1720,8 @@ resolve_items() {
     fi
 
     # Prose, in the vocabulary --parts and ut-playlist --show already speak: the title, a dashed
-    # summary line, then one line per track. An EMPTY menu prints its title and a count of 0 —
-    # that is an answer, the same way a single-part video is an answer to --parts.
+    # summary line, then one line per track. An EMPTY container prints its title and a count of
+    # 0 — that is an answer, the same way a single-part video is an answer to --parts.
     local title count total_txt
     title=$(printf '%s' "$env_json" | jq -r '.title // "(untitled)"')
     count=$(printf '%s' "$env_json" | jq -r '.count')
@@ -1457,6 +1734,9 @@ resolve_items() {
     fi
     printf '  - items: %s   total: %s\n' "$count" "$total_txt"
     printf '%s' "$env_json" | jq -r '.items[] | "  \(.n). \(.title // "")  \(.duration_fmt // "")"'
+    if [[ "$ITEMS_HAS_MORE" == "true" ]]; then
+        printf '  … more — continue with --cursor o:%s\n' "$((CURSOR_OFFSET + ITEMS_TAKEN))"
+    fi
     return 0
 }
 
@@ -1513,7 +1793,8 @@ Usage:
   bili-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <BV id | av id | URL>
   bili-resolve --info [-j|-J] -- <BV id | av id | URL>
   bili-resolve --parts [-j|-J] -- <BV id | av id | URL>
-  bili-resolve --items [-j|-J] -- <am id | audio menu URL>
+  bili-resolve --items [--cursor TOKEN] [-j|-J] -- <am id | ml id | menu, favlist or
+                                                     collection URL>
   bili-resolve --auth [-j]
 
 The handle is a Bilibili URL, a BV id (what `bili-search -j` returns as results[].id), or
@@ -1532,11 +1813,19 @@ Options:
            (a second one only when the preferred endpoint refuses; see `title` below).
            Every element is an item record, so the list pipes into ut-playlist --add and
            ut-play --queue unmapped. A single-part video lists one part, not an error
-  --items  List the tracks of an audio menu (am id, or /audio/am<id>) — HTTP only, no
-           yt-dlp. Every element is an item record, so the list pipes into
-           ut-playlist --add and ut-play --queue unmapped. Pages of 100 up to 500 tracks;
-           count below total means the menu is longer than that, or held rows this engine
-           could not play. An empty menu lists 0 items and is not an error
+  --items  List what is in a container — HTTP only, no yt-dlp. Three of them on this site:
+           an audio menu (am<id>, /audio/am<id>), a favourites list (ml<id>,
+           /medialist/detail/ml<id>, or space…/<uid>/favlist?fid=…) and a collection
+           (space…/<uid>/lists/<sid>?type=season, …/channel/collectiondetail?sid=…).
+           Every element is an item record, so the list pipes into ut-playlist --add and
+           ut-play --queue unmapped. Up to 500 rows per call (480 for a favourites list,
+           which pages in 40s) — has_more/next_cursor say whether there are more and how
+           to ask. count below total means the container is longer than one batch, or held
+           rows this engine could not play: a dead upload or an OGV episode in a favourites
+           list is dropped. An empty container lists 0 items and is not an error, and a
+           list this anonymous client cannot see is reported as an empty one
+  --cursor TOKEN  Continue an --items listing: pass back the next_cursor of the envelope
+           before it. Opaque, and the same shape in every engine of this suite
   --auth   Report the cookie decision: which browser profile playback will read, and
            whether it exists here. No network, no handle. Says cookies are SENT, not
            that they are accepted — an expired login still reports "cookie"
@@ -1567,12 +1856,18 @@ Parts JSON (--parts -j): {status,engine,id,title,url,count,total_duration,
   There is no --parts on yt-resolve: one id there is one file, and its many-item form is a
   playlist under its own URL. A caller probes for the verb by invoking it with no handle.
 
-Items JSON (--items -j): {status,engine,id,url,title,count,total,
+Items JSON (--items -j): {status,engine,id,url,title,count,total,has_more,next_cursor,
                           items:[{n,engine,id,url,title,duration,duration_fmt}]}
-  count is what came back; total is what the site says the menu holds. They differ when the
-  menu is longer than the ceiling or when a row was not playable, and the envelope does not
+  count is what came back; total is what the site says the container holds. They differ when
+  it is longer than one batch or when a row was not playable, and the envelope does not
   say which — the fix for either is the same, ask for less or accept less.
-  -J returns the of-menu body that carried the rows, every page of it merged into one.
+  has_more says whether the CONTAINER holds rows beyond this batch (never whether rows were
+  filtered out of it), and next_cursor is the token to ask for them with — null exactly when
+  has_more is false. n numbers the rows of THIS batch, from 1. An audio menu's records
+  name tracks (au ids), a favourites list's and a
+  collection's name videos (BV ids) — both the way resolving one of them answers.
+  -J returns the body that carried the rows for THIS batch, every page of it merged into one;
+  paging is something -j can do and -J cannot, the cursor keys being envelope keys.
   A container is NOT a search row: a menu has no duration, and its track count and cursor
   have nowhere to live on a row. That is why this verb exists instead of a `kind`.
 
@@ -1652,6 +1947,15 @@ while (($#)); do
         set_action items --items
         shift
         ;;
+    --cursor=*)
+        CURSOR="${1#*=}"
+        shift
+        ;;
+    --cursor)
+        [[ $# -ge 2 ]] || { echo "bili-resolve: --cursor requires a value" >&2; exit 1; }
+        CURSOR="$2"
+        shift 2
+        ;;
     --auth)
         set_action auth --auth
         shift
@@ -1719,7 +2023,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --parts --items --auth)" >&2
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --parts --items --cursor --auth)" >&2
         exit 1
         ;;
     *)
@@ -1766,6 +2070,18 @@ fi
 if ! validate_enum "$COLOR_MODE" auto always never; then
     die "--color must be one of: auto, always, never"
 fi
+# THE CURSOR IS A TOKEN THIS ENGINE MINTED, so both ways of getting it wrong are answered here,
+# before a packet is spent: it belongs to --items (no other verb has batches), and it has one
+# shape. The shape is the same in all three engines — `o:` and an item offset — so a cursor
+# handed to the wrong engine is caught in argv instead of a request later
+# (ARCH-engine.md「容器（--items）」).
+if [[ -n "$CURSOR" ]]; then
+    [[ "$ACTION" == "items" ]] || die "--cursor continues an --items listing — pass --items"
+    [[ "$CURSOR" =~ ^o:[0-9]+$ ]] ||
+        die "'$CURSOR' is not a cursor — pass back the next_cursor an --items envelope handed you"
+    CURSOR_OFFSET="${CURSOR#o:}"
+fi
+
 # -f / -S pick a FORMAT, and only stream resolution resolves one. Next to --info they
 # would be accepted and quietly do nothing, which is precisely what a gating layer exists
 # to reject rather than ignore (ARCH-cli-contract.md「门模型」).
