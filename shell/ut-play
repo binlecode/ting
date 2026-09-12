@@ -486,6 +486,7 @@ engine_resolve_bin() {
 # Together they are the ENTIRE vocabulary the playback path has for "what am I playing".
 RESOLVED_URLS=()          # [0] = what mpv opens; [1] = its separate audio track, if any
 RESOLVED_HEADER_ARGS=()   # ready-made --http-header-fields-append=... mpv flags
+RESOLVED_MEDIA_ID=""      # the item's site id from the resolve envelope
 RESOLVED_TITLE=""
 RESOLVED_DURATION=""      # seconds, or "" for a live stream: read for the listening row only
 RESOLVED_START=""         # where the HANDLE asked to start, or "" — the engine read it, not us
@@ -508,6 +509,7 @@ resolve_media() {
     RESOLVED_HANDLE="$handle"
     RESOLVED_URLS=()
     RESOLVED_HEADER_ARGS=()
+    RESOLVED_MEDIA_ID=""
     RESOLVED_TITLE=""
     RESOLVED_DURATION=""
     RESOLVED_START=""
@@ -550,6 +552,7 @@ resolve_media() {
         return 2
     fi
 
+    RESOLVED_MEDIA_ID=$(printf '%s' "$out" | jq -r 'if (.id | type) == "string" or (.id | type) == "number" then (.id | tostring) else "" end' 2>/dev/null) || RESOLVED_MEDIA_ID=""
     RESOLVED_TITLE=$(printf '%s' "$out" | jq -r '.title // ""' 2>/dev/null) || RESOLVED_TITLE=""
     # Nothing in the PLAYBACK path wants this — mpv learns the length from the stream. It is
     # read for the listening row, where `seconds` alone cannot tell a track played through
@@ -1354,7 +1357,7 @@ detached_child_loop() {
         TRACK_STARTED_AT=""
         TRACK_STARTED_EPOCH=""
         play_url_directly "$handle" || rc=$?
-        history_record "$handle" "$ENGINE" "$rc" "" ""
+        history_record "$handle" "$ENGINE" "$rc" "$RESOLVED_MEDIA_ID" "$RESOLVED_TITLE"
         detached_epitaph "$rc"
         exit "$rc"
     fi
@@ -1486,6 +1489,7 @@ history_record() {
     # — a row for a track that would not play should still name it. resolve_media clears
     # RESOLVED_TITLE on entry, so this can never be the previous track's.
     [[ -n "$RESOLVED_TITLE" ]] && title=$RESOLVED_TITLE
+    [[ -n "$RESOLVED_MEDIA_ID" ]] && id=$RESOLVED_MEDIA_ID
 
     # EVERYTHING ELSE HAPPENS INSIDE THE SUBSHELL, and the reason is the four lines above it.
     # This function is called the instant a track ends, which is most often the instant a
