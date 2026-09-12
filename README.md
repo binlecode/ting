@@ -161,9 +161,9 @@ the hole in that: it names a directory of programs the suite runs, so it is refu
 files and read from the environment only.
 
 The shipped `config` is **never written by any command**. Your own file is: `uting` writes
-ten preference keys back to it as you change them at runtime — the engine, sort field, play
-mode, quality tier, theme, language, result count, key-hint tier, row numbers and list mode,
-each behind the key that changes it. The edit is in place, one pass and one rename, so your
+eleven preference keys back to it as you change them at runtime — the engine, sort field,
+play mode, quality tier, theme, language, result count, key-hint tier, row numbers, list
+mode and loop mode, each behind the key that changes it. The edit is in place, one pass and one rename, so your
 comments and layout survive; a value that would not read back unchanged is not written at
 all, and a key already pinned in your environment is left alone with a note rather than
 written to a file that could never win against it.
