@@ -870,6 +870,16 @@ report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_ke
 # config the audio path never reads — which is the shape a mode-blind `case` arrives in.
 report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
 
+# UT_DEAD_KEEP is the player's history-pruning count; must fail fast on non-numeric or negative.
+dk_out=$(env UT_DEAD_KEEP=bogus shell/ut-play --status 2>&1 || true)
+case "$dk_out" in
+*UT_DEAD_KEEP*) dk_hit=yes ;;
+*) dk_hit=no ;;
+esac
+report "UT_DEAD_KEEP: a bogus value dies naming the key" "yes" "$dk_hit"
+report "UT_DEAD_KEEP: a negative value exits 1" "1" \
+    "$(rc env UT_DEAD_KEEP=-1 shell/ut-play --status)"
+
 # ── ARCH-player.md「终端可视化」's five worked calls, each run once. The PICTURE those
 # lines are about needs a real resolve and a real tty, so it stays 实测 in that doc — a
 # foreground blocking play with no --length is not time this suite spends, and bounding it

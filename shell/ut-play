@@ -2908,6 +2908,9 @@ QUERY="$*"
 if ! validate_enum "$COLOR_MODE" auto always never; then
     die "--color must be one of: auto, always, never"
 fi
+if ! is_non_negative_int "$UT_DEAD_KEEP"; then
+    die "UT_DEAD_KEEP must be a non-negative integer"
+fi
 if [[ -n "$VOLUME" ]]; then
     if ! is_non_negative_int "$VOLUME"; then
         die "--volume must be a non-negative integer"
