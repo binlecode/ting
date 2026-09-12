@@ -7412,8 +7412,29 @@ printf '%s "%s"%s' "$S_SEARCHING" "$QUERY_LABEL" "$GL_ELL"
 rc=0
 fetch_json || rc=$?
 if ((rc != 0)); then
-    ((rc == 2)) && die "no results for: $QUERY_LABEL"
-    die "${SEARCH_ERR:-search failed}"
+    # A first search that matched nothing is not a failed session. This used to `die`, so one
+    # mistyped character threw away the whole menu loop — and with it the `n` that fixes the
+    # typo, the `e` that asks another source the same question, and the `b`/`h` that need no
+    # network at all. It now takes the shape every other empty row source takes
+    # (ARCH-tui.md「一条提示是帧的内容，不是一次停顿」): a notice, and a list with no rows.
+    # rc 2 ONLY. An engine that actually broke still dies, because then there is nothing on
+    # screen to steer and SEARCH_ERR is the only thing worth saying.
+    if ((rc == 2)); then
+        # fetch_json sets neither of these until it has an envelope, and this is the ONE path
+        # that reaches the menu loop without it ever having had one — so they are completed
+        # here rather than left at their startup values.
+        # An ENVELOPE, not an empty ALL_ROWS: `json` is the document focused_payload cuts a
+        # row out of and back_to_search stashes, so a source on screen that is not a jq
+        # document would be a second shape for both of them to survive.
+        json='{"count":0,"results":[]}'
+        # Not a copy of fetch_json's fallback. With no rows nothing reads CURRENT_ENGINE —
+        # until `b` opens a stored item carrying no engine tag of its own, where play_selected
+        # falls back to it; empty there is the one thing that hands ut-play `--engine ""`.
+        CURRENT_ENGINE="$ENGINE"
+        report_fetch_failure 2 "$QUERY_LABEL"
+    else
+        die "${SEARCH_ERR:-search failed}"
+    fi
 fi
 apply_search_results
 
