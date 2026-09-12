@@ -1817,7 +1817,8 @@ set_ui_lang() {
         S_QUITTING="正在退出"; S_PLAY_FAILED="播放失败"; S_SEARCH_ACT="搜索"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
-        S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
+        S_NO_MATCH="(无匹配"
+        S_NO_MATCH_NEW="n 重新搜索"; S_NO_MATCH_FILT="/ 过滤"; S_NO_MATCH_SRC="e 换音源)"
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
         S_BACK_SEARCH="返回搜索列表"
         S_PL_ADD="加入列表"; S_PL_OPEN="播放列表"; S_PL_ACT="播放列表"
@@ -1857,7 +1858,8 @@ set_ui_lang() {
         S_QUITTING="Quitting"; S_PLAY_FAILED="Play failed"; S_SEARCH_ACT="Search"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
-        S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
+        S_NO_MATCH="(no matches"
+        S_NO_MATCH_NEW="n new search"; S_NO_MATCH_FILT="/ filter"; S_NO_MATCH_SRC="e change source)"
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
         S_BACK_SEARCH="back to results"
         S_PL_ADD="add to list"; S_PL_OPEN="playlists"; S_PL_ACT="Playlist"
@@ -4964,7 +4966,15 @@ display_list_menu() {
 
     # Result rows
     if ((NUM_ENTRIES == 0)); then
-        truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS" "$nav_cols"
+        # ONE empty line for every row source (ARCH-tui.md「一条提示是帧的内容，不是一次停顿」):
+        # an empty playlist, a log with nothing in it, a filter that matched nothing, a first
+        # search that did. So it names the keys that answer from ALL of them, in the order a
+        # stuck user would try them. It used to name the filter alone — which told a mistyped
+        # first search to "change filter" when no filter had ever been open.
+        # THREE ENTRIES AND A GLYPH BETWEEN THEM, never one string with dots baked in: a
+        # literal · outlives YT_ASCII=1, which is the one thing the glyph table exists to
+        # prevent — the same rule that keeps GL_DASH out of S_NO_MATCH.
+        truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_NEW $GL_SEP $S_NO_MATCH_FILT $GL_SEP $S_NO_MATCH_SRC" "$nav_cols"
         printf '%s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
         # The marker gets its own 2-cell slot in front of the row — the cursor glyph where
