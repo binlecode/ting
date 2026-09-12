@@ -390,7 +390,7 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
 
 ```json
 {"status":"ok","engine":"bili","id":"10624","url":"https://www.bilibili.com/audio/am10624",
- "title":"新曲推荐","count":16,"total":16,
+ "title":"新曲推荐","count":16,"total":16,"has_more":false,"next_cursor":null,
  "items":[{"n":1,"engine":"bili","id":"2478206",
            "url":"https://www.bilibili.com/audio/au2478206","title":"…",
            "duration":112,"duration_fmt":"00h:01m:52s"}]}
@@ -405,6 +405,12 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
 - **`count` 是这次返回的条数，`total` 是站方声明的总数**（站方不声明时为 `null`）。两者的差同时
   覆盖"被上限截断"与"被过滤掉"，信封不为区分它们加键；这也是 `--status` 里 `len` 与 `upcoming`
   分开的同一条规矩。
+- **`has_more` 与 `next_cursor` 是必需键，允许 `null`**（与 `start_seconds` 同一先例）。
+  `has_more` 只回答**容器还有没有没取的原始条目**；`next_cursor` 是取下一批的凭据，`has_more`
+  为假时它必须是 `null`。它**不是**上一条那个"区分截断与过滤"的键：一张全是 VIP 的专辑列出 0 条
+  时 `has_more` 仍是 `false`，因为确实没有下一批可取。游标形状 `o:<条目偏移>`，三个引擎同一形状
+  （站点各自的页算术关在引擎里，见 ARCH-engine.md「容器（`--items`）」）。
+- **`-J` 是这一批的上游 body，不带这两个键** —— 翻页只服务 `-j`。
 - **`duration_fmt` 由 `JQ_PRELUDE` 的 `fmt_dur` 导出**，与搜索行、`--parts` 同一个格式。
 - 失败是 `{status, engine, url, reason}` + 退 2，`reason` 只取共享枚举；空容器是 `count: 0` +
   退 0。三个站怎么说"这个容器不存在"各不相同，见 ARCH-engine.md「容器（`--items`）」的实测表。
@@ -616,7 +622,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         --quality 撞上 --info / --parts / --items / --transcript / --auth（它是流格式选择器，「命令规格」的 `<engine>-resolve` 一节）、
         一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）、
         `bili-resolve` 流解析拿到 `am` 歌单句柄（指路 `--items`）、
-        --items 拿到一个不是容器的句柄（一个单曲 id、一个无尾的列表、网易云的裸数字）、
+        --items 拿到一个不是容器的句柄（一个单曲 id、一张每次现生成的 Mix、网易云的裸数字）、
+        --cursor 不配 --items、或 --cursor 拿到一个不是本套件签发形状的 token、
         --items 与另一个动词同时给出（ARCH-engine.md「容器（`--items`）」）
    2+   传播上来的 yt-dlp / mpv / HTTP 失败（播放、resolve -j、**搜索**失败 ——
         搜索即使 yt-dlp 退出 1 也报 2，好让一次工具失败永远不会与 1 混淆）。

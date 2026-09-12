@@ -79,7 +79,11 @@ yt-resolve  -j --info -- URL                       # 已证 · 只要元数据�
 yt-resolve  -j --transcript --sub-lang zh-Hans -- URL   # 已证 · yt 独有
 bili-resolve -j --parts -- BV1…                    # 已证 · bili 独有，一次 HTTP，不经 yt-dlp
 yt-resolve  -j --items -- PL…                      # 已证 · 三个引擎都有；容器 → 条目清单
+yt-resolve  -j --items -- "…/@handle/videos"       # 已证 · 频道投稿；满批时带 next_cursor
+yt-resolve  -j --items --cursor o:500 -- "…"       # 已证 · 续批，与上一批不重叠
 bili-resolve -j --items -- am10624                 # 已证 · 音频歌单，纯 HTTP
+bili-resolve -j --items -- ml148005847             # 已证 · 视频收藏夹，失效稿件与番剧被判据丢掉
+bili-resolve -j --items -- "…/<uid>/lists/<sid>?type=season"  # 已证 · 创作者合集
 ne-resolve  -j --items -- <album?id=N 的 URL>      # 已证 · 专辑一次请求，歌单两次以上
 ne-search   -j -n 20 -- 周杰伦                      # 已证 · 第三个信封；行带真的 access
 NE_INCLUDE_VIP=1 ne-search -j -n 20 -- 周杰伦       # 已证 · 连非 full 的行一起返回
@@ -105,14 +109,16 @@ yt-resolve  --auth -j                              # 已证 · cookie 决策：�
 | `--info` / `--transcript` / `--parts` / `--items` + `-f` / `-S` / `--quality` | 这四个动词都不解析流 |
 | `--items` + 另一个动词 | 两个动词就是没说要哪个（老动词之间的"后者赢"是已发布行为，不动） |
 | `--items` + 零个或两个句柄 | 一次一个容器 |
-| `--items` + `RD…` / `UU…` / `LL` / `FL…` / 频道 URL | 没有尾的东西导不进来（下文「容器」） |
+| `--items` + `RD…` | Mix 每次现生成，两次调用不是一张表的两页（下文「容器」）；`UU…` 与频道已收 |
+| `--cursor` 不配 `--items` / 不是 `o:<偏移>` | 游标是这套件自己签发的，形状在 argv 上就判得完 |
+| `bili-resolve --items -- <?type=series 的 URL>` | 系列与合集是两个端点，拿错端点会读出别人的视频 |
 | `ne-resolve --items -- <裸数字>` | 一个裸数字说不出自己是专辑、歌单还是歌 |
 | `--auth` + 句柄 / `-f` / `-J` | 它不接句柄也不发请求 |
 | `--parts` + 两个句柄 | 一次一个 |
 | 句柄属于**别的**站点 | host allowlist：一个引擎一个站，否则 `engine` 字段会说谎 |
 | `bili-resolve --transcript` / `ne-resolve --parts` | 能力靠「没有那个动词」声明 |
 | `bili-resolve --items -- BV…` / `yt-resolve --items -- <11 位 id>` | 一个单曲句柄不是一个容器 |
-| `bili-resolve -- <audio/am URL 或 am 裸号>` | 歌单不是单曲，流解析与元数据动词拒收并指路 `--items` |
+| `bili-resolve -- <am/ml 裸号或容器 URL>` | 容器不是单曲，流解析与元数据动词拒收并指路 `--items` |
 | `ne-resolve --sub-lang` | 一首歌一条歌词，没有可挑的东西（「字幕」） |
 | `ne-resolve -- <非 song 路径的本站 URL>` | 这个站每一种资源都是 `?id=N`，只读 query 会把 `/artist?id=6452` 解成**歌曲** 6452 |
 
@@ -120,7 +126,7 @@ yt-resolve  --auth -j                              # 已证 · cookie 决策：�
 
 ```
 $ yt-resolve --nope
-yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info --transcript --sub-lang --items --auth)
+yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info --transcript --sub-lang --items --cursor --auth)
 ```
 
 那是唯一权威的枚举。两条更近的路都会骗人，而且都真骗过（2026-09-01）：**错误文案**——缺失
@@ -592,8 +598,8 @@ URL 的集合，不是这一个动词。
 
 ### 容器（`--items`）—— 三个引擎都有的动词
 
-`<engine>-resolve --items` 把一个**容器**展开成条目清单：YouTube 的播放列表与专辑、B 站音频区的
-歌单（`am`）、网易云的专辑与歌单。`items[]` 的元素**就是条目记录**，键名也就叫 `items` —— 所以
+`<engine>-resolve --items` 把一个**容器**展开成条目清单：YouTube 的播放列表、专辑与频道投稿、
+B 站的音频歌单（`am`）、视频收藏夹（`ml`）与创作者合集、网易云的专辑与歌单。`items[]` 的元素**就是条目记录**，键名也就叫 `items` —— 所以
 `--items -j | ut-playlist --add NAME` 和 `| ut-play -d --queue -` 原样管进去，存储端与播放器
 **一行没改**。`--parts` 还需要 `jq '{items:.parts}'` 那层垫片，这个动词不需要；键名就是从这条缝
 上取的。
@@ -617,18 +623,43 @@ URL 的集合，不是这一个动词。
 **`count` 与 `total` 是两个数，差额同时覆盖两件事**：被上限截断，和被判据或访问过滤丢掉的行。
 信封**不为区分这两者加键** —— 两种情况下调用方能做的是同一件事（要个小一点的容器，或者接受少一些）。
 
-**上限是引擎内常量，不给 flag。** `-n` 在三个 resolve 里都是被拒的搜索标志，给它第二个含义就是动
-冻结面；起一个新 flag 名，则是为一个边角情况加一条契约。`ITEMS_MAX=500`；`count < total` 已经把
-"没取全"说清楚了。
+**上限是引擎内常量，不给 flag —— 但"取不完"这件事后来有了第二个答案。** `-n` 在三个 resolve 里都是
+被拒的搜索标志，给它第二个含义就是动冻结面；起一个新 flag 名，则是为一个边角情况加一条契约。所以
+`ITEMS_MAX=500` 至今不是参数。变的是另一半：`count < total` 只说得出"没取全"，说不出"从哪儿接着
+取"，而创作者侧的容器（频道投稿、上千条的收藏夹）正是靠这后半句才进得来。于是信封多了两个键，命令
+多了一个 `--cursor`，**批量大小仍然没有旋钮**。
 
-**三个站，三种取数、三种上游上限、三种"不存在"** —— 这张表是这个动词全部的站点知识
-（2026-09-10 实测）：
+**`has_more` 与 `next_cursor` —— 两个必需键，允许 `null`**（与 `start_seconds` 同一先例）：
+`has_more` 只回答**容器还有没有没取的原始条目**，`next_cursor` 是取它们的凭据，`has_more` 为假时
+它必须是 `null`。**`has_more` 不回答过滤**：本批被判据或 `fee` 丢掉多少，仍然只由 `count` 与
+`total` 的差额表达 —— 一张全是 VIP 的专辑列出 0 条时 `has_more` 是 `false`，因为确实没有下一批。
 
-| 站点 | 取数 | 上游上限（实测） | 容器不存在时（实测） |
+**游标是偏移，而且三个引擎同一形状**（`o:<条目偏移>`）。理由不是审美：形状不统一的话，把 yt 的游标
+喂给 `bili-resolve` 只能发一次包才发现错，而统一之后 argv 阶段就判完（`--cursor` 不配 `--items`
+也一样退 1）。站点各自的页算术关在引擎内 —— 收藏夹 40 一页、合集与音频歌单 100 一页、YouTube 走
+`--playlist-items <off+1>:<off+500>` —— 调用方一律只看见偏移。**批量按整页向下取整**（收藏夹因此是
+480 而不是 500），这样每一个发出去的游标都落在页边界上，续取不重读也不重叠；调用方拿着一个旧的、不
+在页边界上的游标回来，引擎照样答对（从它所在的那页取，丢掉它前面的行）。
+
+**翻页是调用方的循环，不是套件里的长连接。** `ut-play --queue -` 与 `ut-playlist --add` 仍然是一次
+性快照消费：管子对面没有人持有游标。这也是 `--items` 的输出至今不需要存储端改一行的原因。
+
+**六种容器，六种取数、六种上游上限、四种"不存在"** —— 这张表是这个动词全部的站点知识
+（音频三行 2026-09-10 实测，视频与创作者三行 2026-09-12）：
+
+| 容器 | 取数 | 上游上限（实测） | 容器不存在时（实测） |
 |---|---|---|---|
-| YouTube | `yt-dlp --flat-playlist -J --playlist-end 500`，一次进程；flat 条目自带 id/url/title/duration | 87 条 1.0s，12 条专辑 0.7s；4749 条的列表答 500，`total` 如实报 4749 | 坏 `PL` id：yt-dlp 退 1 印 `The playlist does not exist`；形状对但不存在的 `OLAK5uy_`：**退 0**，`id: null`，无 entries |
-| Bilibili | `menu/info`（标题与存在性）+ `song/of-menu`（条目），纯 HTTP，不经 yt-dlp | `ps` 上限 **100**（`ps=101` 答 `code 4511000`）；翻页有效，页与页 id 不重、`totalSize` 不动、越过末页答空数组 | HTTP 200 + `code: 0` + `msg: "success"` + **`data: null`** —— code 完全不答，只有形状答。`of-menu` 更不能拿来判：不存在的歌单与空歌单是同一份 body |
-| 网易云 | 专辑 `album/<id>` 一次到底；歌单 `playlist/detail` + `song/detail` 分批 | 一批 **100** 个 id（150 个能答，200 个在 HTTP 层就被拒：curl 16「HTTP2 framing layer」，两次一致） | body `code: 404`（HTTP 仍是 200） |
+| YouTube 歌单/专辑 | `yt-dlp --flat-playlist -J --playlist-items <off+1>:<off+500>`，一次进程；flat 条目自带 id/url/title/duration | 87 条 1.0s，12 条专辑 0.7s；4749 条的列表答 500，`total` 如实报 4749 | 坏 `PL` id：yt-dlp 退 1 印 `The playlist does not exist`；形状对但不存在的 `OLAK5uy_`：**退 0**，`id: null`，无 entries |
+| YouTube 频道投稿 | 同上，句柄先规范到 `/videos` 那个 tab | 500 条一批 6s，第二批 11s，分段枚举同序幂等（`1:3`+`4:6` 逐位等于 `1:6`）；**`playlist_count` 只在走到尽头那一批才有**（138 条的频道：`1:6` 答 `null`，`10000:10005` 答 `138`、零条目、退 0） | 频道不存在：yt-dlp 退非零，落 `unavailable` |
+| B 站音频歌单 `am` | `menu/info`（标题与存在性）+ `song/of-menu`（条目），纯 HTTP，不经 yt-dlp | `ps` 上限 **100**（`ps=101` 答 `code 4511000`）；翻页有效，页与页 id 不重、`totalSize` 不动、越过末页答空数组 | HTTP 200 + `code: 0` + `msg: "success"` + **`data: null`** —— code 完全不答，只有形状答。`of-menu` 更不能拿来判：不存在的歌单与空歌单是同一份 body |
+| B 站收藏夹 `ml` | `fav/folder/info`（标题与存在性）+ `fav/resource/list`（条目），纯 HTTP | `ps` 上限 **40**（`ps=41` 答 `code -400`，与 media_id 存不存在无关）；**上游自带 `data.has_more`**，81 条按 40 翻三页答 40/40/1、`true/true/false`，第一页与第二页 bvid 交集 0 | `folder/info` 答 200 + `code: 0` + `message: "OK"` + **`data.title: null`** —— 又是只有形状答 |
+| B 站合集 | `seasons_archives_list` 一个端点到底，带桌面 UA 与 `Referer: https://space.bilibili.com/` | `page_size` 上限 **100**（`101` 答 `-400`）；越过末页答空数组、`page.total` 不动；**`mid` 不参与鉴别**（同一 `season_id` 在 mid 0 / 1 / 真实 uid 下答同一份） | body `code: -404`（"啥都木有"）—— 三个站里唯一一个用 code 答存在性的 |
+| 网易云专辑/歌单 | 专辑 `album/<id>` 一次到底；歌单 `playlist/detail` + `song/detail` 分批 | 一批 **100** 个 id（150 个能答，200 个在 HTTP 层就被拒：curl 16「HTTP2 framing layer」，两次一致） | body `code: 404`（HTTP 仍是 200） |
+
+**裸请求打不开创作者侧的门，而救它的东西比想象中小**：`seasons_archives_list` 裸 `curl` 答
+`{"code":-352}`，补一个桌面 UA 加 space 的 `Referer` 就答 `code: 0` —— 没有 buvid、没有签名、没有
+cookie。这与本文「为什么这一个动词有两个端点」记的那次（buvid3 救得了 `search/type`、救不了 `view`）
+是同一类姿态，只是这一个好说话得多。
 
 所以**存在性判据三个站三样，而"不存在"的答案一样**：`{status:"error", engine, url, reason:"unavailable"}`，
 退 **2**。只读动词那条分法在这里不变 —— 句柄形状错在 argv 上就退 1（一个包也不发），发过包之后
@@ -645,20 +676,53 @@ VIP 专辑导进歌单就是一排 30 秒试听，等于把搜索端已经挡掉
 专辑 32311 九首全是 `fee: 1`，所以默认列出 **0** 条并在 `count` 里说清楚，这比九条听三十秒就停的
 行诚实。条目记录**不加 `access` 键**：留下来的行全是 `full`，键上没有信息。
 
-**YouTube 只认有界容器**：`PL…`（歌单）与 `OLAK5uy_…`（专辑）。`RD…`（Mix 电台）、`UU…`/`LL`/`FL…`
-（频道全部上传、赞过、收藏）和频道 URL 一律退 1 并说明理由 —— 它们没有尾，`total` 会是一句谎，而
-"取到哪算哪"等于让上限决定内容。裸 id **只查前缀不查长度**：实测的 `PLLdzS5ShOfOw` 在 `PL` 后只有
-11 个字符，新建的列表是 32 个 —— 长度不是这个站的不变量。
+**YouTube 现在只拒一种形状，而拒它的理由是稳定性，不是长度。** `PL…`（歌单）、`OLAK5uy_…`（专辑）、
+`UU…`（频道全部上传）与频道本身都收；`RD…`（Mix 电台）退 1。分界线是**两次调用是不是同一张表**：
+Mix 每次请求现生成，游标对它给不出"页与页不重叠"的承诺；频道投稿实测分段枚举同序幂等，那正是翻页
+唯一需要的性质。`LL`/`FL…`（赞过、收藏）不再被点名 —— 它们要登录态，而一个照着名字拒收它们的引擎
+是在替自己看得见的 cookie 做判断：有 cookie 就读得到，没有就是 yt-dlp 报错，那是上游失败（退 2）
+而不是用法错。
+
+**频道句柄要带上 tab，这是量出来的**：裸 `@handle` 用 flat 列出来的是三行 `_type: playlist`
+（Videos / Live / Shorts），一条视频都没有 —— 所以引擎先把它规范到 `/videos` 再枚举，否则一个有几百
+条投稿的频道会被答成 `count: 0`。这与流解析那边 `--no-playlist` 是同一件事：一个句柄能指好几样东西
+时，由引擎说清楚指的是哪一样。
+
+**频道的 `total` 不是"没有尾"，是"这一批没有付钱去数"**：yt-dlp 走到尽头才报 `playlist_count`
+（实测同一频道 `1:6` 答 `null`、`10000:10005` 答 `138`）。所以满批时 `total: null`、`has_more: true`，
+而走完的那一批如实填上总数。写成"频道一律 `null`"会是一句被一次越界请求就证伪的话。
+
+裸 id **只查前缀不查长度**：实测的 `PLLdzS5ShOfOw` 在 `PL` 后只有 11 个字符，新建的列表是 32 个 ——
+长度不是这个站的不变量。
 
 **网易云只认 URL，裸数字退 1**：这个站每一种资源都是 `?id=N`，`song`/`album`/`playlist` 的 id 空间
 互不区分，一个裸数字说不出自己是谁 —— `ne-resolve` 拒非 song 路径 URL 用的就是这条理由。单曲动词
 收裸数字，只因为**那个**动词已经先决定了它是一首歌。
 
-**B 站只做音频区 `am`**：视频侧的容器（合集、收藏夹、UP 主页）各有自己的端点与分页形状，不是 `am`
-的变体，留在 ROADMAP。条目 URL 拼成 `https://www.bilibili.com/audio/au<id>`，今天就能播 —— host
-门放行这个形态，yt-dlp 的 `BilibiliAudioIE` 接手；条目的 `id` 也就是解析那条 URL 时信封里的那个
-`id`（实测 `au2478206` → `"2478206"`），所以从这份清单存下去的记录，和直接解析它的信封指的是同
-一首。
+**B 站三种容器，一条取数路，两种条目**。音频歌单（`am`）的条目 URL 拼成
+`https://www.bilibili.com/audio/au<id>`，收藏夹（`ml`）与合集的条目拼成
+`https://www.bilibili.com/video/BV…` —— 两种拼法都是**解析那条 URL 时信封里的那个 `id`**（实测
+`au2478206` → `"2478206"`），所以从清单存下去的记录和直接解析它的信封指的是同一条。三条路的差别只有
+六样东西（页大小、两个分页参数名、条目在哪、总数在哪、有没有上游 `has_more`），所以文件里是一个翻页
+循环带六个参数，不是三份循环。
+
+**收藏夹的条目判据比别处多两道，而两道都是被实测逼出来的**（2026-09-12，两份独立的公开收藏夹）：
+
+- **只留 `type == 2`**：收藏夹会混装 `type: 24` 的番剧条目，它带 `bvid`，但 `link` 是
+  `/bangumi/play/ep…` —— 照 `bvid` 拼出来的行指向另一个地方。
+- **丢掉 `attr` bit0 为 1 的**：失效稿件仍然留在列表里，标题是「已失效视频」，`attr` 取 1 或 9，
+  **而 duration 是真实非零值**（实测 4410 / 104 / 17215 / 593073 秒，两份样本里没有一条 duration 为 0）。
+  所以本文那条"可播且说得出多长"的判据**挡不住它**，而拿站点的中文文案当判据是把契约系在一句 UI
+  文本上 —— 数值位才是不变量。
+
+**收藏夹分不开"空"与"看不见"**：匿名身份下，一个空收藏夹与一个这个客户端没资格看的收藏夹，
+`fav/resource/list` 给的是同一份 body（`code: 0`、`medias: null`、`has_more: false`）。所以私密收藏
+夹被报成 `count: 0` 的空容器 —— 这是**记录在案的不可分**，不是漏掉的分支：要分开它就得拿 HTTP 这半
+边本来就不持有的登录态去猜。
+
+**合集的 `mid` 只用来拼回那条能打开的 URL**：端点实测不认它（mid 0、1 与真实 uid 答同一份），但
+信封的 `url` 得是人点得开的地址，所以句柄文法收带 uid 的那两种 space URL。系列（`?type=series`）与
+合集是两个端点，所以它被**按名字拒收**（退 1）而不是拿合集端点去读出别人的视频。
 
 **音频歌单（`am`）句柄在主文法中显式拒收**：`am` 裸号或 `/audio/am<id>` 链接在流解析、`--info` 与
 `--parts` 门控中退 1，并提示改用 `--items`。这杜绝了上游 `yt-dlp` 对专辑 URL 输出 `status:"ok"` 但
@@ -671,6 +735,9 @@ VIP 专辑导进歌单就是一排 30 秒试听，等于把搜索端已经挡掉
 不存在。**这条判据是拿输入证的，不是拿一张恰好带私密条目的真列表证的**：2026-09-10 抽的四张公开
 列表一条私密条目都没有，所以证据是把那几种形状喂给同一段 jq（`tests/contract.sh` 的容器信封检查
 配合一份手写混装记录），私密与已删被丢、直播留下、嵌套列表行被丢。
+
+**`-J` 是这一批的 body，翻页只服务 `-j`**：游标那两个键住在信封里，而 `-J` 是信封之前的那份原始
+响应 —— 所以一个只用 `-J` 的调用方拿不到 `next_cursor`，这是有意的分工，不是遗漏。
 
 **`-J` 吐出条目那一份上游 body**，与 `--parts -J` 先例一致：YouTube 是那份 flat 记录，B 站是
 `of-menu`，网易云是专辑响应或合并后的 `song/detail`（多页/多批时，各页的行合并进第一份 body 的
