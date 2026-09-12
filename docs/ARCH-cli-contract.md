@@ -69,7 +69,7 @@
 
 ### 调用面 —— 命令之间怎么接
 
-单个命令的 flag 乘积在各自的 as-built 里（`ARCH-player.md`、`ARCH-engine.md`、
+单个命令的 flag 乘积在各自的 `ARCH-*.md` 里（`ARCH-player.md`、`ARCH-engine.md`、
 `ARCH-tui.md` 的同名段）。这里是**跨命令的那一层**——真正让这十个东西成为一套 API 的
 不是任何一个 flag，而是**它们的 stdin 都认同一组形状**：
 
@@ -201,7 +201,8 @@ detached 播放器）、生命周期与控制动词附带未被消费的 positio
   `--auth`（每个引擎都有）、`--transcript`（`yt-resolve` 与 `ne-resolve`；**伴随的 `--sub-lang` 只在
   `yt-resolve`** —— 一条字幕轨和一次语言选择是两件能力，ARCH-engine.md「字幕」）、
   `--parts`（只有 `bili-resolve`，ARCHITECTURE.md「站点知识的边界」 同一条能力规矩）、
-  `--items`（每个引擎都有 —— 容器展开，各站的容器形态与请求数在 ARCH-engine.md「容器（`--items`）」）
+  `--items`（每个引擎都有 —— 容器展开，各站的容器形态与请求数在 ARCH-engine.md「容器（`--items`）」；
+  **伴随的 `--cursor` 也是每个引擎都有**，它续的是 `--items` 的批，所以不配 `--items` 就退 1）
   —— 以及流格式选择器 `--quality TIER`
   （`auto|low|medium|high`，每个引擎都有）。
 - **`--quality` 是流格式选择器，只配 `resolve_stream` 用。** 它撞上 `--info` / `--parts` /
@@ -374,7 +375,8 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
   **容器因此不是一行**：它要的是自己的动词与信封，那里 `track_count` 和分页游标才有地方放，
   而一行为播放而生的记录放不下它们（`duration`/`view_count`/`channel` 在容器上同时无意义）。
   把频道、专辑、歌单、艺人全压进 `collection` 一个值，等于让调用方回头看 url 去分辨
-  **有界的专辑**与**无界的创作者目录** —— 那是把站点知识挪回调用方，正是引擎接缝要消掉的东西
+  **一次取得完的专辑**与**要分批取的创作者目录** —— 那是把站点知识挪回调用方，正是引擎接缝要
+  消掉的东西；这两者的差别后来落在容器信封的 `total` 与 `has_more` 上，而不是行上的一个枚举值
   （决定与被否掉的替代方案：2026-09-03；容器自己那个动词落地于
   ARCH-engine.md「容器（`--items`）」）。
   **枚举因此收窄为两值**（0.5.7）：`collection` 无人认领，且不会有人认领 —— 一个不是行的
@@ -621,7 +623,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         --info / --transcript 取数失败（含 no_subtitles_available）、
         --quality 撞上 --info / --parts / --items / --transcript / --auth（它是流格式选择器，「命令规格」的 `<engine>-resolve` 一节）、
         一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）、
-        `bili-resolve` 流解析拿到 `am` 歌单句柄（指路 `--items`）、
+        `bili-resolve` 流解析拿到容器句柄（`am` / `ml` / 合集 URL，指路 `--items`）、
         --items 拿到一个不是容器的句柄（一个单曲 id、一张每次现生成的 Mix、网易云的裸数字）、
         --cursor 不配 --items、或 --cursor 拿到一个不是本套件签发形状的 token、
         --items 与另一个动词同时给出（ARCH-engine.md「容器（`--items`）」）
