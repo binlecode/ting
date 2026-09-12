@@ -3,7 +3,7 @@
 > **Status**: 草案 (Draft) · 架构与完整实施规约就绪，准备实施  
 > **Priority**: P2（视觉表现力与终端个性化重大升级）  
 > **Target Branch**: main  
-> **Roadmap 关联**: 人机交互面（TUI）质感升级专项，解决主题高度同质化与单色相偏执问题  
+> **Roadmap 关联**: [`docs/ROADMAP.md`](ROADMAP.md)「还没定的事」——【中 ROI】主题调色板扩容与多语义色彩系统重塑  
 > **Governing Docs**: [`docs/ARCH-tui.md`](ARCH-tui.md)「唯一视图的渲染」「主题与色彩」、[`docs/ARCHITECTURE.md`](ARCHITECTURE.md)「人机面」、[`docs/ARCH-cli-contract.md`](ARCH-cli-contract.md)「配置面」  
 > **Verification**: `tests/contract.sh` 主题自反性门禁测试、`tests/drive.sh` 13 主题无缝轮换测试、`bash -n shell/uting`、`shellcheck`
 
@@ -12,7 +12,7 @@
 ## 1. 现状问题与设计根因审计 (Problem Audit)
 
 ### 1.1 现状硬伤：主题高度同质化（“千人一面”）
-目前 `shell/uting` 内置的合法主题集合（行 750 `THEME_NAMES`）为：
+目前 `shell/uting` 内置的合法主题集合（行 787 `THEME_NAMES`）为：
 ```text
 minimal  mono  catppuccin  tokyonight  nord  gruvbox  onedark  custom
 ```
@@ -24,11 +24,11 @@ minimal  mono  catppuccin  tokyonight  nord  gruvbox  onedark  custom
 - 仅有 `catppuccin`（紫）和 `gruvbox`（土橙）不是蓝色。
 用户在按 `t` 键轮换主题时，连续 4 个主题均为高度近似的冷蓝/青色，缺乏实质色彩跳跃，风格极度单一。
 
-### 1.2 架构根因：“单色相偏执（Single-Hue Obsession）”
-查阅 `shell/uting:944-960` 及 `docs/ARCH-tui.md`，此前版本为避免“主题非绿色时播放状态显示绿色导致撞色”，执行了一次极端的单色化收敛：
-- **全面废除了第二色相**：彻底删除了 `C_GREEN` 与 `C_YELLOW` 变量；
-- **全屏强行统一为单一变量 `C_CYAN`**：播放状态、暂停状态、进度条轨道、光标指示、按键高亮全部共用同一个 `C_CYAN`；
-- 导致全屏 95% 为灰白普通文本，仅剩 5% 的零星单色高亮，界面极其扁平、缺乏层次感与呼吸感。
+### 1.2 架构根因与历史设计决策冲突 (Architectural Decision Conflict)
+查阅 `shell/uting:1000-1030` 及 `docs/ARCH-tui.md:682-690`，当前代码库严格遵循了此前的“单色相收敛”架构决定：
+- **历史决定的依据**（`ARCH-tui.md`）：“播放状态是最后一处双色相的钉子户……而在强调色不是绿色的地方，第二个色相读起来就是‘这不是这个主题’……状态点如今取强调色，由字形承载状态……于是 `C_GREEN` 与 `C_YELLOW` 都被彻底删掉”；
+- **现状导致的负面体验**：全面废除第二色相导致全屏强行统一为单一变量 `C_CYAN`（播放状态、暂停状态、进度条轨道、光标指示、按键高亮全部共用），全屏 95% 为灰白普通文本，仅剩 5% 的单色高亮，界面极其扁平；
+- **本计划的重开立场与落地条件**：本计划提议推翻此前彻底删除双色相的决定，重新引入主题协调下的多角色语义系统（`C_PLAY`、`C_PAUSE` 等），通过各主题专属配色的绿/黄避免突兀撞色；**落地时必须同步推翻并重写 `ARCH-tui.md`「主题与色彩」对应章节**。
 
 ---
 
@@ -44,7 +44,7 @@ minimal  mono  catppuccin  tokyonight  nord  gruvbox  onedark  custom
    - **Level 2 (ANSI-16 Fallback)**：老旧终端或不支持 TrueColor 时，精准回退至精选的最佳 ANSI-16 颜色索引（31-36），确保色彩不丢失、不变乱码；
    - **Level 3 (NO_COLOR / `--color never` / 非 TTY)**：严格静默，所有色彩变量自动清空为 `""`，仅保留字形属性（`bold`/`dim`）与反色，坚守 Unix 环境规范。
 3. **自反性契约严格对齐（The Contract Lockstep）**：
-   - `THEME_NAMES`、`usage()` 中的 `--theme` 参数说明行、`usage()` 中的 `YT_THEME=` 说明行，必须与 `tests/contract.sh:1540-1549` 的门禁测试保持 100% 逐字对应，确保自动化测试绝对不红。
+   - `THEME_NAMES`、`usage()` 中的 `--theme` 参数说明行、`usage()` 中的 `YT_THEME=` 说明行，必须与 `tests/contract.sh:1627` 附近的门禁测试保持 100% 逐字对应，确保自动化测试绝对不红。
 
 ---
 
@@ -97,15 +97,15 @@ C_BG_SURF     # 选中行微光底色（TrueColor 下极淡暗底 \033[48;2;...m
 
 ### 5.1 常量与门控更新 (`shell/uting`)
 
-#### 1. 扩展 `THEME_NAMES`（行 750）
+#### 1. 扩展 `THEME_NAMES`（行 787）
 ```bash
 THEME_NAMES="minimal mono catppuccin tokyonight nord gruvbox onedark dracula rosepine everforest kanagawa solarized monokai custom"
 ```
 
-#### 2. 更新 `usage()` 描述文本（行 534–536 与行 612）
+#### 2. 更新 `usage()` 描述文本（行 535–537 与行 618）
 精确保持契约闭环，防止 `tests/contract.sh` 报错：
 ```bash
-# 行 534:
+# 行 535:
   --theme NAME  Palette: minimal (default) | mono | catppuccin | tokyonight | nord
                 | gruvbox | onedark | dracula | rosepine | everforest | kanagawa
                 | solarized | monokai | custom. Every theme = signature accent,
@@ -114,18 +114,18 @@ THEME_NAMES="minimal mono catppuccin tokyonight nord gruvbox onedark dracula ros
                 COLORTERM=truecolor, else ANSI-16 fallbacks. custom takes its accent
                 from UT_ACCENT (below) and is minimal when that is unset.
 
-# 行 612:
+# 行 618:
   YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark|dracula|rosepine|everforest|kanagawa|solarized|monokai|custom
 ```
 
-#### 3. 更新 `config` 默认轮换列表（行 96）
+#### 3. 更新 `config` 默认轮换列表（行 107）
 ```bash
 UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark dracula rosepine everforest kanagawa solarized monokai mono
 ```
 
 ### 5.2 调色板引擎升级 (`set_theme`)
 
-修改 `shell/uting:1050-1080`：
+修改 `shell/uting:1168-1220`：
 为 13 个主题分别注入精确的 RGB 24 位色与 ANSI 16 回退代码：
 
 ```bash

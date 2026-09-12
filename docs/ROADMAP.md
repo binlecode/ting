@@ -120,7 +120,7 @@
   **收益**：极高。打通"脱离终端播放"后人机界面的状态接管闭环。
   **成本**：中等。启动时增加单次状态探测。
   **问题分析**：用户在 TUI 听歌退出或后台有 `ut-play -d` 播放时，再次打开 `uting` 会初始化 `CURRENT_PLAY_ID=""`，界面盲目显示未在播放，按 `Space`/`s` 无效；此时若按 Enter 选歌，会并发启动第二个 mpv 实例，两首歌同时在扬声器里打架，老播放器沦为幽灵进程。
-  **方案细节**：TUI 启动时调用 `ut-play --status -j`，若检测到存在唯一在播播放器，自动接管其 ID、Socket、状态与曲名。
+  **方案细节**：TUI 启动时调用 `ut-play --status -j`，若检测到存在唯一在播播放器，自动接管其 ID、Socket、状态与曲名。详见 [`docs/PLAN-session-reconnect.md`](PLAN-session-reconnect.md)。
 
 - **【中高 ROI】URL 跨引擎统一规范化过滤（消除追踪参数污染存储库）。**
   **收益**：中高。净化歌单与收听历史持久化存储，保障跨调用幂等。
@@ -182,6 +182,12 @@
   **成本**：低。仅需在 `config` 增加单个颜色键并由 `ut-play` 透传至 mpv 参数。
   **待决问题**：是否引入独立配色配置项（如 `UT_VIZ_COLOR` 与 `--viz-color`）覆盖硬编码 cyan。
   **已决约束**：严禁复用 `uting` 的 `YT_THEME`（调色板不跨进程共享）。
+
+- **【中 ROI】主题调色板扩容与多语义色彩系统重塑（13 主题与多角色语义色彩）。**
+  **收益**：中。打破当前 6 彩色主题中 4 个冷蓝同质化的“千人一面”硬伤，丰富终端个性化与视觉层次感。
+  **成本**：中。需在 `shell/uting` 的 `set_theme` 引入 13 个主题的精确 24-bit/ANSI-16 颜色表及 `C_PLAY`/`C_PAUSE` 等语义变量，并严格保障三道门自反性。
+  **待决问题**：是否推翻 `ARCH-tui.md:682-690` 中此前确立的“单色相收敛（彻底删除 `C_GREEN`/`C_YELLOW`、字形承载状态）”架构决定，重新引入主题专属协调色下的多角色语义系统。详见 [`docs/PLAN-theme-palette-expansion.md`](PLAN-theme-palette-expansion.md)。
+  **硬性约束**：严禁引入 bash 4+ 关联数组；三级色彩优雅降级（TrueColor -> ANSI-16 -> NO_COLOR）；落地时必须同步推翻并重写 `ARCH-tui.md` 相关章节。
 
 - **【低 ROI】MCP 官方包装层（stdio server）。**
   **收益**：中低。最新实测（`RESEARCH-tui-player.md` §10）证实外部 MCP 工具均无法托管播放生命周期；而本仓裸 CLI 契约天然可被 Coding Agent（Claude Code / Codex）无损驱动。
