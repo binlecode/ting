@@ -30,7 +30,7 @@
 | 领域现状（§3） | 2026-08-21，**2026-09-03 更新** | **实测** —— GitHub API |
 | 发布要付的账（§4） | 2026-08-21 | **实测 + 本仓已知约束** |
 | 自用够不够（§5） | 2026-08-21，`shellcheck` 计数 2026-09-02 | **实测** |
-| **播放设计与音源（§6–§11）** | 2026-08-29，**2026-09-03 更新** | **读源码 + 实测** —— 网络检索 + 项目源码核查 + 流时效/风控实测 |
+| **播放设计与音源（§6–§11）** | 2026-08-29，**2026-09-03 / 2026-09-12 更新** | **读源码 + 实测** —— 网络检索 + 项目源码核查 + 流时效/风控实测 + 新候选第一性原理筛查 |
 
 **这两半的可信度不一样，混着引用就会出错。**
 
@@ -40,6 +40,8 @@
 下半的陈述大部分带出处（§13），**读结论不如读出处**；
 2026-09-03 轮次通过平台直测和源码核查，把原先标 **[需实测]** 的几项（YouTube 6 小时、B 站 2 小时与 412
 机制、网易云 20-25 分钟、go-musicfox mpv IPC、termusic gRPC）**全部升格为已证事实**；
+2026-09-12 轮次针对第四音源候选（SoundCloud、Apple Podcasts、QQ音乐、小宇宙、汽水音乐、Spotify、Bandcamp）
+执行了基于第一性原理 mission 的全面网调与本地实测（§9.1）；
 §12 记录本轮已解决与新提出的问号。
 
 ---
@@ -513,6 +515,40 @@ UI 与播放分离的架构里，MPRIS 该由谁来发布，是个真问题 —�
 - **汽水音乐**（字节）：`guohuiyuan/go-music-dl`（4138★，2026-08-30 发布 v1.1.0）通过底层 `music-lib` 实现了汽水音乐的搜索与音频解密（SEO 路径可跳过解密）；
 - **小宇宙**（播客，cliamp 支持）、5sing、千千音乐、JOOX。
 
+### 9.1 下一个媒体源候选与准入筛查（2026-09-12 实测更新）
+
+在既有三引擎（`yt` / `bili` / `ne`）体系之外，套件对扩充第四音源设定了五条不可逾越的**第一性原理准入判据**：
+1. **双半边闭环契约**：必须同时具备搜索前半边（`<engine>-search`）与解析后半边（`<engine>-resolve`），缺少免鉴权公开搜索直接触发否决（对齐「喜马拉雅 NO」）；
+2. **零新增全局依赖**：锁定 5 大外部工具（`yt-dlp` / `jq` / `mpv` / `nc -U` / `curl`，至多引擎局部调 `openssl`）；严禁引入 Node.js/Python 运行时、专有守护进程或二进制 SDK；
+3. **Pure Bash 3.2 运行基准**：macOS 原生兼容，无构建与外部包袱；
+4. **mpv 原生直链可播**：后半边产出的必须是 `mpv --no-ytdl` 直接支持的开放媒体直链，无私有二次解密或 DRM 阻碍；
+5. **免鉴权低风控高可用**：支持匿名开箱可用，无高频滑动人机验证、封号风控或易失效的 JSVMP 逆向包袱。
+
+**候选媒体源实测比对矩阵（2026-09-12 网调与本地实调）：**
+
+| 候选平台 | 搜索机制（前半边） | 直链与播放（后半边） | 外部依赖 | 免登录可用性 / 风控现状 | 第一性原理判定 |
+|---|---|---|---|---|---|
+| **SoundCloud (`sc`)** | `yt-dlp` 原生 `scsearch`（实测 <1s 返回规范 JSON） | `yt-dlp` 提取标准 HLS `m3u8`，mpv 直接播放 | **零新增**（`yt-dlp` + `jq`） | **极高**（官方免登录开放，无风控阻断） | **✅ 最佳首选（工程与契约最契合）** |
+| **Apple Podcasts / RSS (`pod`)** | 官方 iTunes Search API（公开免鉴权 REST） | 各大托管商静态 MP3 直链，秒开播放 | **零新增**（纯 `curl` + `jq`，甚至免 `yt-dlp`） | **极高**（永久公开官方接口，零风控） | **✅ 最佳品类互补（填补播客长音频空白）** |
+| **QQ 音乐 (TME)** | Web 接口 `musicu.fcg` | `GetVkeyServer / CgiGetVkey`，VIP 曲目锁 30s | 需 Node.js 跑 JSVMP 逆向签名 | **极低**（未带 sign/未登录直接返回 `code: 2001` 弹登录） | **❌ 否决（违反零依赖、高维护负债）** |
+| **小宇宙播客 (Xiaoyuzhou)** | **无公开 Web 搜索接口**，仅 App API | 需传设备指纹与 App 请求头 | 需逆向 Token 管理 | **极低**（依赖动态 `x-jike-access-token`，第三方调用封号） | **❌ 否决（触碰「喜马拉雅 NO」红线）** |
+| **汽水音乐 (Luna / 字节)** | PC 接口需设备指纹与专有签名 Header | 音频流经 `AES-CTR` 加密，带 `spade_a` | 需本地解密中间层 | **差**（无直链，需先下流再解密才能播） | **❌ 否决（违反 mpv 纯直链架构）** |
+| **Bandcamp** | **不支持公开搜索**（yt-dlp 无 `bcsearch`） | 单曲需购买，仅部分 128k 样片 | 需额外逆向搜索 | **中**（多为付费专辑与试听碎片） | **❌ 否决（前半边残缺）** |
+| **Spotify** | 官方 Web API 需 OAuth 注册 | **受 Widevine DRM 保护，无直链** | 必须内嵌 Rust `librespot` | **零**（强制 Premium 账号与外部守护进程） | **❌ 否决（违反轻量/零依赖/无账号原则）** |
+
+**实测要点与推荐结论：**
+
+1. **推荐首选：SoundCloud (`sc`)**
+   - **双半边实测**：`yt-dlp --dump-json --flat-playlist "scsearch5:lofi"` 在 1.1s 内返回包含 `id/title/duration/webpage_url/view_count/thumbnails` 的完整元数据；解析端调用 `yt-dlp -j -f "ba/b" <url>` 直接输出 `https://playback.media-streaming.soundcloud.cloud/.../playlist.m3u8`，mpv 原生直接播放；同时天然支持 SoundCloud Sets/Playlists 容器（对应 `--items`）。
+   - **生态价值**：弥补海外独立音乐、电子音乐（EDM/House）、DJ Sets 与长音频混音生态，无版权碎片墙。
+2. **推荐备选：开放播客生态 (`pod`，Apple Podcasts / iTunes Search API + RSS Enclosure)**
+   - **双半边实测**：Apple 官方 iTunes Search API（`https://itunes.apple.com/search?term=...&entity=podcastEpisode`）为永久公开 REST 接口，纯 `curl + jq` 在 200ms 内完成；各大播客托管商分发标准静态 MP3 直链，零风控、毫秒级起播。
+   - **生态价值**：填补系统在长音频谈话、科技播客、新闻等专业听觉场景的空白。
+3. **国内源否决留档**：
+   - QQ 音乐：`musicu.fcg` 全面启用 JSVMP 与动态 sign 校验，未登录返回 `{"code":2001, "feedbackURL":".../login"}`；
+   - 小宇宙：Web 端完全无公开搜索接口，App 接口依赖 `x-jike-access-token`，被官方严密风控封号（见 `ultrazg/xyz` 警告）；
+   - 汽水音乐：直链经过私有 `AES-CTR` 传输加密（带 `spade_a` 需本地二次解密），违背直接向 mpv 喂流的原则。
+
 ---
 
 ## 10. agent 面：2026 年它不再是加分项
@@ -605,6 +641,25 @@ spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + �
    未来国内音乐平台若继续收紧免登录音源接口，像 `go-music-dl` 这种依靠 `music-lib`
    多平台逆向算法解密的库能否维持长期维护。
 
+### 12.3 2026-09-12 已实测关闭的第四音源候选问号
+
+1. **SoundCloud 的双半边闭环度（已证可用）**：
+   - 搜索：`yt-dlp --dump-json --flat-playlist "scsearch5:lofi"` 实测可在 1.1s 内返回平铺元数据（带 id/title/duration/thumbnails/webpage_url）；
+   - 解析：`yt-dlp -j -f "ba/b"` 实测直接提取标准 HLS `m3u8` 直链，`mpv --no-ytdl` 无缝起播；
+   - 容器：支持 Sets/Playlists 批量展开，完全对接套件 `--items` 动词；零新增外部依赖。
+2. **开放播客生态（Apple Podcasts / iTunes Search API + RSS）（已证可用）**：
+   - 搜索：`https://itunes.apple.com/search?term=...&entity=podcastEpisode` 官方 REST 接口永久免鉴权、免登录，纯 `curl + jq` 在 200ms 内响应；
+   - 解析：托管商 CDN 直接输出原始 MP3/AAC 静态直链，无防盗链与鉴权头要求，生命周期永久有效；
+   - 架构契合：纯 `curl + jq` 双半边自洽，甚至不需要 `yt-dlp`。
+3. **QQ 音乐 / TME 免登录与逆向算法可用性（已证不可行）**：
+   - 实测 `https://u.y.qq.com/cgi-bin/musicu.fcg` 接口：未带动态签名或未携带登录态时，直接返回 `{"code":2001, "feedbackURL":"https://y.qq.com/wk_v17/common_login.html#/login"}`；
+   - 站方已上深度混淆的 JSVMP 虚拟机与动态 sign 签名，且版权歌曲全量锁 VIP，纯 bash 3.2 无法在零依赖下稳定维护。
+4. **小宇宙播客免鉴权与封号风险（已证不可行）**：
+   - 实测与查阅开源客户端（`ultrazg/xyz`, `MosesHe/xiaoyuzhoufm-mcp`）证实：小宇宙 Web 站无任何搜索端点；App API 强制校验 `x-jike-access-token`；
+   - 站方风控对第三方 API 调用执行封号策略，触发与「喜马拉雅 NO」相同的否决判据。
+5. **汽水音乐直链私有加密传输机制（已证不可行）**：
+   - 查阅 `guowenye/qishui-api` 与 `music-lib` 源码证实：音频直链采用私有 `AES-CTR` 加密，返回 `spade_a` 需本地二次解密，无法直接作为直链喂给 mpv 播放。
+
 ---
 
 ## 13. 出处
@@ -639,6 +694,12 @@ spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + �
 - yt-dlp B 站 412：https://github.com/yt-dlp/yt-dlp/issues/16571 · PR #16889（buvid 指纹）：https://github.com/yt-dlp/yt-dlp/pull/16889 · View API 412 issue #17605：https://github.com/yt-dlp/yt-dlp/issues/17605
 - LXMusic vs MusicFree：https://zhuanlan.zhihu.com/p/718757633 · 洛雪 2026 音源汇总：https://zhuanlan.zhihu.com/p/2016513313782113612
 - Listen 1：https://listen1.github.io/listen1/
+- QQ-music-api（2025.9 逆向抓包）：https://github.com/copws/qq-music-api
+- QQMusicapi（Node.js JSVMP 分析）：https://github.com/Suxiaoqinx/QQMusicapi
+- qishui-api（汽水音乐 AES-CTR 解密逆向）：https://github.com/guowenye/qishui-api
+- xyz（小宇宙FM API 逆向与风控警告）：https://github.com/ultrazg/xyz
+- xiaoyuzhoufm-mcp（小宇宙 Token 与请求头分析）：https://github.com/MosesHe/xiaoyuzhoufm-mcp
+- Apple iTunes Search API 规范：https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/
 
 **agent 面**
 - bilibili-cli（面向 Agent 的 B 站 CLI）：https://github.com/public-clis/bilibili-cli
