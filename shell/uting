@@ -346,8 +346,13 @@ fi
 #
 # Sibling directory first, then PATH, which is the same precedence `ut-play` uses to find a
 # resolver: a bare checkout runs with nothing installed, and an installed suite still works
-# from anywhere. PATH is scanned only when the checkout yields nothing, so the ordinary case
-# costs one glob.
+# from anywhere. BOTH are always scanned, and the sibling half wins on a name collision
+# (`engine_seen` keeps the first sight of a name). Scanning PATH only when the checkout came
+# up empty was the cheaper spelling — one glob in the ordinary case — and it quietly made
+# the installed-engine case unreachable: any checkout carrying its own engines, which is
+# every real one, could never see a fourth pair on PATH, while `ut-play --engine` could.
+# The two faces disagreed about what sources exist. The glob it saves is not worth that:
+# a full sweep of a 44-entry PATH measures 9ms on the 3.2 floor, once, at startup.
 ENGINES=()
 engine_seen() {
     local e
@@ -370,15 +375,13 @@ scan_engines() {
     return 0
 }
 scan_engines "$SCRIPT_DIR"
-if ((${#ENGINES[@]} == 0)); then
-    _saved_ifs=$IFS
-    IFS=:
-    for _pdir in $PATH; do
-        [[ -n "$_pdir" && -d "$_pdir" ]] && scan_engines "$_pdir"
-    done
-    IFS=$_saved_ifs
-    unset _saved_ifs _pdir
-fi
+_saved_ifs=$IFS
+IFS=:
+for _pdir in $PATH; do
+    [[ -n "$_pdir" && -d "$_pdir" ]] && scan_engines "$_pdir"
+done
+IFS=$_saved_ifs
+unset _saved_ifs _pdir
 if ((${#ENGINES[@]} == 0)); then
     echo "uting: no engine found — need a <name>-search and <name>-resolve pair beside this file or on PATH" >&2
     exit 1

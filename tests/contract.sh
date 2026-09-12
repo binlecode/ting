@@ -1003,6 +1003,35 @@ report "…search args forwarded"     tty "$(uting_gate shell/uting --engine bil
 report "…menu args, and -f is legal" tty "$(uting_gate shell/uting -f video --volume 60 "lofi")"
 report "…chrome args"               tty "$(uting_gate YT_LANG=zh shell/uting --theme nord "lofi")"
 
+# ── AN ENGINE THAT IS ONLY ON PATH, while the checkout carries its own. Until now `uting`
+# scanned PATH only when the sibling glob came up empty, which made this — the one situation
+# an installed third-party engine can actually be in — unreachable: the TUI offered three
+# sources while `ut-play --engine` happily played a fourth. Two faces, one word "engine",
+# different answers. ARCH-cli-contract.md「加一个引擎 —— 清单」's last item states the claim
+# ("`uting` 靠在 PATH 上和自己旁边扫描 … 这一对来发现它") and nothing had ever run it.
+#
+# What goes on PATH is the REAL engine, reached under a second name: the variables under test
+# are its LOCATION and the name it answers to, and nothing runs in PLACE of an engine
+# (CLAUDE.md's testing rules). A fourth name is what the condition requires — a symlink
+# called `yt-*` would be deduplicated against the sibling copy and prove nothing.
+#
+# Both gates exit 1, so a code cannot separate "found, then refused for want of a terminal"
+# from "no such engine". The message can, which is the whole reason uting_gate exists.
+PATH_ENG=$UT_TEST_TMP/path-engines
+mkdir -p "$PATH_ENG"
+ln -sf "$PWD/shell/yt-search" "$PATH_ENG/zz-search"
+ln -sf "$PWD/shell/yt-resolve" "$PATH_ENG/zz-resolve"
+report "an engine only on PATH is found" tty \
+    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine zz q)"
+# The two halves that make the line above mean something. A pair is a PAIR: one half on PATH
+# is a source that would list results nothing can resolve, so it is not an engine and the
+# call falls to the flag gate — the same answer a name that is simply absent gets.
+ln -sf "$PWD/shell/yt-search" "$PATH_ENG/lone-search"
+report "…a lone search half is not one"  mode \
+    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine lone q)"
+report "…and an absent name still is not" mode \
+    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine nope q)"
+
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
 # `engine:"yt"`. It WORKED, which is why it went unnoticed, and it made the one field whose
