@@ -80,7 +80,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
@@ -344,15 +344,29 @@ fi
 # Requiring the pair is not pedantry — a lone `-search` would list results the player cannot
 # then resolve, i.e. a source that looks browsable and is not.
 #
-# Sibling directory first, then PATH, which is the same precedence `ut-play` uses to find a
-# resolver: a bare checkout runs with nothing installed, and an installed suite still works
-# from anywhere. BOTH are always scanned, and the sibling half wins on a name collision
-# (`engine_seen` keeps the first sight of a name). Scanning PATH only when the checkout came
-# up empty was the cheaper spelling — one glob in the ordinary case — and it quietly made
-# the installed-engine case unreachable: any checkout carrying its own engines, which is
-# every real one, could never see a fourth pair on PATH, while `ut-play --engine` could.
-# The two faces disagreed about what sources exist. The glob it saves is not worth that:
-# a full sweep of a 44-entry PATH measures 9ms on the 3.2 floor, once, at startup.
+# THREE PLACES, ONE ORDER: sibling directory, then $UT_ENGINE_DIR, then PATH — the same
+# precedence `ut-play` uses to find a resolver, and the two files have to agree or this UI
+# offers a source the player cannot open. A bare checkout runs with nothing installed; an
+# installed suite works from anywhere; a third-party pair has somewhere to live that is
+# neither the source tree nor the whole of PATH.
+#
+# ALL THREE are always scanned, and the SIBLING wins a name collision (`engine_seen` keeps
+# the first sight of a name). So a plugin directory cannot shadow a built-in engine, and that
+# is the point rather than a limitation: $UT_ENGINE_DIR is reachable by anything that can
+# write one directory, and letting it replace `yt-resolve` would make "which yt am I running"
+# a question the user has no way to ask.
+#
+# Scanning PATH only when the checkout came up empty was the cheaper spelling — one glob in
+# the ordinary case — and it quietly made the installed-engine case unreachable: any checkout
+# carrying its own engines, which is every real one, could never see a fourth pair on PATH,
+# while `ut-play --engine` could. The two faces disagreed about what sources exist. The glob
+# it saves is not worth that: a full sweep of a 44-entry PATH measures 9ms on the 3.2 floor,
+# once, at startup.
+#
+# The default chains through XDG_DATA_HOME, so it is inline here rather than in the shipped
+# `config` (a flat KEY=value file cannot express a chain — UT_STATE_DIR is the precedent),
+# and it is refused from both config files: it names programs this UI RUNS, which is the one
+# thing the config reader's prefix rule exists to keep a file away from (ut_read_config).
 ENGINES=()
 engine_seen() {
     local e
@@ -374,7 +388,9 @@ scan_engines() {
     done
     return 0
 }
+UT_ENGINE_DIR="${UT_ENGINE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uting/engines}"
 scan_engines "$SCRIPT_DIR"
+scan_engines "$UT_ENGINE_DIR"
 _saved_ifs=$IFS
 IFS=:
 for _pdir in $PATH; do
@@ -383,7 +399,7 @@ done
 IFS=$_saved_ifs
 unset _saved_ifs _pdir
 if ((${#ENGINES[@]} == 0)); then
-    echo "uting: no engine found — need a <name>-search and <name>-resolve pair beside this file or on PATH" >&2
+    echo "uting: no engine found — need a <name>-search and <name>-resolve pair beside this file, in $UT_ENGINE_DIR, or on PATH" >&2
     exit 1
 fi
 
@@ -393,6 +409,10 @@ fi
 engine_search_bin() {
     if [[ -x "$SCRIPT_DIR/$1-search" ]]; then
         printf '%s\n' "$SCRIPT_DIR/$1-search"
+        return 0
+    fi
+    if [[ -x "$UT_ENGINE_DIR/$1-search" ]]; then
+        printf '%s\n' "$UT_ENGINE_DIR/$1-search"
         return 0
     fi
     command -v "$1-search" 2>/dev/null
@@ -412,6 +432,10 @@ engine_search_bin() {
 engine_resolve_bin() {
     if [[ -x "$SCRIPT_DIR/$1-resolve" ]]; then
         printf '%s\n' "$SCRIPT_DIR/$1-resolve"
+        return 0
+    fi
+    if [[ -x "$UT_ENGINE_DIR/$1-resolve" ]]; then
+        printf '%s\n' "$UT_ENGINE_DIR/$1-resolve"
         return 0
     fi
     command -v "$1-resolve" 2>/dev/null
@@ -619,6 +643,12 @@ Environment:
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
+  UT_ENGINE_DIR    Extra directory scanned for <name>-search + <name>-resolve pairs, after
+                   this file's own directory and before PATH; a pair there is a source the
+                   e key rotates through. A name already installed beside this file wins,
+                   so a plugin cannot replace a built-in engine. ENVIRONMENT ONLY — it
+                   names programs this UI runs, so neither config file can set it.
+                   Default: ${XDG_DATA_HOME:-~/.local/share}/uting/engines
   YT_ASCII=1       Use ASCII glyphs (♫ ● ○ ❯ · ▶ ❚❚ • … → — arrows → ASCII) for
                    terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
@@ -922,7 +952,7 @@ case "$SORT_FIELD" in relevance | view_count | duration) ;; *) die "-s must be o
 # "which sources do I have" is not written down anywhere else.
 engine_seen "$ENGINE" || die "--engine must be one of: ${ENGINES[*]}"
 ENGINE_SEARCH=$(engine_search_bin "$ENGINE") || ENGINE_SEARCH=""
-[[ -n "$ENGINE_SEARCH" ]] || die "engine '$ENGINE' has no '$ENGINE-search' beside this file or on PATH"
+[[ -n "$ENGINE_SEARCH" ]] || die "engine '$ENGINE' has no '$ENGINE-search' beside this file, in $UT_ENGINE_DIR, or on PATH"
 refresh_engine_caps
 # Playback is DETACHED here (ut-play -d), and a detached player has no terminal, so the
 # terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate

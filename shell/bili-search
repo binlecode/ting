@@ -68,7 +68,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"

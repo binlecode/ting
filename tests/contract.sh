@@ -1003,34 +1003,72 @@ report "…search args forwarded"     tty "$(uting_gate shell/uting --engine bil
 report "…menu args, and -f is legal" tty "$(uting_gate shell/uting -f video --volume 60 "lofi")"
 report "…chrome args"               tty "$(uting_gate YT_LANG=zh shell/uting --theme nord "lofi")"
 
-# ── AN ENGINE THAT IS ONLY ON PATH, while the checkout carries its own. Until now `uting`
-# scanned PATH only when the sibling glob came up empty, which made this — the one situation
-# an installed third-party engine can actually be in — unreachable: the TUI offered three
-# sources while `ut-play --engine` happily played a fourth. Two faces, one word "engine",
-# different answers. ARCH-cli-contract.md「加一个引擎 —— 清单」's last item states the claim
-# ("`uting` 靠在 PATH 上和自己旁边扫描 … 这一对来发现它") and nothing had ever run it.
+# ── WHERE A THIRD-PARTY ENGINE MAY LIVE: three places, one order, two files that have to
+# agree about them. `uting` scanned PATH only when the sibling glob came up empty, which made
+# the one situation an installed third-party engine can actually be in — a checkout carrying
+# yt/bili/ne, the new pair somewhere else — unreachable: the TUI offered three sources while
+# `ut-play --engine` happily played a fourth. Two faces, one word "engine", different answers.
+# ARCH-cli-contract.md「加一个引擎 —— 清单」's last item states the claim and nothing had run it.
 #
-# What goes on PATH is the REAL engine, reached under a second name: the variables under test
-# are its LOCATION and the name it answers to, and nothing runs in PLACE of an engine
-# (CLAUDE.md's testing rules). A fourth name is what the condition requires — a symlink
+# What is put in each place is the REAL yt engine reached under a second name: the variables
+# under test are its LOCATION and the name it answers to, and nothing runs in PLACE of an
+# engine (CLAUDE.md's testing rules). A fourth name is what the condition needs — a symlink
 # called `yt-*` would be deduplicated against the sibling copy and prove nothing.
 #
-# Both gates exit 1, so a code cannot separate "found, then refused for want of a terminal"
-# from "no such engine". The message can, which is the whole reason uting_gate exists.
+# The TUI's registry is READ OUT of the --engine gate: a name it does not have comes back as
+# "must be one of: <the registry, in discovery order>". That message is the only place the
+# list is observable, and the ORDER in it is what pins precedence.
+engine_list() { # <env assignments and argv…> — the registry, in discovery order
+    env "$@" shell/uting --engine zzz-none q </dev/null 2>&1 | sed -n 's/.*must be one of: //p'
+}
+PLUG=$UT_TEST_TMP/plugin-engines
 PATH_ENG=$UT_TEST_TMP/path-engines
-mkdir -p "$PATH_ENG"
-ln -sf "$PWD/shell/yt-search" "$PATH_ENG/zz-search"
-ln -sf "$PWD/shell/yt-resolve" "$PATH_ENG/zz-resolve"
-report "an engine only on PATH is found" tty \
-    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine zz q)"
-# The two halves that make the line above mean something. A pair is a PAIR: one half on PATH
-# is a source that would list results nothing can resolve, so it is not an engine and the
-# call falls to the flag gate — the same answer a name that is simply absent gets.
-ln -sf "$PWD/shell/yt-search" "$PATH_ENG/lone-search"
-report "…a lone search half is not one"  mode \
-    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine lone q)"
-report "…and an absent name still is not" mode \
-    "$(uting_gate PATH="$PATH_ENG:$PATH" shell/uting --engine nope q)"
+XDG_HOME=$UT_TEST_TMP/xdg-data
+mkdir -p "$PLUG" "$PATH_ENG" "$XDG_HOME/uting/engines"
+for _d in "$PLUG" "$PATH_ENG" "$XDG_HOME/uting/engines"; do
+    ln -sf "$PWD/shell/yt-search" "$_d/zz-search"
+    ln -sf "$PWD/shell/yt-resolve" "$_d/zz-resolve"
+done
+SIBLINGS=$(engine_list shell/uting)
+report "the checkout's own pairs are the registry" "bili ne yt" "$SIBLINGS"
+report "…a pair on PATH joins it"        "$SIBLINGS zz" "$(engine_list PATH="$PATH_ENG:$PATH" shell/uting)"
+report "…a pair in UT_ENGINE_DIR too"    "$SIBLINGS zz" "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+# The DEFAULT of that knob, driven rather than read: nothing sets UT_ENGINE_DIR here, so the
+# pair is only found if the inline default really chains through XDG_DATA_HOME. `uting` and
+# `ut-play` each declare that default in their own file (ten peers, no shared library), and
+# this pair of checks is what stops the two copies drifting apart.
+report "…and its default chains through XDG_DATA_HOME" "$SIBLINGS zz" \
+    "$(engine_list XDG_DATA_HOME="$XDG_HOME" shell/uting)"
+# PRECEDENCE, which only the ORDER can state: the same name in the plugin dir does not appear
+# twice and does not move to the front, so the built-in is what runs. A plugin directory is
+# reachable by anything that can write one directory; letting it replace `yt-resolve` would
+# make "which yt am I running" unanswerable.
+ln -sf "$PWD/shell/yt-search" "$PLUG/yt-search"
+ln -sf "$PWD/shell/yt-resolve" "$PLUG/yt-resolve"
+report "a plugin cannot shadow a built-in" "$SIBLINGS zz" \
+    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+# A pair is a PAIR, in the plugin dir as everywhere else: one half is a source that would list
+# results nothing can resolve, so the name never enters the registry.
+ln -sf "$PWD/shell/yt-search" "$PLUG/lone-search"
+report "…and a lone search half is not one" "$SIBLINGS zz" \
+    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+# UT_ENGINE_DIR IS REFUSED FROM A CONFIG FILE, and this is the check that says why the name
+# is on that list at all: it points at a directory of EXECUTABLES the suite runs, so a file
+# that could set it would be PATH under another spelling — exactly what「配置面」's prefix rule
+# buys, and what the YT_IPC_SOCK refusal further down protects from the other direction.
+ENGCFG=$UT_TEST_TMP/engine-dir.config
+printf 'UT_ENGINE_DIR=%s\n' "$PLUG" > "$ENGCFG"
+report "a config file cannot point at engines" "$SIBLINGS" \
+    "$(engine_list UT_CONFIG="$ENGCFG" shell/uting)"
+# THE PLAYER'S HALF of the same three places. It has no registry to print, so the claim is the
+# message: a resolver that was FOUND gets as far as the host gate, one that was not names the
+# three places it looked. Both exit 1.
+report "the player finds a plugin engine"  yes \
+    "$(viz_reaches_engine zz UT_ENGINE_DIR="$PLUG" shell/ut-play --engine zz -- "$VIZ_URL")"
+report "…by the same XDG default"          yes \
+    "$(viz_reaches_engine zz XDG_DATA_HOME="$XDG_HOME" shell/ut-play --engine zz -- "$VIZ_URL")"
+report "…and a config file cannot aim it"  no \
+    "$(viz_reaches_engine zz UT_CONFIG="$ENGCFG" shell/ut-play --engine zz -- "$VIZ_URL")"
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled

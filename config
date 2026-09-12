@@ -22,6 +22,9 @@
 #   those characters rather than running anything.
 #
 #   Only UT_ / YT_ / BILI_ / NE_ keys are read, so no config can reach PATH, TMPDIR or LD_PRELOAD.
+#   UT_ENGINE_DIR wears an allowed prefix and would be the exception — it names a directory of
+#   programs the suite RUNS — so it is refused from both config files and read from the
+#   environment only. See the block at the end of this header.
 #   NO_COLOR is honoured by the suite but is an environment convention, not a uting knob.
 #
 #   Grouped by SCOPE, not by prefix. The YT_ prefix is historical and does NOT mean
@@ -49,6 +52,19 @@
 #                       into your own file (YT_LANG, via the l key, is the other) —
 #                       pressing → or ← is what first puts it there.
 #   Set either in your own config or the environment to override.
+#
+#   NOT HERE AND NOT IN YOUR CONFIG EITHER: UT_ENGINE_DIR — the environment is the only place
+#   it can be set. Two reasons, and the second is the binding one:
+#     UT_ENGINE_DIR     ${XDG_DATA_HOME:-$HOME/.local/share}/uting/engines — an extra
+#                       directory scanned for <name>-search + <name>-resolve pairs, after the
+#                       suite's own directory and before PATH, so a third-party engine has
+#                       somewhere to live that is neither the source tree nor all of PATH.
+#                       Its default chains through XDG_DATA_HOME like UT_STATE_DIR above, and
+#                       it stays inline in uting and ut-play. But it also names EXECUTABLES
+#                       this suite runs: a config file that could set it would be PATH under
+#                       another spelling, and the promise four lines into this header would
+#                       stop being true. A name already installed beside the suite wins, so
+#                       what is put there can add a source but never replace one.
 
 # ── scope: suite ────────────────────────────────────────────────────────────────────────
 UT_HISTORY=1                        # 0 = a detached player writes no listening row

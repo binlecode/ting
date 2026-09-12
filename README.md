@@ -156,7 +156,9 @@ dependency it refuses.
 
 Both files are **read as data, never sourced**, so `UT_X=$(cmd)` stores those characters
 instead of running anything, and only `UT_`/`YT_`/`BILI_`/`NE_` keys are read — no config can
-reach `PATH`, `TMPDIR` or `LD_PRELOAD`.
+reach `PATH`, `TMPDIR` or `LD_PRELOAD`. `UT_ENGINE_DIR` wears an allowed prefix and would be
+the hole in that: it names a directory of programs the suite runs, so it is refused from both
+files and read from the environment only.
 
 The shipped `config` is **never written by any command**. Your own file is: `uting` writes
 ten preference keys back to it as you change them at runtime — the engine, sort field, play
@@ -171,6 +173,14 @@ absent from the shipped defaults because their unset state *is* an auto-detectio
 value would defeat: `YT_LANG` (zh under a zh\* locale), `YT_ASCII` (on under a non-UTF-8
 locale) and `UT_STATE_DIR` (its default chains through `XDG_STATE_HOME`). Set those in your
 own config or the environment.
+
+**A source that does not ship with the suite** is still just a `<name>-search` +
+`<name>-resolve` pair. Three places are scanned for one, in this order: next to the suite's
+own scripts, then `$UT_ENGINE_DIR` (default
+`${XDG_DATA_HOME:-~/.local/share}/uting/engines`), then `PATH`. A name already installed
+beside the suite wins, so a pair you drop in that directory can add a source but never
+replace a built-in one. `docs/ARCH-cli-contract.md`「加一个引擎 —— 清单」 is what such a pair
+has to satisfy.
 
 The shipped `config` enumerates every key, with its default and a comment saying what it
 does — read that file to see them all. `docs/ARCH-cli-contract.md`「配置面」 explains the

@@ -71,12 +71,17 @@ fi
 # those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket. So are
 # the three names in there that are not knobs at all: the two config paths (a file cannot
 # move itself) and UT_VERSION, which is the VERSION line read in above — what `--version`
-# answers is not a setting. Seven names, and the refusal is what makes the prefix safe to
-# wear: a constant is only reachable from a config file because it is spelled UT_.
+# answers is not a setting. And so is UT_ENGINE_DIR, which IS a knob — the one refused for
+# what its VALUE is rather than for what the name means. It points at a directory of
+# EXECUTABLES this suite runs, so a config file that could set it would be PATH under
+# another spelling, and the sentence three lines up would stop being true. Environment
+# only, like the two config paths. Eight names, and the refusal is what makes the prefix
+# safe to wear: a constant is only reachable from a config file because it is spelled UT_.
 #
-# Three defaults stay inline and are named in `config`'s own header: UT_STATE_DIR (its
-# default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
-# IS the locale probe) and YT_ASCII (it falls back through the legacy alias YT_TUI_ASCII).
+# Four defaults stay inline and are named in `config`'s own header: UT_STATE_DIR and
+# UT_ENGINE_DIR (both chain through an XDG variable, which a flat file cannot express),
+# YT_LANG (unset IS the locale probe) and YT_ASCII (it falls back through the legacy alias
+# YT_TUI_ASCII).
 #
 # The key list is ARCH-cli-contract.md「配置面」. This block is duplicated VERBATIM in all ten
 # entry points: ten independent executables share no library, and a byte-for-byte copy is
@@ -98,7 +103,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
@@ -291,9 +296,9 @@ Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
 
 Dependencies: mpv (playback) + jq; a unix-socket netcat — BSD/OpenBSD 'nc -U' or nmap's
               'ncat' — for every socket verb: --set-volume, --pause, --resume,
-              --seek, --seek-to (the queue verbs need only jq); an <engine>-resolve on PATH or next
-              to this file. yt-dlp / curl / cookies are the ENGINE's business, not the
-              player's — see 'yt-resolve -h' for those.
+              --seek, --seek-to (the queue verbs need only jq); an <engine>-resolve next to
+              this file, in \$UT_ENGINE_DIR, or on PATH. yt-dlp / curl / cookies are the
+              ENGINE's business, not the player's — see 'yt-resolve -h' for those.
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
@@ -301,6 +306,10 @@ Environment:
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: $UT_DEFAULT_ENGINE)
+  UT_ENGINE_DIR        Extra directory searched for <name>-resolve, after this file's own
+                       directory and before PATH. ENVIRONMENT ONLY — it names programs the
+                       player runs, so neither config file can set it.
+                       (default: \${XDG_DATA_HOME:-~/.local/share}/uting/engines)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   UT_VIZ_STYLE         -f viz picture: bars (log-scaled spectrum) | wave (waveform)
                        (default: $UT_VIZ_STYLE)
@@ -466,6 +475,17 @@ validate_loop_mode() {
     die "$flag must be off or one (got '$val')"
 }
 
+# WHERE A THIRD-PARTY ENGINE IS ALLOWED TO LIVE. Sibling, then the user's plugin dir, then
+# PATH — the same three places, in the same order, that `uting` builds its registry from, and
+# the two files have to agree or the TUI offers a source the player cannot open. The default
+# chains through XDG_DATA_HOME, which is why it is inline here and not in the shipped
+# `config`: a flat KEY=value file cannot express a chain (UT_STATE_DIR is the precedent).
+# It is refused from BOTH config files — see the ut_read_config block above for why.
+#
+# The suite writes nothing here and does not create it; a checkout with no plugin dir loses
+# one failed glob per lookup and nothing else.
+UT_ENGINE_DIR="${UT_ENGINE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uting/engines}"
+
 engine_resolve_bin() {
     if [[ -n "$ENGINE_RESOLVE" ]]; then
         return 0
@@ -476,10 +496,12 @@ engine_resolve_bin() {
     fi
     if [[ -x "$SCRIPT_DIR/$ENGINE-resolve" ]]; then
         ENGINE_RESOLVE="$SCRIPT_DIR/$ENGINE-resolve"
+    elif [[ -x "$UT_ENGINE_DIR/$ENGINE-resolve" ]]; then
+        ENGINE_RESOLVE="$UT_ENGINE_DIR/$ENGINE-resolve"
     elif command -v "$ENGINE-resolve" >/dev/null 2>&1; then
         ENGINE_RESOLVE=$(command -v "$ENGINE-resolve")
     else
-        die "unknown engine '$ENGINE': no '$ENGINE-resolve' next to ut-play or on PATH"
+        die "unknown engine '$ENGINE': no '$ENGINE-resolve' next to ut-play, in $UT_ENGINE_DIR, or on PATH"
     fi
     return 0
 }

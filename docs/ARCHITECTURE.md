@@ -334,8 +334,10 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 `ARCH-player.md`「队列」）。说 "tui" 而不说 "ui"：uting 恰恰是一个全屏的*终端* UI。
 
 **引擎名就是命令前缀（「站点知识的边界」）。** `--engine yt` 靠字符串拼接找到 `yt-resolve`
-（`ut-play` 的 `engine_resolve_bin`：先试 `$SCRIPT_DIR/$ENGINE-resolve`，再试 PATH，
-都没有就退 1 并把引擎名说出来）。这就是全部的"注册表"。加第三个源等于加一对新文件，
+（`ut-play` 的 `engine_resolve_bin`：先试 `$SCRIPT_DIR/$ENGINE-resolve`，再试
+`$UT_ENGINE_DIR`，再试 PATH，都没有就退 1 并把三个地方都说出来）。这就是全部的"注册表" ——
+**`uting` 走的是同一个顺序**，否则两个面会对"有哪些源"给出不同答案
+（三处的顺序与理由：`ARCH-cli-contract.md`「加一个引擎 —— 清单」）。加第三个源等于加一对新文件，
 播放器与 TUI **一个字都不用改** —— 这正是 Bilibili 引擎被造出来要检验的那条主张，
 而它成立了：步骤 C 两个文件都没动。
 
