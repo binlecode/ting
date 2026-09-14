@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert uting's layout invariants against a captured pane.
+"""Assert ting's layout invariants against a captured pane.
 
 Several rigs merged into one, because they all read the same capture and all failed the same
 way when kept apart — you fix a renderer, remember to re-run two of the three, and the third
@@ -85,21 +85,27 @@ def cells(s, ambig_wide=False):
 # The ordinal being optional costs this pattern its own discriminator — "  " then anything
 # also describes the details block's metadata line and the hint block. So a row is this
 # prefix AND a duration rail at the end of the line; neither half identifies one alone.
-ROW = re.compile(r"^(▶ |> |  )( *\d+\. )?(?=\S)")
+# `▎ ` is the cursor as of the accent-bar refresh (137e76b); `> ` is what ASCII mode
+# narrows it to, and `▶ ` is the shape it had before that commit — kept so an older
+# captured frame still parses. GL_CURSOR in shell/ting is the authority.
+ROW = re.compile(r"^(▎ |▶ |> |  )( *\d+\. )?(?=\S)")
 # The rail, and after it the scrollbar cell that now closes every row. The gutter is part of
 # the match rather than stripped beforehand so that one regex still identifies a row — and
 # its group is what lets the rail's own end column be measured without it.
 RAIL = re.compile(r"(LIVE|--:--|\d+:\d\d(?::\d\d)?)( [█│#|])?$")
 CSI = re.compile(r"\x1b\[([0-9;]*)([@-~])")
-# every spelling of the wordmark: en, zh, and the maths-bold opt-in of each
-BRAND = re.compile(r"uting|你听|\U0001d5e8|\u4f60")
+# Every spelling of the wordmark. en is `ting`; zh is the seal 【 听 】, which ASCII mode
+# narrows to `[ 听 ]` — both carry 听, so the bare glyph covers the pair. YT_BRAND=1 swaps the
+# en side for maths-bold 𝗧 𝗜 𝗡 𝗚, whose first letter is the anchor; there is no zh maths-bold
+# form to match, because YT_BRAND has no zh side (docs/ARCH-tui.md).
+BRAND = re.compile(r"ting|听|\U0001d5e7")
 
 
 def reverse_span(line, ambig_wide=False):
     """First and last CELL (1-based, inclusive) carrying SGR 7 on this line, or (None, None).
 
     tmux -e re-emits the attributes it recorded per cell, so this reads the terminal's own
-    idea of the row rather than the escape sequence uting wrote — which is the point: the
+    idea of the row rather than the escape sequence ting wrote — which is the point: the
     stretch between the title and the rail is never written by the renderer at all, it is
     filled by a back-colour erase, and only the grid knows whether that worked.
     """
@@ -166,9 +172,10 @@ def main(argv):
     body = "\n".join(lines)
 
     if view == "list":
-        # The wordmark is language-dependent (YT_LANG=zh draws 你听) and YT_BRAND=1 draws it
-        # in mathematical sans-serif bold, so this asks for ANY of the spellings rather than
-        # the English one — a frame captured on a zh config is not a scrolled header.
+        # The wordmark is language-dependent (YT_LANG=zh draws the seal 【 听 】) and
+        # YT_BRAND=1 draws the en side in mathematical sans-serif bold, so this asks for ANY
+        # of the spellings rather than the English one — a frame captured on a zh config is
+        # not a scrolled header.
         if not lines or not BRAND.search(lines[0]):
             fails.append("header not on line 1 (scrolled off?): %r" % (lines[0][:60] if lines else ""))
         # Detect the hint block by its LAST item (q quit), not by a label: the block carried a

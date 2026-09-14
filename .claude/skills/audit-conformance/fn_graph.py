@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Function graph for the uting shell suite — a manual audit aid.
+"""Function graph for the ting shell suite — a manual audit aid.
 
 NOT a gate and NOT a tests/ member: it produces candidates for a human/agent to confirm
 by reading. Structural detectors are forbidden as tests in this repo (CLAUDE.md), and this
@@ -22,7 +22,7 @@ import sys
 import pathlib
 
 # Globbed, not listed — the same rule .githooks/pre-push follows. A hardcoded list here
-# made ut-playlist and ut-history invisible to R10/R4 for two whole features.
+# made t-playlist and t-history invisible to R10/R4 for two whole features.
 FILES = ([pathlib.Path(p) for p in sys.argv[1:]] or
          sorted(p for p in pathlib.Path("shell").iterdir() if p.is_file()))
 DEF = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{')

@@ -1,6 +1,6 @@
 ---
 name: audit-conformance
-description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the ten scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, stale prose defending retired mechanisms, contract drift in the JSON envelope / exit codes, and doc drift against docs/ARCHITECTURE.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
+description: Periodic whole-suite audit of ting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the ten scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, stale prose defending retired mechanisms, contract drift in the JSON envelope / exit codes, and doc drift against docs/ARCHITECTURE.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
 argument-hint: "[file-or-surface scope, default all of shell/]"
 disable-model-invocation: true
 ---
@@ -14,9 +14,9 @@ slow accretion. This skill is the other scope: judgment-scan the whole suite aga
 **defined in this file**, inventory every violation with `file:line` + the rule cited, and
 write a scoped cleanup report.
 
-**Why this exists here specifically.** uting has no linter, no type checker, no CI, and ten
+**Why this exists here specifically.** ting has no linter, no type checker, no CI, and ten
 standalone bash scripts — a player, a TUI, three engine pairs, and two durable stores
-(`ut-playlist`, `ut-history`) — written to a frozen bash 3.2 floor. Nothing but judgment
+(`t-playlist`, `t-history`) — written to a frozen bash 3.2 floor. Nothing but judgment
 defends its invariants, and three of them erode silently: logic creeping *up* into the TUI, a
 bash-4 idiom slipping in (it runs fine on the author's shell and aborts under `/bin/bash`), and
 `docs/ARCHITECTURE.md` drifting away from the code it claims to describe. Those are the accretion
@@ -53,16 +53,16 @@ mandate — and both are restated inline where they matter.
 |---|------|---------------|------------------|
 | R1 | **One-sided variable / flag** | A variable, flag, or env knob with only a write site or only a read site. A parsed flag that nothing consumes, an exported `YT_*` nothing reads, a state var set and never tested. | grep the bare name **and** the `${…}` form **and** `"$name"`; one side missing = candidate. Beware indirection: a var read only inside a `jq --arg`, a heredoc, or an `eval`-shaped string won't show in a bare-word grep — that is this rule's #1 false positive. #2 is arithmetic context: `((VAR == 0))` reads VAR with no `$`, so a `$`-anchored read-scan calls it write-only. |
 | R2 | **Redundant same-lifecycle state** | Two variables always assigned together and cleared together (e.g. a `CURRENT_PLAY_*` pair, a "have we drawn" flag beside the value it guards) — one concept wearing two names. | read the mutation sites; look for co-set / co-cleared pairs. |
-| R3 | **Logic in the wrong surface (layer back-edge)** | Three hard layering rules now. (a) **`uting` contains ZERO site logic and ZERO playback logic** — it shapes argv for `yt-search` / `ut-play` and delegates; a `yt-dlp` or `mpv` invocation or an IPC command construction there is a back-edge (reading the mpv socket through the *documented* envelope field is not). (b) **player and engine do not trade knowledge**: a `yt-dlp` call, a cookie decision, a format string, or a URL pattern in `shell/ut-play` is a back-edge, and so is an `mpv` call or any player-state / `players/` write in ANY `*-search` / `*-resolve`. (c) **the stores know no site and no playback**: `ut-playlist` / `ut-history` hold `{engine, url, …}` records and jq — a yt-dlp call, an mpv call, a host pattern, or a `players/` touch in either is a back-edge. | `grep -n 'yt-dlp\|cookies-from-browser' shell/ut-play shell/uting`, `grep -n 'mpv \|--input-ipc-server\|players/' shell/*-search shell/*-resolve`, and `grep -n 'yt-dlp\|mpv \|--input-ipc-server\|players/' shell/ut-playlist shell/ut-history` must all be empty apart from dependency-check strings and comments — read each hit. |
-| R4 | **Duplication (DRY)** | Three carve-outs first, all deliberate: (a) each script must run standalone, so `die` / `print_usage` / `require_cmd` living in more than one file is **not** a finding; (b) the engine halves each holding their own cookie block and jq prelude is **not** a finding either — nor is one engine pair duplicating another's — they are separate executables and the alternative is a shared library the split exists to avoid (a duplicate spanning *player* and *engine*, however, IS a finding: that is a boundary leak); (c) the player's IPC property reader and `uting`'s are intentionally separate and must not call each other — the TUI's is fire-and-forget, the player's confirms delivery and exits 4 (`docs/ARCH-player.md`「运行时 IPC」). Otherwise: the same logic in ≥2 homes: a second duration formatter beside the engine's `JQ_PRELUDE` `fmt_dur`, a re-implemented width/cell measurement, a copied jq filter, the same validation in two places. The governing principle is that correctness is added *down* — in the **player** if it is about playback, in the **engine** if it is about a site — so every surface inherits it; a fix in `uting` that `ut-play` could have made is a bug in the wrong file. **And the carve-outs cut both ways: where permitted near-twins legitimately DIFFER, the difference must be justified in the code** — five call sites of one lock helper where four say `\|\| true` and one is bare, with no comment saying which is intended, is indistinguishable from a drift bug, and that IS a finding even though the duplication itself is sanctioned. | the function graph (Pass 0) for same-named or near-identical bodies across files; grep for duplicated jq programs and `printf` format strings. |
+| R3 | **Logic in the wrong surface (layer back-edge)** | Three hard layering rules now. (a) **`ting` contains ZERO site logic and ZERO playback logic** — it shapes argv for `yt-search` / `t-play` and delegates; a `yt-dlp` or `mpv` invocation or an IPC command construction there is a back-edge (reading the mpv socket through the *documented* envelope field is not). (b) **player and engine do not trade knowledge**: a `yt-dlp` call, a cookie decision, a format string, or a URL pattern in `shell/t-play` is a back-edge, and so is an `mpv` call or any player-state / `players/` write in ANY `*-search` / `*-resolve`. (c) **the stores know no site and no playback**: `t-playlist` / `t-history` hold `{engine, url, …}` records and jq — a yt-dlp call, an mpv call, a host pattern, or a `players/` touch in either is a back-edge. | `grep -n 'yt-dlp\|cookies-from-browser' shell/t-play shell/ting`, `grep -n 'mpv \|--input-ipc-server\|players/' shell/*-search shell/*-resolve`, and `grep -n 'yt-dlp\|mpv \|--input-ipc-server\|players/' shell/t-playlist shell/t-history` must all be empty apart from dependency-check strings and comments — read each hit. |
+| R4 | **Duplication (DRY)** | Three carve-outs first, all deliberate: (a) each script must run standalone, so `die` / `print_usage` / `require_cmd` living in more than one file is **not** a finding; (b) the engine halves each holding their own cookie block and jq prelude is **not** a finding either — nor is one engine pair duplicating another's — they are separate executables and the alternative is a shared library the split exists to avoid (a duplicate spanning *player* and *engine*, however, IS a finding: that is a boundary leak); (c) the player's IPC property reader and `ting`'s are intentionally separate and must not call each other — the TUI's is fire-and-forget, the player's confirms delivery and exits 4 (`docs/ARCH-player.md`「运行时 IPC」). Otherwise: the same logic in ≥2 homes: a second duration formatter beside the engine's `JQ_PRELUDE` `fmt_dur`, a re-implemented width/cell measurement, a copied jq filter, the same validation in two places. The governing principle is that correctness is added *down* — in the **player** if it is about playback, in the **engine** if it is about a site — so every surface inherits it; a fix in `ting` that `t-play` could have made is a bug in the wrong file. **And the carve-outs cut both ways: where permitted near-twins legitimately DIFFER, the difference must be justified in the code** — five call sites of one lock helper where four say `\|\| true` and one is bare, with no comment saying which is intended, is indistinguishable from a drift bug, and that IS a finding even though the duplication itself is sanctioned. | the function graph (Pass 0) for same-named or near-identical bodies across files; grep for duplicated jq programs and `printf` format strings. |
 | R5 | **bash 3.2 violation** | `declare -A`, `mapfile`/`readarray`, `${var,,}`/`${var^^}`, `${arr[-1]}`, `&>>`, `\|&`, `${!prefix@}`; an unguarded `"${arr[@]}"` on a possibly-empty array under `set -u`; a bare `((n += w))` **as a statement** under `set -e`; treating `read -rsn1` as one character rather than one byte; `LC_ALL=C [[ … ]]` (not valid bash at all). | the forbidden-idiom greps below, then **read** each array expansion and each `((…))` to classify statement vs test. The pre-commit hook blocks these on *added* lines; this rule sweeps what predates the hook. |
 | R6 | **Swallowed error** | `\|\| true`, `2>/dev/null`, or an empty branch on a path where the user must see the failure — a real fault rendered as an empty list, a `0`, or a blank field. A *deliberate* best-effort degrade is fine **if** it degrades visibly (`--:--`, `n/a`, `LIVE`) and never as a fake value. | `grep -n '|| true\|2>/dev/null' shell/*` then read every hit and ask what the user sees when it fires. The sweep returns ~150 hits and nearly all are three sanctioned shapes — `rm -f`/`rmdir` cleanup, `chmod` best-effort hardening, `kill` in teardown — so triage those on sight and spend the reading on the residue: a swallowed error on a **jq parse**, a **state write**, or a **lock** is where this rule's real findings live. |
 | R7 | **Optimistic state** | State written before the operation it asserts has committed: a player record or a "playing" flag persisted before mpv is confirmed launched, a lock recorded before it is held, `TTY_ECHO_OFF=1` set before `stty` succeeded. A failure mid-op then leaves a lying record. | read the order of the write vs the op, in `detach_play`, the lock helpers, and the echo/cursor traps. |
 | R8 | **Contract drift** | The frozen surface (`CLAUDE.md`): `-j` emits **one line**; the envelope's field names; the exit-code taxonomy (0 ok · 1 usage/validation · 2+ propagated tool failure · 4 didn't take effect); lifecycle semantics (idempotent stop, ambiguity → 4). Any deviation, in either direction — code that violates the doc, or a doc that overstates the code. | **run the command, never read the emitter** — Pass 0 step 5: `tests/contract.sh --offline` first, one-off invocations only for what it doesn't cover. Compare against `docs/ARCH-cli-contract.md`「数据契约」与「退出码」. |
-| R9 | **Naming drift** | Env knobs outside the prefix convention (suite-wide knobs are `UT_*` — plus the frozen legacy `YT_*` suite-wide names — and an engine's own tuning wears its own prefix, `YT_*` / `BILI_*`; a bare-name knob, or an internal variable wearing a knob prefix it does not honor, is drift); a unit-less numeric where the codebase suffixes (`_s`, `_ms`, `_pct`); a deprecated short alias (`yts`/`ytp`) used anywhere at all, or a retired TUI name (`ytt`, `yt-tui`, `ut-tui`) used where the canonical `uting` belongs (one name per command — `CLAUDE.md`); a new envelope field whose name doesn't match its siblings' style. | grep the env-read sites against ARCH-cli-contract.md「配置面」's documented list; scan user-visible strings for the wrong name form. |
+| R9 | **Naming drift** | Env knobs outside the prefix convention (suite-wide knobs are `UT_*` — plus the frozen legacy `YT_*` suite-wide names — and an engine's own tuning wears its own prefix, `YT_*` / `BILI_*`; a bare-name knob, or an internal variable wearing a knob prefix it does not honor, is drift); a unit-less numeric where the codebase suffixes (`_s`, `_ms`, `_pct`); a deprecated short alias (`yts`/`ytp`) used anywhere at all, or a retired TUI name (`ytt`, `yt-tui`, `ut-tui`) used where the canonical `ting` belongs (one name per command — `CLAUDE.md`); a new envelope field whose name doesn't match its siblings' style. | grep the env-read sites against ARCH-cli-contract.md「配置面」's documented list; scan user-visible strings for the wrong name form. |
 | R10 | **Dead code** | A function with zero call sites (across every script in `shell/`, the two suites, and tests/drive.sh); a `case` arm for a flag no usage text mentions and nothing emits; an env knob read nowhere; a code path reachable only through a removed flag. | the function graph (Pass 0): defs minus call sites. Confirm by reading — a function called only from a heredoc or a `trap` string looks dead to a grep. |
 | R11 | **Doc drift** | Each fact lives in exactly one place. The durable docs hold **why and how, never what** (`CLAUDE.md` hard rule 2) — the what is stated by the source, `usage()` and the suites — so drift now has two shapes: a doc contradicting the code (the code is right; fix the doc), and a doc **restating** what the source already states (a violation even when currently accurate — it will drift). Docs carry no section numbers: cite by filename + heading name, resolved by grep; a citation naming a heading that no longer exists is drift. A doc citing a **scratch** check by path (a `tmp/` path is a promise the checkout can't keep; the three committed `tests/` files — two suites and the TUI driver — are the stated exception and SHOULD be named), or a fact restated in the README *and* a doc so the two can disagree. | diff the env-knob read sites (**all prefixes** — `YT_*`, `UT_*`, and each engine's own, e.g. `BILI_*`) against ARCH-cli-contract.md「配置面」; diff observed exit codes against ARCH-cli-contract.md「退出码」; grep `docs/*.md` for `tmp/` paths (a `tests/` path is correct, not a finding); grep every `「…」` citation for a heading that still resolves. |
-| R12 | **Terminal-ownership violation (uting only)** | The TUI owns the whole screen: every drawn line goes through the measured-width layer (`char_w`/`wrap_print` and friends) so a CJK or math-bold glyph is counted in cells; echo and the cursor are owned for the session and restored from the **same** trap; a redraw is a whole frame, never a partial that leaves a stale row. A raw `printf`/`echo` of variable-width content, or a `stty` restore that isn't in the trap, is a violation. | grep `printf\|echo` in `shell/uting` for lines carrying interpolated title/channel text; read the trap. |
+| R12 | **Terminal-ownership violation (ting only)** | The TUI owns the whole screen: every drawn line goes through the measured-width layer (`char_w`/`wrap_print` and friends) so a CJK or math-bold glyph is counted in cells; echo and the cursor are owned for the session and restored from the **same** trap; a redraw is a whole frame, never a partial that leaves a stale row. A raw `printf`/`echo` of variable-width content, or a `stty` restore that isn't in the trap, is a violation. | grep `printf\|echo` in `shell/ting` for lines carrying interpolated title/channel text; read the trap. |
 | R13 | **Stale prose defending a retired mechanism** | Code comments or doc paragraphs whose subject no longer exists: a rationale for keeping a variable nothing reads, a "why we do X" for an X that was since removed, a workaround note for a path that is gone. R10 catches dead *functions* and R11 catches doc-vs-code *fact* drift; this rule catches the **residue that argues for its own retention** — it reads as deliberate, so every later audit re-litigates it (a variable kept "because a stale read is harmless" when there is no read left to be stale is the canonical case). The repo's decision-narrative comments ("Rejected: X because Y", measured trade-offs) are NOT this rule's target — those document a live decision; this rule fires only when the *subject* of the prose is gone. | for each R1/R10 candidate that turns out deliberate, read the prose defending it and ask whether its stated reason still has a referent; grep retired symbol names (from git log / the defect register) across `shell/` comments and `docs/`. |
 
 ### The suite's layer order (for R3 / R4)
@@ -70,18 +70,18 @@ mandate — and both are restated inline where they matter.
 ```
   primitives     yt-dlp · curl (engines only)   ·   mpv · nc (player only)   ·   jq (all)
         ↑                                            ↑
-  engine pairs   shell/yt-search · shell/yt-resolve     shell/ut-play      (player)
+  engine pairs   shell/yt-search · shell/yt-resolve     shell/t-play      (player)
                  shell/bili-search · shell/bili-resolve
                  shell/ne-search · shell/ne-resolve
                  (every site-specific fact)           (playback + lifecycle; asks an
         ↑                                              engine BY NAME, never a site;
         │                                              writes the listening row by
-        │                                              calling ut-history by name)
-        │        shell/ut-playlist · shell/ut-history  (durable stores: jq only —
+        │                                              calling t-history by name)
+        │        shell/t-playlist · shell/t-history  (durable stores: jq only —
         │                                              no site, no playback, no players/)
         └───────────────┬──────────────────────────────────┘
                         ↑
-  human surface  shell/uting                    (orchestration only; calls the verbs)
+  human surface  shell/ting                    (orchestration only; calls the verbs)
 ```
 
 Every arrow points **up**. A violation is any downward reach that skips a layer: the TUI
@@ -96,7 +96,7 @@ of ten files.
 ## Pass 0 — Scope, function graph, cheap sweeps
 
 1. **Resolve scope** from `$ARGUMENTS` (default all of `shell/`). State it in the summary. For
-   a narrow scope (say `shell/uting`) still build the whole graph, so cross-file edges into
+   a narrow scope (say `shell/ting`) still build the whole graph, so cross-file edges into
    the scope stay visible.
 
 2. **Pick up any open report:** `ls docs/PLAN-conformance-*.md`. If a recent one is
@@ -122,10 +122,10 @@ of ten files.
 
    ```bash
    # R3 back-edges: these MUST be empty apart from dep-check strings and comments
-   grep -n 'yt-dlp\|mpv \|--input-ipc-server' shell/uting
-   grep -n 'yt-dlp\|cookies-from-browser' shell/ut-play
+   grep -n 'yt-dlp\|mpv \|--input-ipc-server' shell/ting
+   grep -n 'yt-dlp\|cookies-from-browser' shell/t-play
    grep -n 'mpv \|--input-ipc-server\|players/' shell/*-search shell/*-resolve
-   grep -n 'yt-dlp\|mpv \|--input-ipc-server\|players/' shell/ut-playlist shell/ut-history
+   grep -n 'yt-dlp\|mpv \|--input-ipc-server\|players/' shell/t-playlist shell/t-history
 
    # R5 bash-4 leaks (the hook gates added lines; this catches what predates it)
    grep -nE 'declare -A|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*(,,|\^\^)|&>>|\|&|\[-1\]' shell/*
@@ -210,7 +210,7 @@ The orchestrator does this, so source-verification stays in one place.
 4. **Write `docs/PLAN-conformance-YYYY-MM-DD.md`** from the template below. Each task names
    the rule + `file:line`, states a **structural** fix (move down into the player or engine / collapse /
    delete / rename), and gives a `done_when` that is observable — *"`shell/yt-search -j` emits
-   one line and `grep yt-dlp shell/uting` is empty"* — **never** "a guard test passes".
+   one line and `grep yt-dlp shell/ting` is empty"* — **never** "a guard test passes".
 
 5. **If a deletion would orphan a helper**, chain it into the same task.
 
@@ -222,7 +222,7 @@ The orchestrator does this, so source-verification stays in one place.
 ## Report template
 
 ```markdown
-# PLAN — conformance audit (uting) · <date>
+# PLAN — conformance audit (ting) · <date>
 
 Scope: <path>   ·   Functions graphed: N   ·   Prior report folded: <file|none>
 
@@ -230,7 +230,7 @@ Scope: <path>   ·   Functions graphed: N   ·   Prior report folded: <file|none
 
 | rule | file:line | what | fix |
 |------|-----------|------|-----|
-| R3 | shell/uting:NNN | … | move … down into shell/ut-play |
+| R3 | shell/ting:NNN | … | move … down into shell/t-play |
 
 ## This round — <one coherent theme>
 

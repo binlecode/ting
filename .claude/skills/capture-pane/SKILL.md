@@ -1,6 +1,6 @@
 ---
 name: capture-pane
-description: Refresh the terminal frames in README.md / docs/ARCHITECTURE.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with this skill's assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
+description: Refresh the terminal frames in README.md / docs/ARCHITECTURE.md from REAL ting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with this skill's assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
 ---
 
 # capture-pane
@@ -37,14 +37,14 @@ visually, and put that width in the surrounding prose.
 `UT_CONFIG` is not optional here, and it points at a file of this capture's OWN. Two reasons,
 and the second is the one that bites: a frame taken against the developer's config is a
 picture of their theme and their chrome language rather than of the shipped defaults — and
-`uting` WRITES its preference keys back to whatever `UT_CONFIG` names (the live set is `PREF_KEYS` in `shell/uting` — grep it, don't trust a remembered count), so `t`, `l`, `v`,
+`ting` WRITES its preference keys back to whatever `UT_CONFIG` names (the live set is `PREF_KEYS` in `shell/ting` — grep it, don't trust a remembered count), so `t`, `l`, `v`,
 `o`, `e` and the count edges would edit that file as a side effect of photographing it.
 
 ```bash
 S=cap
-CAPCFG=$(mktemp "${TMPDIR:-/tmp}/uting-capture.XXXXXX")
+CAPCFG=$(mktemp "${TMPDIR:-/tmp}/ting-capture.XXXXXX")
 tmux kill-session -t $S 2>/dev/null
-tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en UT_CONFIG=$CAPCFG shell/uting 'lofi hip hop'"
+tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en UT_CONFIG=$CAPCFG shell/ting 'lofi hip hop'"
 timeout 30 bash -c "until tmux capture-pane -t $S -p | grep -q \"query='\"; do sleep 0.5; done"
 tmux capture-pane -t $S -p > tmp/raw-list.txt
 ```
@@ -67,7 +67,7 @@ rm -f "$CAPCFG"
 ```
 
 If the frame will show playback, kill the player the way `tests/drive.sh`'s EXIT trap does —
-`shell/ut-play --stop --all` — the player survives the session kill.
+`shell/t-play --stop --all` — the player survives the session kill.
 
 ## 3. Clean
 
