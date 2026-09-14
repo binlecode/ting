@@ -2804,8 +2804,8 @@ layout_cols() {
 # opt-in that ships off. YT_AMBIG_WIDE=1 restores the conservative 2 for the Ambiguous row
 # if that option is ON. It is an explicit knob and not a locale guess, because the locale
 # says nothing: Ghostty under a zh_CN locale still renders these one cell.
-# Note the bar already assumed this — render_prog_bar promises a string of exactly <total>
-# cells built from ━ and ─, which only holds at one cell each.
+# Note the bar already assumed this — render_prog_bar promises two runs of exactly <total>
+# cells between them, built from ━ and ─, which only holds at one cell each.
 # The table applies wherever these characters occur, titles included, not only to chrome.
 #
 # What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
@@ -3426,8 +3426,8 @@ fetch_play_times() {
 # as the rail thickening. HEAVY, not double: `═` was tried and it is
 # two strokes where every other glyph on this line is one — it stops reading as a thicker
 # rail and starts reading as a different rail, spliced onto the light one. The bar's whole
-# premise is that ONE line changes weight as it fills, and a weight change is the only thing
-# that can be read without a legend. The
+# premise is that ONE line changes weight as it fills, and a weight change is the thing on
+# it that can be read without a legend. The
 # ends had to go for that to work: a bracket is a boundary, and this line's whole job is to
 # be boundary-less and exactly rail-wide. They were also 2 cells of the caller's width spent
 # on punctuation, which now buy 2 more cells of resolution instead.
@@ -3436,14 +3436,30 @@ fetch_play_times() {
 # two runs for a while: a heavy LEFT half-line, which inks its own left half and leaves its
 # right half white — so the one seam that must not be a boundary was drawn with half a cell
 # of white in it, and the eye read the elapsed run as ENDING rather than as the same rail at
-# a different weight. The weight change IS the playhead; it is the only thing on this line
-# that can be read without a legend, and a glyph marking it a second time can only get in
-# its way. So the rail runs unbroken from `━` straight into `─`, and **the only white on this
+# a different weight. The weight change IS the playhead, and a GLYPH marking it a second
+# time can only get in its way — which is not the same as saying nothing else may say it:
+# the caller's dim on the remaining run says the same seam over the whole of both runs
+# rather than planting a second mark on the one cell where they meet. So the rail runs unbroken from `━` straight into `─`, and **the only white on this
 # line is a chapter boundary** — which is what makes a break legible as one.
-PROG_BAR=""
+#
+# TWO RUNS OUT, NOT ONE STRING, and that is the whole reason this returns a pair: the weight
+# change above is the playhead, and the caller prints the remaining run one step DIMMER of
+# the same accent so the same seam is said twice — once in stroke, once in intensity. Dim is
+# this file's existing word for "this accent, but not the steady thing" (play_state_marks'
+# LOADING rung), so it costs the palette nothing: still one hue on the line. It also degrades
+# in the right direction — with colours off both halves print bare and the bar is exactly
+# what it was, a weight change and nothing else.
+#
+# The split is at `filled` in BOTH paths, breaks included: a break substitutes for the cell
+# it lands on and never moves the seam, so cells 0..filled-1 are the played run whatever is
+# drawn in them. Colour is applied by the CALLER, not baked in here — these two strings stay
+# plain text, which is the same contract the width layer asks of everything it measures.
+PROG_PLAYED=""
+PROG_REST=""
 render_prog_bar() {
     local pct=${1%.*} total=${2:-44} mark_a=${3:-} mark_b=${4:-}
-    PROG_BAR=""
+    PROG_PLAYED=""
+    PROG_REST=""
     [[ "$pct" =~ ^[0-9]+$ ]] || return 0
     ((pct > 100)) && pct=100
     ((pct < 0)) && pct=0
@@ -3453,7 +3469,7 @@ render_prog_bar() {
     local filled=$((pct * width / 100))
     local empty=$((width - filled))       # track = filled + empty, and nothing between them
 
-    local f_str e_str fill='━' rest='─' brk=' '
+    local fill='━' rest='─' brk=' '
     if ((ASCII_GLYPHS)); then
         fill='='
         rest='-'
@@ -3461,9 +3477,8 @@ render_prog_bar() {
     # No interval asked for — every caller but the chapter list — and the bar stays what it
     # was: two runs butted together, no per-cell work on a line redrawn once a second.
     if [[ -z "$mark_a" ]]; then
-        repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
-        repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
-        PROG_BAR="${f_str}${e_str}"
+        repeat_glyph "$fill" "$filled"; PROG_PLAYED=$GLYPH_RUN
+        repeat_glyph "$rest" "$empty"; PROG_REST=$GLYPH_RUN
         return 0
     fi
     # THE INTERVAL. Two cells of the same track BROKEN OUT, so one line says where the
@@ -3497,15 +3512,17 @@ render_prog_bar() {
     # cells and that break read wider than the others. With no head glyph on the line, every
     # cell either side of a break is a full-width stroke, so every break is one cell by
     # construction and the special case is gone with the glyph that caused it.
-    local out="" col c
+    local col c
     for (( col = 0; col < width; col++ )); do
         if ((col == mark_a || col == mark_b)); then c=$brk
         elif ((col < filled)); then c=$fill
         else c=$rest
         fi
-        out="$out$c"
+        # The seam is the SAME cell index either way — a break replaces the glyph in its
+        # cell, it does not shift the playhead — so the run a cell belongs to is decided by
+        # the index alone and a break inherits the colour of the side it fell on.
+        if ((col < filled)); then PROG_PLAYED="$PROG_PLAYED$c"; else PROG_REST="$PROG_REST$c"; fi
     done
-    PROG_BAR="$out"
     return 0
 }
 
@@ -5252,13 +5269,23 @@ display_list_menu() {
         # would be the duplication this step exists to remove. So the reading is positional:
         # a span sitting entirely in the light run means "not there yet", entirely in the
         # heavy run means "played", straddling the weight change means "you are in it".
+        # The dim carries the same three readings — the light run is also the dim one — so
+        # the span reads at a glance on a wide rail where counting glyph weights does not.
         chapter_span "$selected"
         if [[ -n "$CHAP_START_SEC" && -n "$PT_DUR_SEC" ]] && ((PT_DUR_SEC > 0)); then
             bar_a=$(( CHAP_START_SEC * bar_w / PT_DUR_SEC ))
             bar_b=$(( CHAP_END_SEC * bar_w / PT_DUR_SEC - 1 ))
         fi
         render_prog_bar "${PT_PCT:-0}" "$bar_w" "$bar_a" "$bar_b"
-        printf '%s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
+        # The remaining run is the accent ONE STEP DOWN, not a second colour and not a
+        # colourless gray: same hue, dim on top. The played run carries the accent at full
+        # strength, so the seam the weight change already draws is drawn a second time in
+        # intensity, and on a rail this wide that is the difference between reading the
+        # position and counting the glyphs. C_DIM is empty with colours off and the whole
+        # line falls back to the weight change alone — the floor this bar always had.
+        printf '%s%s%s%s%s%s\033[K\n' \
+            "$C_CYAN" "$PROG_PLAYED" "$C_RESET" \
+            "$C_DIM$C_CYAN" "$PROG_REST" "$C_RESET"
         chrome_h=$((chrome_h + 1))
     fi
 
