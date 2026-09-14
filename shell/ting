@@ -327,10 +327,6 @@ if [[ -x "$SCRIPT_DIR/t-play" ]]; then
     PLAY_BIN="$SCRIPT_DIR/t-play"
 elif command -v t-play >/dev/null 2>&1; then
     PLAY_BIN=$(command -v t-play)
-elif [[ -x "$SCRIPT_DIR/ut-play" ]]; then
-    PLAY_BIN="$SCRIPT_DIR/ut-play"
-elif command -v ut-play >/dev/null 2>&1; then
-    PLAY_BIN=$(command -v ut-play)
 else
     echo "ting: cannot locate t-play" >&2
     exit 1
@@ -345,10 +341,6 @@ if [[ -x "$SCRIPT_DIR/t-playlist" ]]; then
     PLAYLIST_BIN="$SCRIPT_DIR/t-playlist"
 elif command -v t-playlist >/dev/null 2>&1; then
     PLAYLIST_BIN=$(command -v t-playlist)
-elif [[ -x "$SCRIPT_DIR/ut-playlist" ]]; then
-    PLAYLIST_BIN="$SCRIPT_DIR/ut-playlist"
-elif command -v ut-playlist >/dev/null 2>&1; then
-    PLAYLIST_BIN=$(command -v ut-playlist)
 fi
 
 # The listening log, located the same way and just as optionally. HISTORY_BIN, not
@@ -362,10 +354,6 @@ if [[ -x "$SCRIPT_DIR/t-history" ]]; then
     HISTORY_BIN="$SCRIPT_DIR/t-history"
 elif command -v t-history >/dev/null 2>&1; then
     HISTORY_BIN=$(command -v t-history)
-elif [[ -x "$SCRIPT_DIR/ut-history" ]]; then
-    HISTORY_BIN="$SCRIPT_DIR/ut-history"
-elif command -v ut-history >/dev/null 2>&1; then
-    HISTORY_BIN=$(command -v ut-history)
 fi
 
 # THE ENGINE REGISTRY — discovered, not listed. The suite's whole claim is that adding a

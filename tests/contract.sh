@@ -312,36 +312,6 @@ report "--info is the engine's"   1 "$(rc shell/t-play --info -- URL)"
 
 echo "── idle lifecycle: exit 0, ONE compact line, idempotent ───────────"
 report "--status exit"      0 "$(rc shell/t-play --status -j)"
-report "legacy ut-play symlink answers" 0 "$(shell/ut-play --status -j >/dev/null 2>&1; echo $?)"
-report "legacy ut-playlist symlink answers" 0 "$(UT_STATE_DIR="$UT_TEST_TMP/legacy" shell/ut-playlist --ls -j >/dev/null 2>&1; echo $?)"
-report "legacy ut-history symlink answers" 0 "$(UT_STATE_DIR="$UT_TEST_TMP/legacy" shell/ut-history --ls -j >/dev/null 2>&1; echo $?)"
-report "legacy uting symlink answers --version" 0 "$(shell/uting --version >/dev/null 2>&1; echo $?)"
-
-# ── AND THE OTHER DIRECTION, which is the one that actually broke. The four symlinks above
-# make the OLD names work; nothing made the new ones work alone, because the TUI looked its
-# three siblings up under the old spelling only and this checkout carries both. A copy that
-# has just the ten renamed scripts in it is the only input that can tell those two apart —
-# and PATH has to lose any directory holding an old name as well, or an installed one
-# answers and the copy proves nothing. "Reached a gate" is the pass: which gate depends on
-# what the machine has, but "cannot locate" is the failure and it is unambiguous.
-NEWONLY=$(mktemp -d "${TMPDIR:-/tmp}/ting-newonly.XXXXXX")
-mkdir -p "$NEWONLY/shell"
-cp VERSION config "$NEWONLY/"
-cp shell/ting shell/t-play shell/t-playlist shell/t-history shell/yt-search shell/yt-resolve \
-    shell/bili-search shell/bili-resolve shell/ne-search shell/ne-resolve "$NEWONLY/shell/"
-NEWONLY_PATH=""
-_oldifs=$IFS
-IFS=:
-for _d in $PATH; do
-    [ -e "$_d/ut-play" ] && continue
-    NEWONLY_PATH="${NEWONLY_PATH:+$NEWONLY_PATH:}$_d"
-done
-IFS=$_oldifs
-case "$(env "PATH=$NEWONLY_PATH" "$NEWONLY/shell/ting" q </dev/null 2>&1 || true)" in
-*"cannot locate"*) _newonly=missing ;;
-*) _newonly=located ;;
-esac
-report "…and only the new names installed still finds the player" located "$_newonly"
 report "--status one line"  1 "$(shell/t-play --status -j | wc -l | tr -d ' ')"
 report "--status is empty"  0 "$(jq_ok '.players==[]' shell/t-play --status -j)"
 report "--stop --all exit"  0 "$(rc shell/t-play --stop --all -j)"

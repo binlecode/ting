@@ -321,24 +321,27 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
         ├── t-playlist   → <checkout>/shell/t-playlist     agent 面（可选）
         └── t-history    → <checkout>/shell/t-history      agent 面（可选）
               一个命令一个名字；不发短名（「平级动词，没有内核」）
-
-**改名留下的四条符号链接，住在 checkout 里而不是 `~/bin` 里。** 套件从 `uting` 改叫 `ting`
-时，四个动词跟着改了名（`uting`→`ting`、`ut-play`→`t-play`、`ut-playlist`→`t-playlist`、
-`ut-history`→`t-history`；六个引擎脚本的名字里从来没有套件名，所以一个也没动）。
-`shell/` 里因此并排躺着四条旧名 → 新名的符号链接：
-
-```
-   shell/uting → ting   shell/ut-play → t-play   shell/ut-playlist → t-playlist
-                        shell/ut-history → t-history
 ```
 
-它们**在仓库里**，不在用户的 `~/bin` 里，这是有意的：一个照着旧名建了 `~/bin/ut-play` 的
-用户，链接指的是 checkout 里的路径，那条路径必须继续存在 —— 否则一次 `git pull` 会当场
-打断他的 shell 而不是给他一次改名。同理，`ting` 找它的三个兄弟时也是**新名在先、旧名兜底**
-（`t-play` 找 `t-history` 用同一条链），所以一份只装了新名的部署不依赖这四条链接。
-它们是**兼容层，不是第二套名字**：文档、help 文本、错误信息里只出现新名，
-`tests/contract.sh` 只用四条链接各答一次来钉住它们还活着。
+**改名是一次性的，命令这一侧不留旧拼法。** 套件从 `uting` 改叫 `ting` 时，四个动词跟着改了名
+（`uting`→`ting`、`ut-play`→`t-play`、`ut-playlist`→`t-playlist`、`ut-history`→`t-history`；
+六个引擎脚本的名字里从来没有套件名，所以一个也没动）。v0.9.0 曾在 `shell/` 里并排放四条旧名 →
+新名的符号链接当过渡，v0.10.0 把它们删了 —— 一个东西一个名字，这条规矩不为自己的历史破例，
+而一个躺在磁盘上、文档里又不提的第二拼法，正是它要防的那种漂移。
 
+**但数据这一侧相反：旧路径永远读得到。** 命令名是本仓说了算的东西，用户的歌单、收听日志与
+那份手写配置不是 —— 它们是改名之前就存在、并且没有理由跟着搬家的东西。所以
+`config`、`state` 与 `engines` 三处各是一条「新名先看、旧名兜底」的两名链，判据是文件或目录
+在不在（ARCH-cli-contract.md「配置面」）。**删掉一个命令名，最坏是有人要改一行脚本；
+删掉一条数据路径，最坏是有人的歌单从此找不到了** —— 这两件事的赌注不一样，所以做法也不一样。
+
+```
+   命令名   uting / ut-play / ut-playlist / ut-history   v0.10.0 起不再存在
+   数据路径 ~/.config/uting/config · ~/.local/state/uting · ~/.local/share/uting/engines
+            没有新目录时继续沿用，没有期限
+```
+
+```
    运行时依赖图 —— 站点知识**只**在一对引擎里，播放**只**在播放器里：
 
      ting  ──► <engine>-search -j ──► 渲染 ──► t-play -d -j --engine <该行的引擎>
@@ -356,7 +359,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 
 **这些名字怎么来的（「平级动词，没有内核」）。** 三条命名规矩，一条对一类受众：人机面用发行名（`ting`），
 播放器与存储带套件前缀（`t-play` / `t-playlist` / `t-history`），一个引擎带它那个**站点**的名字 —— 因为那是调用方必须知道的
-唯一一件事。早先曾用 `ting` / `ut-` 前缀，多音源扩展后统一升华为纯粹的 `ting`（听）与 `t-` 前缀。说 "tui" 而不说 "ui"：ting 恰恰是一个全屏的*终端* UI。
+唯一一件事。早先曾用 `uting` / `ut-` 前缀，多音源扩展后统一升华为纯粹的 `ting`（听）与 `t-` 前缀。说 "tui" 而不说 "ui"：ting 恰恰是一个全屏的*终端* UI。
 
 **引擎名就是命令前缀（「站点知识的边界」）。** `--engine yt` 靠字符串拼接找到 `yt-resolve`
 （`t-play` 的 `engine_resolve_bin`：先试 `$SCRIPT_DIR/$ENGINE-resolve`，再试

@@ -216,10 +216,10 @@ ln -s "$PWD/shell/t-playlist"   ~/bin/t-playlist
 ln -s "$PWD/shell/t-history"    ~/bin/t-history
 ```
 
-Four of these verbs used to be spelled `uting`, `ut-play`, `ut-playlist` and `ut-history`.
-The checkout still answers to those: `shell/` carries a symlink for each, so a `~/bin` link
-made under an old name keeps working and a `git pull` never breaks a shell you already set up.
-They are a compatibility layer, not a second spelling — everything below uses the new names.
+Four of these verbs were spelled `uting`, `ut-play`, `ut-playlist` and `ut-history` up to
+v0.9.0, and v0.9.0 shipped a symlink for each. v0.10.0 drops them: one name per command, and
+nothing on disk claiming otherwise. Your own data does NOT move with them — a config at
+`~/.config/uting/config` and a store at `~/.local/state/uting` are still read where they are.
 
 Only `ting` is strictly required: every command resolves its siblings from its own location,
 so a single symlink is enough to use the whole suite by hand. The rest are for calling the verbs
