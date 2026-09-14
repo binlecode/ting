@@ -2488,6 +2488,7 @@ CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed rea
 # liveness poll, every verb — treats an adopted player exactly like a launched one, because
 # it is one: same id, same socket, same verbs.
 CURRENT_PLAY_ADOPTED=0
+QUIT_KEEP_PLAYING=0
 
 # ── The item one `<engine>-resolve --info` describes (key: i) ───────────────────────────
 # `i` is the DOOR, and the fetch behind it is what keeps this from being a second spelling of
@@ -4270,12 +4271,9 @@ cleanup_on_exit() {
         # next redraw, and nothing repaints after this one.
         printf '%s %s\n' "$S_PREF_ACT:" "$S_PREF_FAILED"
     fi
-    # What this session STARTED, this session takes with it. A player it ADOPTED is the other
-    # case and the opposite answer: `t-play -d` put it there precisely to outlive a terminal,
-    # and a screen opened to look at it must not be the thing that kills it. The user's own
-    # stop is unchanged and one key away — `s` goes through stop_current_playback like any
-    # other, and clears the flag with the rest of the state.
-    if ((CURRENT_PLAY_ADOPTED)); then
+    # When quitting via Q (detach-quit), preserve the player in background.
+    # Otherwise, stop whatever is currently playing so quitting ting cleanly stops the sound.
+    if ((QUIT_KEEP_PLAYING)); then
         return 0
     fi
     stop_current_playback
@@ -6049,6 +6047,7 @@ play_selected() {
     # output, and read_nav_input runs on a 1 s tick until it does, so the banner flips on its
     # own rather than waiting for the user to press something.
     CURRENT_PLAY_LOADING=1
+    CURRENT_PLAY_ADOPTED=0
 
     # Metadata straight out of the row arrays. This used to re-parse the composed display
     # string by splitting on " $GL_SEP " — which mis-split any title that itself contained
@@ -8820,7 +8819,16 @@ while true; do
         fi ;;
     $'\x16') paste_from_clipboard ;;   # Ctrl+V
     "/") filter_live ;;       # LIVE incremental filter
-    q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
+    q)
+        stop_current_playback
+        printf '%s%s\n' "$S_QUITTING" "$GL_ELL"
+        exit 0
+        ;;
+    Q)
+        QUIT_KEEP_PLAYING=1
+        printf '%s%s\n' "$S_QUITTING" "$GL_ELL"
+        exit 0
+        ;;
     ESC) ;;
     *) ;;
     esac
