@@ -2410,6 +2410,11 @@ JQ_TEXT_DEFS='
     gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
     | gsub("\\s+"; " ") | gsub("^ | $"; "");
   def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
+  def yt_thumb:
+    if . == null then ""
+    elif test("v=[a-zA-Z0-9_-]{11}") then "https://i.ytimg.com/vi/" + (capture("v=(?<id>[a-zA-Z0-9_-]{11})").id) + "/hqdefault.jpg"
+    elif test("youtu\\.be/[a-zA-Z0-9_-]{11}") then "https://i.ytimg.com/vi/" + (capture("youtu\\.be/(?<id>[a-zA-Z0-9_-]{11})").id) + "/hqdefault.jpg"
+    else "" end;
   # Seconds -> the wire spelling short_dur parses (`0h:03m:35s`), for the ONE source whose
   # items arrive as bare numbers: a queue. Both stores derive `duration_fmt` on read
   # (t-playlist and t-history each carry this same definition), but t-play has no engine
@@ -4422,13 +4427,9 @@ build_playlist_rows() {
           (.rail // ""),
           (.description // "" | clean),
           (if .n == null then "" else (.n | tostring) end),
-          # ELEVENTH FIELD, empty here for every source this builder serves. Neither store
-          # keeps a cover (a CDN url outlives nothing — ARCH-cli-contract.md「数据契约」),
-          # and a part list is the parts of one video. An absent cover is not a defect: the
-          # frame reserves the same space either way, so a row without one is a row with a
-          # blank there rather than a different layout.
+          # ELEVENTH FIELD: preserved thumbnail or synthesized YouTube thumbnail
           # NO APOSTROPHE ANYWHERE IN THIS BLOCK — it is inside a single-quoted jq program.
-          ""
+          (.thumbnail // (.url | yt_thumb) // "")
         ] | join("\u001f")')
 }
 
@@ -4480,7 +4481,7 @@ build_queue_rows() {
           "",
           (.index | tostring),
           # NO APOSTROPHE ANYWHERE IN THIS BLOCK — it is inside a single-quoted jq program.
-          ""
+          (.thumbnail // (.url | yt_thumb) // "")
         ] | join("\u001f")')
 }
 
@@ -7580,7 +7581,7 @@ load_track_url() {
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-url-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-url-err.$$"
     spin_start
     printf '\n%s%s %s...%s' "$C_BOLD" "$GL_CARET" "$S_URL_ACT" "$C_RESET"
-    out=$("$bin" --info -j -- "$target_url" 2>"$errfile") || rc=$?
+    out=$("$bin" --info -J -- "$target_url" 2>"$errfile") || rc=$?
     spin_stop
     local err_msg; err_msg=$(<"$errfile"); rm -f "$errfile"
     if ((rc != 0)); then
@@ -7593,15 +7594,23 @@ load_track_url() {
     fi
 
     local synth_json
-    synth_json=$(printf '%s' "$out" | jq -c '
-        . as $o
-        | ($o.thumbnail // (if $o.engine == "yt" and $o.id != null then "https://i.ytimg.com/vi/" + $o.id + "/hqdefault.jpg" else null end)) as $tb
+    synth_json=$(printf '%s' "$out" | jq -c --arg eng "$eng" "$JQ_TEXT_DEFS"'
+        . as $raw
         | {
             status: "ok",
-            engine: .engine,
-            query: .url,
+            engine: ($raw.engine // $eng),
+            query: ($raw.url // $raw.webpage_url // ""),
             count: 1,
-            results: [ . + (if $tb != null then {thumbnail: $tb} else {} end) ]
+            results: [{
+                url: ($raw.url // $raw.webpage_url // ""),
+                title: ($raw.title // $raw.name // "" | clean),
+                duration_fmt: ($raw.duration_fmt // ($raw.duration | fmt_dur) // ""),
+                view_count: ($raw.view_count // null),
+                channel: ($raw.channel // $raw.uploader // ($raw.ar[0].name // null) // "?" | oneline),
+                live_status: ($raw.live_status // null),
+                description: ($raw.description // "" | clean),
+                thumbnail: ($raw.thumbnail // $raw.pic // ($raw.al.picUrl // null) // (($raw.url // $raw.webpage_url // "") | yt_thumb) // "")
+            }]
         }' 2>/dev/null) || synth_json=""
     if [[ -z "$synth_json" ]]; then
         store_notice "$S_URL_ACT:" "failed to parse metadata"
