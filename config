@@ -96,6 +96,13 @@ UT_VIZ_STYLE=bars                   # what -f viz draws: bars = log-scaled spect
                                     # cost the same to within 5% of one core at terminal
                                     # size; bars is the default because it is the legible
                                     # one there. ARCH-player.md「终端可视化」
+UT_VIZ_COLOR=cyan                   # -f viz color: an ffmpeg color name (cyan, magenta,
+                                    # green, …) or 0xRRGGBB. NOT #RRGGBB — in THIS file a
+                                    # `#` starts a comment, so #ff0000 reads back empty and
+                                    # you silently get cyan. Same spelling UT_ACCENT takes,
+                                    # for the same measured reason: ARCH-tui.md「值的拼法是
+                                    # 0xRRGGBB 而不是 #RRGGBB」. Only the --viz-color FLAG
+                                    # takes #RRGGBB — a flag never passes through this file.
 YT_MPV_INPUT_CONF=                  # path to an mpv input.conf for detached players
 
 # ── scope: terminal UI (ting) ──────────────────────────────────────────────────────────

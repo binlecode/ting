@@ -140,12 +140,6 @@
 
 ### 🔴 第一梯队：TUI Design · Look and Feel · 交互美化专项（最高优先级）
 
-- **【最高优先级 · Look & Feel / 视觉美化】viz 的配色要不要可配。**
-  **收益**：高。打破频谱与音频可视化硬编码 cyan 的单调视觉，与 14 套精选主题及用户个性化终端配色深度融合，极大增强终端沉浸感与桌面质感。
-  **成本**：低。仅需在 `config` 增加单个颜色键并由 `t-play` 透传至 mpv 参数。
-  **待决问题**：是否引入独立配色配置项（如 `UT_VIZ_COLOR` 与 `--viz-color`）覆盖硬编码 cyan。
-  **已决约束**：严禁复用 `ting` 的 `YT_THEME`（调色板不跨进程共享）。
-
 - **【最高优先级 · TUI Design / 视觉排版】付费权限徽章（`access`）要不要上屏，以及上在哪一行。**
   **收益**：高。优化单行视觉设计与信息密度。`ne` 的信封已经免费带着 `fee → access`（`full` / `preview` / `paywalled`），一枚设计精炼的 `30s 试听` / `VIP` 徽章能让用户在按 Enter 之前一眼预判单曲可用性。
   **成本**：中。`load_rows` 现在建的是 `R_TITLE/R_DUR/R_VIEWS/R_CHAN/R_LIVE/R_ENGINE/R_RAIL`，多一个 `R_ACCESS` 是跨引擎的数据模型改动，不是一处渲染改动。

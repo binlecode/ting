@@ -96,7 +96,7 @@ if [[ -z "$TING_CONFIG" ]]; then
     fi
 fi
 UT_CONFIG="$TING_CONFIG"
-for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE VIZ_COLOR DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
     eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
     eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
 done
@@ -250,6 +250,10 @@ Options:
               fast|fst  progressive video   ascii|asc terminal video (mpv terminal VO)
               viz|waves live audio visualizer (UT_VIZ_STYLE picks the picture)
               (-d rejects ascii/viz: a detached player has no terminal to draw on)
+  --viz-color C  Visualizer color for -f viz: an ffmpeg color name (cyan, magenta, …),
+              0xRRGGBB, or #RRGGBB (default: UT_VIZ_COLOR / cyan). In the CONFIG FILE
+              only 0xRRGGBB works — there a # starts a comment. The gate checks the
+              SHAPE, not the name: an unknown name reaches mpv and draws its default.
   --volume N  mpv startup volume, 0-100 (default: mpv's own). For -d this is the STARTING
               volume; change it live with --set-volume.
   --seek ±N   Seek N seconds RELATIVE to the playhead; the sign is required, because a bare
@@ -293,7 +297,7 @@ Options:
 Long-only flags: --engine --detach --status --stop --set-volume --pause --resume --seek
                  --seek-to --queue --enqueue --next --queue-show --queue-rm --queue-mv
                  --queue-jump --queue-clear --to --expect-url --id --all --json --list
-                 --color
+                 --color --viz-color
                  --volume  (--help and --version also have short forms: -h, -V)
 
 Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-contract.md):
@@ -962,7 +966,9 @@ play_viz_url() {
     size="${width}x$((height * 2))"
 
     # WHICH picture is taste, so it is a config key and not a flag (UT_VIZ_STYLE) — nobody
-    # picks a visualiser style per track. Both chains were measured at this geometry
+    # picks a visualiser style per track. The COLOUR beside it has both, and that asymmetry
+    # is deliberate: it follows the pane this call draws on, not the taste of the person.
+    # ARCH-player.md「终端可视化」. Both chains were measured at this geometry
     # (120x30 @ 15fps, 2026-08): mpv burns 0.5s of CPU per 10s of audio for the waveform and
     # 0.9s for the bars, against a 0.5s floor for decode alone, and --vo=tct itself costs
     # 0.02s — the terminal emulator eats the other end, ~300KB/s of truecolor escapes. So
@@ -979,8 +985,8 @@ play_viz_url() {
     # showfreqs also makes the reading honest — one bar per terminal column, not two summed.
     local filter
     case "$UT_VIZ_STYLE" in
-    bars) filter="aformat=channel_layouts=mono,showfreqs=s=${size}:mode=bar:ascale=log:fscale=log:colors=cyan:r=15" ;;
-    *) filter="showwaves=s=${size}:mode=cline:colors=cyan:r=15" ;;
+    bars) filter="aformat=channel_layouts=mono,showfreqs=s=${size}:mode=bar:ascale=log:fscale=log:colors=${VIZ_COLOR}:r=15" ;;
+    *) filter="showwaves=s=${size}:mode=cline:colors=${VIZ_COLOR}:r=15" ;;
     esac
 
     run_mpv \
@@ -2980,6 +2986,8 @@ FORMAT_SORT=""
 PLAY_QUALITY="$UT_PLAY_QUALITY" # --quality flag overrides; the engine maps (mode, tier)
 VOLUME="$UT_VOLUME"
 PLAY_START=""        # --start: seconds to open at, beating the handle's own offset
+VIZ_COLOR="${UT_VIZ_COLOR:-cyan}"
+VIZ_COLOR_FLAG=0
 COLOR_MODE="auto"
 # Default output is prose; -j/-J select a machine envelope.
 OUTPUT_MODE="list"
@@ -3088,6 +3096,17 @@ while (($#)); do
         ;;
     --volume=*)
         VOLUME="${1#*=}"
+        shift
+        ;;
+    --viz-color)
+        [[ $# -ge 2 ]] || die "--viz-color requires a value"
+        VIZ_COLOR="$2"
+        VIZ_COLOR_FLAG=1
+        shift 2
+        ;;
+    --viz-color=*)
+        VIZ_COLOR="${1#*=}"
+        VIZ_COLOR_FLAG=1
         shift
         ;;
     # Seconds only, and no sign — deliberately NOT mpv's own --start grammar. Passing that
@@ -3328,7 +3347,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --loop --status --stop --set-volume --pause --resume --seek --seek-to --set-loop --queue --enqueue --next --queue-show --queue-rm --queue-mv --queue-jump --queue-clear --to --expect-url --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --loop --status --stop --set-volume --pause --resume --seek --seek-to --set-loop --queue --enqueue --next --queue-show --queue-rm --queue-mv --queue-jump --queue-clear --to --expect-url --id --all --color --viz-color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -3616,8 +3635,17 @@ if [[ "$PLAYBACK_MODE" == "ascii" ]]; then
     fi
 fi
 
-if [[ "$PLAYBACK_MODE" == "viz" ]] && ! validate_enum "$UT_VIZ_STYLE" bars wave; then
-    die "UT_VIZ_STYLE must be one of: bars, wave"
+if [[ "$PLAYBACK_MODE" == "viz" ]]; then
+    if ! validate_enum "$UT_VIZ_STYLE" bars wave; then
+        die "UT_VIZ_STYLE must be one of: bars, wave"
+    fi
+    if [[ ! "$VIZ_COLOR" =~ ^[a-zA-Z0-9#_|]+$ ]]; then
+        if ((VIZ_COLOR_FLAG)); then
+            die "--viz-color must be a valid color name or hex (got '$VIZ_COLOR')"
+        else
+            die "UT_VIZ_COLOR must be a valid color name or hex (got '$VIZ_COLOR')"
+        fi
+    fi
 fi
 
 # A TERMINAL-RENDERING MODE UNDER A NON-UTF-8 LOCALE REFUSES; it does not degrade. tct draws

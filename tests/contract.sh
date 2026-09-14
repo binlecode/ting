@@ -925,6 +925,41 @@ report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_ke
 # config the audio path never reads — which is the shape a mode-blind `case` arrives in.
 report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
 
+viz_says_color_key() {
+    case "$(env "$1" shell/t-play -f "$2" -- "$VIZ_URL" 2>&1 || true)" in
+    *UT_VIZ_COLOR*) echo yes ;;
+    *) echo no ;;
+    esac
+}
+report "UT_VIZ_COLOR: a bogus value dies naming the key" "yes" "$(viz_says_color_key 'UT_VIZ_COLOR=bad color!' viz)"
+report "UT_VIZ_COLOR: a legal value reaches the handle gate" "no" "$(viz_says_color_key 'UT_VIZ_COLOR=magenta' viz)"
+report "UT_VIZ_COLOR: silent outside -f viz" "no" "$(viz_says_color_key 'UT_VIZ_COLOR=bad color!' audio)"
+
+# THE SPELLING, and it is a CONFIG-FILE fact that no environment check can reach: the three
+# above hand the key over env, where `#` is just a character. In the FILE the loader cuts the
+# line at the first `#`, so a hex written that way does not arrive wrong — it does not arrive
+# at all, and the user silently gets cyan while his config plainly says red. That is the trap
+# ARCH-tui.md「值的拼法是 `0xRRGGBB` 而不是 `#RRGGBB`」named this key for, and the shipped
+# config's comment is the only thing standing between a user and it.
+#
+# The discriminating input is a value ILLEGAL under either spelling: written with 0x it
+# reaches the gate and the gate quotes it back, written with # there is nothing left to
+# reject and the run falls through to the handle gate. Both stay offline for the same reason
+# the checks above do — no engine claims this host.
+VIZCFG="$UT_TEST_TMP/vizcolor.config"
+viz_cfg_says() {
+    printf '%s\n' "$1" > "$VIZCFG"
+    case "$(UT_CONFIG="$VIZCFG" shell/t-play -f viz -- "$VIZ_URL" 2>&1 || true)" in
+    *"0xff0000zz"*) echo quoted ;;
+    *UT_VIZ_COLOR*) echo other ;;
+    *) echo gone ;;
+    esac
+}
+report "UT_VIZ_COLOR: 0xRRGGBB survives the config file" "quoted" \
+    "$(viz_cfg_says 'UT_VIZ_COLOR=0xff0000zz!')"
+report "…and a #-spelled value never arrives"           "gone" \
+    "$(viz_cfg_says 'UT_VIZ_COLOR=#0xff0000zz!')"
+
 # UT_DEAD_KEEP is the player's history-pruning count; must fail fast on non-numeric or negative.
 dk_out=$(env UT_DEAD_KEEP=bogus shell/t-play --status 2>&1 || true)
 case "$dk_out" in
@@ -979,6 +1014,8 @@ report "…with --start 90 --quality low" yes "$(viz_reaches_engine yt shell/t-p
 # survive being pointed at the other engine. The name in the message is the assertion: a
 # --engine that was parsed and then dropped would come back naming `yt`.
 report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/t-play --engine bili -f viz -- "$VIZ_URL")"
+report "…with --viz-color magenta"     yes "$(viz_reaches_engine yt shell/t-play --viz-color magenta -f viz -- "$VIZ_URL")"
+report "…with bogus --viz-color is 1"  1 "$(rc shell/t-play --viz-color 'bad color!' -f viz -- "$VIZ_URL")"
 # URL auto-sniffing when --engine is omitted:
 report "…auto-routes bili URL to bili"   yes "$(viz_reaches_engine bili shell/t-play -f viz -- "https://www.bilibili.com/video/BV0000000000")"
 report "…auto-routes netease URL to ne"  yes "$(viz_reaches_engine ne shell/t-play -f viz -- "https://music.163.com/song?id=000000")"
