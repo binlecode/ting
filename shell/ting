@@ -7431,6 +7431,27 @@ is_url_target() {
     return 1
 }
 
+# Extracts clean URL from target string (stripping quotes, mobile share fluff)
+extract_url_target() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    s="${s%\"}"; s="${s#\"}"
+    s="${s%\'}"; s="${s#\'}"
+    if [[ "$s" == *"https://"* ]]; then
+        s="${s#*https://}"
+        s="https://${s}"
+        s="${s%%[[:space:]]*}"
+        s="${s%%[\"\'\<\>\(\)]*}"
+    elif [[ "$s" == *"http://"* ]]; then
+        s="${s#*http://}"
+        s="http://${s}"
+        s="${s%%[[:space:]]*}"
+        s="${s%%[\"\'\<\>\(\)]*}"
+    fi
+    printf '%s' "$s"
+}
+
 # Extracts clean lowercase host from URL or host string
 url_extract_host() {
     local h=$1
@@ -7568,6 +7589,7 @@ load_track_url() {
         return 1
     fi
 
+    stash_search
     json="$synth_json"
     CURRENT_ENGINE="$eng"
     QUERY_LABEL="$target_url"
@@ -7577,8 +7599,7 @@ load_track_url() {
 
 load_url() {
     local target_url=$1 eng kind bin
-    target_url="${target_url#"${target_url%%[![:space:]]*}"}"
-    target_url="${target_url%"${target_url##*[![:space:]]}"}"
+    target_url=$(extract_url_target "$target_url")
     eng=$(sniff_engine_from_url "$target_url") || eng=""
     if [[ -z "$eng" ]]; then
         store_notice "$S_URL_ACT:" "unsupported media source ($target_url)"
@@ -7605,10 +7626,10 @@ new_search() {
     read_query_input "${1:-}" || return 0
     q="$QUERY_INPUT"
     [[ "$q" == *[![:space:]]* ]] || return 0
-    q="${q#"${q%%[![:space:]]*}"}"
-    q="${q%"${q##*[![:space:]]}"}"
-    if is_url_target "$q"; then
-        load_url "$q" || true
+    local clean_url
+    clean_url=$(extract_url_target "$q")
+    if is_url_target "$clean_url"; then
+        load_url "$clean_url" || true
         return 0
     fi
     QUERY_LABEL="$q"
@@ -7833,7 +7854,15 @@ filter_live() {
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
-        "" | $'\n' | $'\r') play_selected || true ;;  # Enter → play highlighted match in background
+        "" | $'\n' | $'\r')
+            _target_u=$(extract_url_target "$query")
+            if is_url_target "$_target_u"; then
+                FILTER_MODE=0
+                apply_filter ""
+                load_url "$_target_u" || true
+                return 0
+            fi
+            play_selected || true ;;  # Enter → play highlighted match in background
         ESC) break ;;                            # Esc → leave filter mode
         "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
         "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
@@ -7842,7 +7871,18 @@ filter_live() {
         $'\t') ;;   # Tab is a control character, never part of a query — ignore, not append
         # Text, not a command: with `/` open the user is typing a query, and a paste is the
         # fastest way to type one. Narrows on the whole payload in one apply_filter.
-        PASTE) query="$query$PASTE_TEXT"; apply_filter "$query" ;;
+        # If the paste is a media URL, exit filter and resolve the URL directly.
+        PASTE | $'\x16')
+            local ptext="$PASTE_TEXT"
+            [[ "$READ_NAV_KEY" == $'\x16' ]] && ptext=$(clipboard_get)
+            _target_u=$(extract_url_target "$ptext")
+            if is_url_target "$_target_u"; then
+                FILTER_MODE=0
+                apply_filter ""
+                load_url "$_target_u" || true
+                return 0
+            fi
+            query="$query$ptext"; apply_filter "$query" ;;
         # An escape sequence the arms above did not claim (PageUp `[5~`, F1 `OP`, Home, a
         # modified arrow `[1;5A`) is not text the user typed, and appending its bytes would put
         # `[5~` in the query. The introducer alone IS text, though — a sequence always carries
@@ -8150,6 +8190,47 @@ read_paste_tail() {
     return 0
 }
 
+# Detect unbracketed paste (e.g. Cmd+V in macOS Terminal.app without DECSET 2004).
+# If the character read is followed immediately by queued bytes in the tty buffer,
+# slurp all pending bytes (MIN=0, TIME=1, up to 100ms wait for paste arrival).
+UNBRACKETED_TAIL=""
+check_unbracketed_tail() {
+    UNBRACKETED_TAIL=""
+    ((ESC_DD >= 0)) || { command -v dd >/dev/null 2>&1 && ESC_DD=1 || ESC_DD=0; }
+    ((ESC_DD == 1)) || return 1
+    if ! stty min 0 time 1 </dev/tty 2>/dev/null; then
+        return 1
+    fi
+    UNBRACKETED_TAIL=$(dd bs=4096 count=1 2>/dev/null </dev/tty || true)
+    stty min 1 time 0 </dev/tty 2>/dev/null || true
+    [[ -n "$UNBRACKETED_TAIL" ]]
+}
+
+clipboard_get() {
+    if command -v pbpaste >/dev/null 2>&1; then
+        pbpaste 2>/dev/null
+    elif command -v wl-paste >/dev/null 2>&1; then
+        wl-paste 2>/dev/null
+    elif command -v xclip >/dev/null 2>&1; then
+        xclip -selection clipboard -o 2>/dev/null
+    elif command -v xsel >/dev/null 2>&1; then
+        xsel -b -o 2>/dev/null
+    fi
+}
+
+paste_from_clipboard() {
+    local clip
+    clip=$(clipboard_get) || clip=""
+    [[ -n "$clip" ]] || return 0
+    local target
+    target=$(extract_url_target "$clip")
+    if is_url_target "$target"; then
+        load_url "$target" || true
+    else
+        new_search "$clip"
+    fi
+}
+
 # A NOTICE DIES ON A KEY, NOT ON A CLOCK, and this is the one place that knows the
 # difference: every path below that returns 0 has a real keypress in hand, and the one that
 # returns 1 is the tick. Clearing it here rather than in the two loops that call this gives
@@ -8216,6 +8297,16 @@ read_nav_input() {
         # One byte is not one key: finish the character before handing it up. The ESC/arrow
         # decoding in read_esc_tail is untouched — those sequences are all ASCII.
         utf8_complete "$input"
+        case "$CHAR_IN" in
+        " " | "" | $'\n' | $'\r' | $'\t' | j | J | k | K | "-" | "=" | "[" | "]") ;;
+        *)
+            if check_unbracketed_tail; then
+                PASTE_TEXT="$CHAR_IN$UNBRACKETED_TAIL"
+                READ_NAV_KEY="PASTE"
+                return 0
+            fi
+            ;;
+        esac
         READ_NAV_KEY="$CHAR_IN"
         return 0
     fi
@@ -8259,6 +8350,13 @@ read_query_input() {
                 continue
             fi
             printf '\n'; return 1 ;;
+        $'\x16')
+            local cp; cp=$(clipboard_get)
+            if [[ -n "$cp" ]]; then
+                query+="$cp"
+                printf '%s' "$cp"
+            fi
+            continue ;;
         # bash's own `read -n` puts the tty in non-canonical mode, so Ctrl-D arrives as the
         # BYTE 0x04, not as EOF — the catch-all below used to append it to the query and send a
         # control character to the search. Give it the shell's meaning instead: cancel on an
@@ -8470,10 +8568,9 @@ if ((${#query[@]} == 0)); then
 fi
 QUERY_LABEL="${query[*]}"
 
-_trimmed_startup="${QUERY_LABEL#"${QUERY_LABEL%%[![:space:]]*}"}"
-_trimmed_startup="${_trimmed_startup%"${_trimmed_startup##*[![:space:]]}"}"
-if is_url_target "$_trimmed_startup"; then
-    QUERY_LABEL="$_trimmed_startup"
+_startup_url=$(extract_url_target "$QUERY_LABEL")
+if is_url_target "$_startup_url"; then
+    QUERY_LABEL="$_startup_url"
     if ! load_url "$QUERY_LABEL"; then
         json='{"count":0,"results":[]}'
         CURRENT_ENGINE="$ENGINE"
@@ -8642,10 +8739,9 @@ while true; do
     # A paste is a URL or QUERY. If a URL is pasted directly in the list, resolve
     # and present it immediately; otherwise open the prompt with the text in it.
     PASTE)
-        _trimmed_paste="${PASTE_TEXT#"${PASTE_TEXT%%[![:space:]]*}"}"
-        _trimmed_paste="${_trimmed_paste%"${_trimmed_paste##*[![:space:]]}"}"
-        if is_url_target "$_trimmed_paste"; then
-            load_url "$_trimmed_paste" || true
+        _target_url=$(extract_url_target "$PASTE_TEXT")
+        if is_url_target "$_target_url"; then
+            load_url "$_target_url" || true
         else
             new_search "$PASTE_TEXT"
         fi
@@ -8689,7 +8785,12 @@ while true; do
             p) queue_move -1 ;;         # one slot earlier
             P) queue_move 1 ;;          # one slot later
             esac
+        else
+            case "$READ_NAV_KEY" in
+            p | P) paste_from_clipboard ;;
+            esac
         fi ;;
+    $'\x16') paste_from_clipboard ;;   # Ctrl+V
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
     ESC) ;;
