@@ -4,7 +4,7 @@
 # Agent-facing.
 #
 # The other half of the netease engine pair (`ne-search` + `ne-resolve`); the player
-# (`ut-play`) is source-agnostic and knows neither. Everything NetEase-specific about turning
+# (`t-play`) is source-agnostic and knows neither. Everything NetEase-specific about turning
 # a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
 # format-per-mode table, the quality tiers and the handle shapes this site uses. It has NO
 # playback, lifecycle, or mpv logic and never starts a process that outlives it.
@@ -39,7 +39,7 @@ done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 
 # THE version of the whole suite, declared once — in a data file, not in code. See the same
-# block in ne-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
+# block in ne-search / yt-resolve / t-play. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
     UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
@@ -48,12 +48,24 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in t-play for why, and
 # ARCH-cli-contract.md「配置面」 for the keys.
-UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+TING_CONFIG="${TING_CONFIG:-${UT_CONFIG:-}}"
+if [[ -z "$TING_CONFIG" ]]; then
+    if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ting/config" ]]; then
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+    else
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+    fi
+fi
+UT_CONFIG="$TING_CONFIG"
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+    eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
+    eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
+done
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
-    local file="$1" line key val
+    local file="$1" line key val _ting_k _ut_k
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -64,17 +76,27 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(TING|UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        TING_CONFIG | TING_DEFAULTS | TING_ENGINE_DIR | TING_VERSION | UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
             val="${val%?}"
         fi
         [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
-        eval "[[ -n \"\${$key+x}\" ]]" && continue
-        eval "$key=\$val"
+        if [[ "$key" == TING_* ]]; then
+            _ut_k="UT_${key#TING_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ut_k+x}\" ]] || $_ut_k=\$val"
+        elif [[ "$key" == UT_* ]]; then
+            _ting_k="TING_${key#UT_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ting_k+x}\" ]] || $_ting_k=\$val"
+        else
+            eval "[[ -n \"\${$key+x}\" ]]" && continue
+            eval "$key=\$val"
+        fi
     done < "$file"
 }
 # FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: a
@@ -231,7 +253,7 @@ CURSOR=""            # the --cursor token as the caller typed it, "" when absent
 CURSOR_OFFSET=0      # the item offset it decodes to; 0 is the first batch
 FMT=""               # the yt-dlp format string the mode resolves to
 
-# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
+# Glyph fallback shares ONE switch with ting (YT_ASCII, legacy alias YT_TUI_ASCII).
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -387,7 +409,7 @@ classify_yt_dlp_error() {
 # because -h / -V must answer without touching the filesystem, and process-level rather than a
 # function `local` because the EXIT trap runs after the function has returned. 0700 rather
 # than a bare /tmp path because the captured yt-dlp stderr can name a cookie database, and a
-# lyric body is content. `players/` has exactly one owner (ut-play) and it is not this file.
+# lyric body is content. `players/` has exactly one owner (t-play) and it is not this file.
 SCRATCH_DIR=""
 ERR_FILE=""
 cleanup_scratch() {
@@ -551,7 +573,7 @@ normalize_target() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: t-play --engine NAME)"
         ;;
     music.163.com/* | y.music.163.com/*)
         t="https://$t"
@@ -582,7 +604,7 @@ normalize_target() {
 #
 # The site itself never writes one — no NetEase link carries a start offset — and the key is
 # parsed anyway, because `?t=` is the SUITE's spelling for "start here" and every engine has
-# to read it: `ut-play --start` round-trips through the handle, and a queue built by hand
+# to read it: `t-play --start` round-trips through the handle, and a queue built by hand
 # writes it. `bili-resolve` parses it for the same reason and from the same absence.
 #
 # Split by hand rather than `for p in $q` — an unquoted expansion would glob, and a query
@@ -646,7 +668,7 @@ normalize_container() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: t-play --engine NAME)"
         ;;
     music.163.com/* | y.music.163.com/*)
         t="https://$t"
@@ -729,7 +751,7 @@ def safe_headers:
 #
 # `url` is the CANONICAL handle this file built, not the record's `webpage_url`: they agree
 # today, and building it here is what guarantees the key can never carry a `t=` offset back
-# out — the url answers WHICH MEDIA, never where to start, because `ut-playlist --add` stores
+# out — the url answers WHICH MEDIA, never where to start, because `t-playlist --add` stores
 # exactly this string and an offset riding along in it would replay a saved track from 10:01
 # for ever.
 #
@@ -1102,14 +1124,14 @@ resolve_transcript() {
 # live on a search row — which is why a container gets its own verb and its own envelope instead
 # of a `kind` on the row model. ARCH-engine.md「容器（--items）」.
 #
-# EVERY ITEM IS AN ITEM RECORD: `{engine, id, url, title, duration}` is what ut-playlist stores
-# and what ut-play --queue consumes, and the key is `items` because that is the name both of them
+# EVERY ITEM IS AN ITEM RECORD: `{engine, id, url, title, duration}` is what t-playlist stores
+# and what t-play --queue consumes, and the key is `items` because that is the name both of them
 # already read. So `--items -j` pipes into either with nothing renamed. Each record carries its
 # own `engine` and a complete playable url, because a record here is a CALL, not a reference.
 #
 # THE ROWS ARE FILTERED BY `fee` THE WAY SEARCH ROWS ARE, same table and same config key
 # (NE_INCLUDE_VIP): by default only `full` survives. The reason is the contract's own sentence —
-# a row stored in ut-playlist has to be playable — and without the filter one VIP album imported
+# a row stored in t-playlist has to be playable — and without the filter one VIP album imported
 # into a playlist is a row of 30-second previews. Measured 2026-09-10: album 32311 is nine
 # tracks and every one of them is fee 1, so by default it lists ZERO items and says so in
 # `count`, which is the honest answer rather than nine rows that stop after the sample.
@@ -1339,7 +1361,7 @@ resolve_items() {
         return 0
     fi
 
-    # Prose, in the vocabulary --info and ut-playlist --show already speak: the title, a dashed
+    # Prose, in the vocabulary --info and t-playlist --show already speak: the title, a dashed
     # summary line, then one line per track.
     local title count total_txt
     title=$(printf '%s' "$env_json" | jq -r '.title // "(untitled)"')
@@ -1418,7 +1440,7 @@ Options:
            the audio stream and the envelope says so — nothing is refused and nothing pretends
   -S SORT  yt-dlp format-sort override (--format-sort)
   --quality TIER  Quality tier: auto | low | medium | high (default: auto). The
-           (mode, tier) -> format-sort table lives here, not in ut-play; -S overrides it.
+           (mode, tier) -> format-sort table lives here, not in t-play; -S overrides it.
            The site's rungs are standard (128k) / higher (192k) / exhigh (320k) and a
            VIP-only ladder above them; the tier is a bitrate TARGET, so a rung your account
            is not offered degrades to the best one it is instead of failing
@@ -1430,7 +1452,7 @@ Options:
   --items  List the tracks of an album or a playlist — plain GETs, no yt-dlp. Takes a URL
            and NOT a bare number: song, album and playlist ids share no namespace here, so a
            number cannot say what it identifies. Every element is an item record, so the list
-           pipes into ut-playlist --add and ut-play --queue unmapped. Rows are filtered by
+           pipes into t-playlist --add and t-play --queue unmapped. Rows are filtered by
            access exactly as search rows are (see NE_INCLUDE_VIP), because a stored row has
            to be playable. At most 500 tracks per call — has_more/next_cursor say whether
            there are more and how to ask
@@ -1496,8 +1518,9 @@ Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagat
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
-  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/ting/config (KEY=value, one
+  per line, # comments; the pre-rename .../uting/config is read when there is no ting
+  one); TING_CONFIG relocates it, and UT_CONFIG still does. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   NE_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
                      anonymous). On this site login is what can unlock a higher stream tier —
@@ -1507,7 +1530,7 @@ Environment:
                      that sends a request of its own making — the others go through yt-dlp,
                      which carries its own
 
-To search: ne-search <query>   ·   To play: ut-play --engine ne <song id>
+To search: ne-search <query>   ·   To play: t-play --engine ne <song id>
 EOF
 }
 
@@ -1571,7 +1594,7 @@ while (($#)); do
     #
     # `--parts` gets the OPPOSITE treatment and falls through to the unknown-flag arm on
     # purpose, even though a sentence would read better there too: an ABSENT VERB is
-    # discovered from that exact wording — `uting`'s refresh_engine_parts and
+    # discovered from that exact wording — `ting`'s refresh_engine_parts and
     # tests/contract.sh's verb probe both read the unknown-flag line to learn what an engine
     # accepts — so a friendly refusal here would advertise a `c` key that cannot work. The
     # place to explain the absence is -h, which does. ARCH-cli-contract.md「命令规格」.
@@ -1591,7 +1614,7 @@ while (($#)); do
     -f | --format-mode)
         [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
+        # Canonical modes only — the alias table (ba/bv/…) is t-play's, which normalizes
         # before it calls an engine (ARCH-cli-contract.md「命令规格」).
         validate_enum "$2" audio video fast ascii viz ||
             die "-f must be one of: audio, video, fast, ascii, viz"
@@ -1607,7 +1630,7 @@ while (($#)); do
     --quality)
         [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical tiers only — the alias table, if one ever grows one, is ut-play's (the
+        # Canonical tiers only — the alias table, if one ever grows one, is t-play's (the
         # same rule as -f: the engine seam carries canonical spellings).
         validate_enum "$2" auto low medium high ||
             die "--quality must be one of: auto, low, medium, high"
@@ -1617,7 +1640,7 @@ while (($#)); do
     # The gate. Resolution neither plays nor tracks a player, and it does not search: a caller
     # holding the wrong verb is told which one it wants (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
-        echo "ne-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        echo "ne-resolve: $1 is a playback flag — use t-play for playback" >&2
         exit 1
         ;;
     -n | -m | -M | -s)

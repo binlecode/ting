@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uting pre-commit gate. Four hard rules, in cheapest-first order:
+# ting pre-commit gate. Four hard rules, in cheapest-first order:
 #   1. redaction    — no secret/credential/cookie material in staged additions
 #   2. bash 3.2     — no bash-4 feature in a staged shell script (the portability floor)
 #   3. syntax       — bash -n on the STAGED content of every staged shell script
@@ -28,7 +28,7 @@ patterns=(
   'AIza[0-9A-Za-z_-]{35}'
   'xox[baprs]-[A-Za-z0-9-]{10,}'
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
-  # uting-specific: a browser cookie export or a captured YouTube session. The
+  # ting-specific: a browser cookie export or a captured YouTube session. The
   # suite reads cookies from a live browser profile and must never carry one.
   'Netscape HTTP Cookie File'
   '__Secure-[13]PSID[[:space:]=]'
@@ -84,8 +84,16 @@ while IFS= read -r f; do
   # The hooks themselves carry the detector pattern and prose about the rule, so they
   # are exempt from the bash-4 scan (same carve-out the redaction check makes) — they
   # still get the bash -n gate below.
+  #
+  # A WHOLE-LINE COMMENT is dropped before the scan, for the same reason and one step
+  # further in: a script's own portability note names the forbidden forms, and a line that
+  # starts with # cannot run one. Without this a file that merely CHANGES PATH — a rename,
+  # where every line counts as added — is blocked by the sentence telling the next reader
+  # what not to write. A bash-4 feature with a comment after it is still code, and is still
+  # caught: only lines that are nothing but a comment are dropped.
   case "$f" in .githooks/*) leak="" ;; *)
-    add="$(git diff --cached --no-color -U0 -- "$f" | grep '^+' | grep -v '^+++' || true)"
+    add="$(git diff --cached --no-color -U0 -- "$f" | grep '^+' | grep -v '^+++' |
+      grep -vE '^\+[[:space:]]*#' || true)"
     leak="$(printf '%s\n' "$add" | grep -nE "$bash4" || true)" ;;
   esac
   if [ -n "$leak" ]; then
@@ -101,15 +109,15 @@ while IFS= read -r f; do
     fail=1
   fi
 
-  if ! git show ":$f" 2>/dev/null | /bin/bash -n 2>/tmp/uting-hook-syntax.$$; then
+  if ! git show ":$f" 2>/dev/null | /bin/bash -n 2>/tmp/ting-hook-syntax.$$; then
     {
       echo ""
       echo "BLOCKED: staged $f does not parse under /bin/bash -n:"
-      sed 's/^/    /' "/tmp/uting-hook-syntax.$$"
+      sed 's/^/    /' "/tmp/ting-hook-syntax.$$"
     } >&2
     fail=1
   fi
-  rm -f "/tmp/uting-hook-syntax.$$"
+  rm -f "/tmp/ting-hook-syntax.$$"
 done <<EOF
 $staged_sh
 EOF

@@ -5,10 +5,10 @@
 # exists because four mechanical facts have to be got right every single time, and prose
 # telling a human or an agent to get them right is a runner nobody executes reliably:
 #
-#   1. `uting` refuses a non-TTY (exit 1), so it cannot be run from a pipe or a Bash tool
+#   1. `ting` refuses a non-TTY (exit 1), so it cannot be run from a pipe or a Bash tool
 #      call. tmux is the terminal.
 #   2. The pane size must be set AT SESSION CREATION (-x/-y). LINES/COLUMNS do nothing — the
-#      TUI reads the real ioctl via `stty size </dev/tty` (shell/uting:648), so a harness
+#      TUI reads the real ioctl via `stty size </dev/tty` (shell/ting:648), so a harness
 #      that skips TIOCSWINSZ gets a 0x0 terminal and a one-row list whose frames still look
 #      plausible enough to trust.
 #   3. `Enter` starts mpv DETACHED, in its own process group. Killing the tmux session does
@@ -49,29 +49,31 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (uting needs a real tty)" >&2; exit 1; }
+command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (ting needs a real tty)" >&2; exit 1; }
 
 # ---- a state dir of this run's own --------------------------------------------------
 # Why, once, for all three files under tests/: contract.sh's header. What is specific
-# to a DRIVER: the pane holds a real `uting` driving a real `ut-play` and a real mpv, so only
+# to a DRIVER: the pane holds a real `ting` driving a real `t-play` and a real mpv, so only
 # whose state it lands on changes — and their playlists and history still render, because
 # UT_STATE_DIR is deliberately NOT redirected (a frame captured here should show the store a
 # human sees). What is suppressed is that store's WRITE side, via UT_HISTORY=0 in the pane: a
 # track this script starts and reaps a second later is not a listening, and unlike a player, a
 # log is not something --stop takes back.
-UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-drive.XXXXXX") || exit 1
+UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ting-drive.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
-STATE_DIR="$TMPDIR/uting-$(id -u)"
+STATE_DIR="$TMPDIR/ting-$(id -u)"
+[[ -d "$STATE_DIR" ]] || STATE_DIR="${TMPDIR:-/tmp}/ting-$(id -u)"
 
 # The config the pane reads is a COPY of the one a human reads, in this run's own temp dir —
-# the same trade as UT_HISTORY=0 above, one level further in. uting WRITES six preference keys
+# the same trade as UT_HISTORY=0 above, one level further in. ting WRITES eleven preference keys
 # back to the user's config file now (a cycle key that has to be re-pressed every session is
 # not a preference), and `-k t`/`-k l` are exactly the keys that would rewrite the developer's
 # file as a side effect of driving a frame. Copied rather than left empty because the read
 # side is the whole point of not redirecting UT_STATE_DIR either: a frame captured here should
 # show the theme and the chrome language a human actually has.
 DRIVE_CFG="$UT_TEST_TMP/config"
-cp "${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}" "$DRIVE_CFG" 2>/dev/null ||
+cp "${TING_CONFIG:-${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/ting/config}}" "$DRIVE_CFG" 2>/dev/null ||
+    cp "${XDG_CONFIG_HOME:-$HOME/.config}/uting/config" "$DRIVE_CFG" 2>/dev/null ||
     : >"$DRIVE_CFG"
 
 S="drive-$$"
@@ -85,11 +87,11 @@ cleanup() {
     # reached the user's players and reaping without cause was the worse bug — which meant `-i`,
     # the one mode where a HUMAN presses Enter, never reaped at all. The state dir above is what
     # retires that trade: there is nothing here but this run's own players.
-    shell/ut-play --stop --all -j >/dev/null 2>&1
+    shell/t-play --stop --all -j >/dev/null 2>&1
     # Report rather than assume: --stop is idempotent, but an mpv that escaped its record would
     # not be reaped by it, and that is exactly the failure worth seeing. Scoped to this run's
     # socket dir, as playback.sh scopes its own: a bare `mpv .*--input-ipc-server` counts the
-    # user's players too, so on any machine where uting is actually used it was a coin toss.
+    # user's players too, so on any machine where ting is actually used it was a coin toss.
     if pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" >/dev/null 2>&1; then
         echo "drive.sh: ORPHAN mpv still running after --stop --all:" >&2
         pgrep -fl "mpv .*--input-ipc-server=$STATE_DIR" >&2
@@ -110,18 +112,21 @@ trap 'exit 130' INT TERM
 # default. Verified by driving UT_STATE_DIR: the pane reported an empty store while the same
 # variable listed four playlists outside tmux.
 #
-# YT_SYNC=0 (tmux and DCS frame sync do not mix), TMPDIR and UT_CONFIG are placed AFTER the
-# forwarded block so the driver's own choice wins over an inherited one — TMPDIR because the
-# isolation above is not negotiable, and it is not a YT_*/UT_* name so it is never forwarded
-# anyway; UT_CONFIG because a forwarded one would put the pane's writes back on the real file,
-# which is the one thing the copy above exists to prevent. An exported UT_CONFIG is still
-# honoured where it can do no harm: it picks WHICH file gets copied.
+# YT_SYNC=0 (tmux and DCS frame sync do not mix), TMPDIR and the two config names are placed
+# AFTER the forwarded block so the driver's own choice wins over an inherited one — TMPDIR
+# because the isolation above is not negotiable, and it is not a YT_*/UT_*/TING_* name so it
+# is never forwarded anyway; the config names because a forwarded one would put the pane's
+# writes back on the real file, which is the one thing the copy above exists to prevent.
+# BOTH names are pinned, not just UT_CONFIG: TING_CONFIG outranks it in the loader, so
+# pinning only the weaker one would let an exported TING_CONFIG walk straight through the
+# isolation. An exported config name is still honoured where it can do no harm: it picks
+# WHICH file gets copied.
 # UT_HISTORY=0 goes BEFORE it: suppressing the log write is a default, not a rule, so
 # `UT_HISTORY=1 tests/drive.sh -k Enter` still drives the writing path.
 env_prefix=""
 while IFS= read -r line; do
     case "$line" in
-    YT_*=* | UT_*=*)
+    YT_*=* | UT_*=* | TING_*=*)
         _n=${line%%=*}
         _v=${line#*=}
         _v=$(printf '%s' "$_v" | sed "s/'/'\\\\''/g")
@@ -131,7 +136,7 @@ while IFS= read -r line; do
 done < <(env)
 
 tmux new-session -d -s "$S" -x "$COLS" -y "$ROWS" \
-    "cd '$PWD' && UT_HISTORY=0$env_prefix TMPDIR='$TMPDIR' UT_CONFIG='$DRIVE_CFG' YT_SYNC=0 shell/uting '$QUERY'"
+    "cd '$PWD' && UT_HISTORY=0$env_prefix TMPDIR='$TMPDIR' UT_CONFIG='$DRIVE_CFG' TING_CONFIG='$DRIVE_CFG' YT_SYNC=0 shell/ting '$QUERY'"
 
 # Wait on the ready MARKER, never on a sleep: a captured spinner frame is a picture of the
 # loading state, not of the layout. A cold yt-dlp search takes ~10s.
@@ -184,8 +189,8 @@ fi
 # land inside that frame's paint rather than after it, and polling faster or slower does not
 # move the bias. A frame torn that way does not look torn, which is what makes it expensive:
 # the top is the view you asked for and the bottom is the view you left, so it reads as a
-# renderer that forgot to erase. It is not. `uting` repaints in place — every line erases its
-# own tail and the render ends on \033[J (shell/uting:3832).
+# renderer that forgot to erase. It is not. `ting` repaints in place — every line erases its
+# own tail and the render ends on \033[J (shell/ting:3832).
 #
 # THE NUMBER THIS IS SIZED AGAINST, measured 2026-08-30 at 100x30 by sampling the pane every
 # 0.1s from the keypress: `i` on a row with 28 chapters spends 2.7s on the fetch (the spinner,
@@ -197,7 +202,7 @@ fi
 # stall itself was 0.88s when this was written and is 0.20s since disp_fits bounded the
 # measurement; the window is not re-tuned down, because what it is sized against is the SLOW
 # machine, not this one. For scale, the list frame the 15-24ms figure in
-# shell/uting:2688 describes is two orders of magnitude away from this one.
+# shell/ting:2688 describes is two orders of magnitude away from this one.
 #
 # So: unchanged across a 1.5s window, not a 1.5s sleep. On this machine the two would behave
 # the same; they part on a slower one, where the stall grows and a fixed sleep goes back to

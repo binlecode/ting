@@ -2,7 +2,7 @@
 # yt-search — the YouTube SEARCH ENGINE: query -> result envelope. Agent-facing.
 #
 # One half of the youtube engine pair (`yt-search` + `yt-resolve`); the player
-# (`ut-play`) is source-agnostic and knows neither. This file owns everything that is
+# (`t-play`) is source-agnostic and knows neither. This file owns everything that is
 # YouTube-specific about searching: the yt-dlp invocation, the cookie decision, the
 # result shaping, and the duration formatter. It has NO playback, lifecycle, or mpv
 # logic and never starts a process that outlives it. See docs/ARCHITECTURE.md「命令拓扑」.
@@ -45,12 +45,24 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in t-play for why, and
 # ARCH-cli-contract.md「配置面」 for the keys.
-UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+TING_CONFIG="${TING_CONFIG:-${UT_CONFIG:-}}"
+if [[ -z "$TING_CONFIG" ]]; then
+    if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ting/config" ]]; then
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+    else
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+    fi
+fi
+UT_CONFIG="$TING_CONFIG"
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+    eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
+    eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
+done
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
-    local file="$1" line key val
+    local file="$1" line key val _ting_k _ut_k
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -61,17 +73,27 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(TING|UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        TING_CONFIG | TING_DEFAULTS | TING_ENGINE_DIR | TING_VERSION | UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
             val="${val%?}"
         fi
         [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
-        eval "[[ -n \"\${$key+x}\" ]]" && continue
-        eval "$key=\$val"
+        if [[ "$key" == TING_* ]]; then
+            _ut_k="UT_${key#TING_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ut_k+x}\" ]] || $_ut_k=\$val"
+        elif [[ "$key" == UT_* ]]; then
+            _ting_k="TING_${key#UT_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ting_k+x}\" ]] || $_ting_k=\$val"
+        else
+            eval "[[ -n \"\${$key+x}\" ]]" && continue
+            eval "$key=\$val"
+        fi
     done < "$file"
 }
 # FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
@@ -89,7 +111,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
-# executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
+# executables carry. Name == prefix is deliberate: it lets `t-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
 # both the player and the TUI. docs/ARCHITECTURE.md「命令拓扑」.
 ENGINE_NAME="yt"
@@ -180,9 +202,9 @@ OUTPUT_MODE="list"
 QUERY=""
 FILTERED_JSON=""
 
-# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# Glyph fallback shares ONE switch with ting (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
-# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as uting does.
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as ting does.
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -277,7 +299,7 @@ def fmt_dur:
   end;
 def oneline: if type != "string" then "" else gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "") end;
 # THE COVER, normalised to one directly-GETtable https URL — the site field name stops here.
-# A caller (uting, or an agent) must never learn what `thumbnails[]` is: that is site
+# A caller (ting, or an agent) must never learn what `thumbnails[]` is: that is site
 # knowledge, and site knowledge lives in an engine (CLAUDE.md).
 #
 # SMALLEST AT OR ABOVE 200px WIDE, not the biggest and not the first. A flat search entry
@@ -342,7 +364,7 @@ classify_yt_dlp_error() {
 # would be out of scope there and abort under `set -u`.
 #
 # The engine no longer writes into the player's state dir: `players/` has exactly one owner
-# (ut-play), and an engine reaching into it was only ever an artefact of the two living in
+# (t-play), and an engine reaching into it was only ever an artefact of the two living in
 # one file. Captions and error text are content, so 0700 rather than a bare /tmp path.
 SCRATCH_DIR=""
 cleanup_scratch() {
@@ -445,7 +467,7 @@ fetch_results() {
     # — the other two engines pick one (bili-search sends search_type=video, ne-search sends
     # type:1) and so never see this — and its result set really is mixed: measured 2026-09-03,
     # row 15 of 周杰伦 is the artist's CHANNEL, and it shipped as kind:\"track\" with a null
-    # duration. `ut-play --engine yt -- <that url>` does not play one thing, so the envelope was
+    # duration. `t-play --engine yt -- <that url>` does not play one thing, so the envelope was
     # making a claim the row could not keep.
     #
     # The signal is free: yt-dlp tags every flat entry with the extractor that will handle it,
@@ -490,7 +512,7 @@ print_list() {
 # Structured search output for agent callers. Wraps results in a stable
 # {status, engine, query, count, results} envelope so a caller gets the query echoed back,
 # a result count, and — since the split — the NAME OF THE ENGINE that produced them, which
-# is what lets `ut-play` route a chosen result back to the matching `<engine>-resolve`
+# is what lets `t-play` route a chosen result back to the matching `<engine>-resolve`
 # without pattern-matching its URL. Default (OUTPUT_MODE=json) projects each entry to a
 # lean, high-signal 12-field schema — the raw yt-dlp entries carry ~23 fields (ie_key,
 # x-forwarded-for, two URL variants, …) that are pure token ballast for a headless caller.
@@ -550,26 +572,27 @@ Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagat
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
-  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/ting/config (KEY=value, one
+  per line, # comments; the pre-rename .../uting/config is read when there is no ting
+  one); TING_CONFIG relocates it, and UT_CONFIG still does. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   YT_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
                      anonymous). A login makes age-restricted videos searchable; a profile
                      absent from this machine degrades to anonymous rather than failing
 
-To play a result, pass its url or id to: ut-play
+To play a result, pass its url or id to: t-play
 EOF
 }
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. This gate is the
+# t-play so the caller learns the right tool instead of a bare error. This gate is the
 # whole reason a narrow verb exists (ARCH-cli-contract.md「门模型」); it used to live in a separate
 # wrapper file and now sits directly in front of the implementation it guards.
 has_format=0
 query=()
 reject_url() {
-    echo "yt-search: '$1' looks like a URL — use 'ut-play $1' to play it" >&2
+    echo "yt-search: '$1' looks like a URL — use 't-play $1' to play it" >&2
     exit 1
 }
 while (($#)); do
@@ -630,7 +653,7 @@ while (($#)); do
         exit 1
         ;;
     -f | -d | --detach | --status | --stop | --set-volume | --id | --all)
-        echo "yt-search: $1 is a playback flag — use ut-play for playback" >&2
+        echo "yt-search: $1 is a playback flag — use t-play for playback" >&2
         exit 1
         ;;
     --info | --transcript | --subtitles | --sub-lang | --sub-langs)

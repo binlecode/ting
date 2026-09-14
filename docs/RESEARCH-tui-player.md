@@ -1,7 +1,7 @@
 # RESEARCH-tui-player —— 终端播放器：别人怎么搭的，我该抄什么、该躲什么
 
 > **先说这份调研是为什么做的**，因为它决定了每个数字该怎么读：
-> **uting 是我和几个朋友自用的一件工具 —— 工作时放点音乐，人从 TUI 放，agent 从 CLI 放。**
+> **ting 是我和几个朋友自用的一件工具 —— 工作时放点音乐，人从 TUI 放，agent 从 CLI 放。**
 > 不是要做这个领域的头部项目，也没有用户增长要交代。所以这份文档**不是竞品分析**，
 > 它只回答两个自用者的问题：**这件事别人是怎么做的**，以及**哪些做法值得抄、哪些是我不需要的**。
 >
@@ -51,15 +51,15 @@
 **方法**：每个候选查六项 —— 本机 PATH、Homebrew（core formula + cask）、crates.io、npm、PyPI、
 **同领域**的 GitHub 同名仓库；六项全空才算可用。"同领域"是必要限定：撞在别的生态上只是噪音，
 撞在同一批用户身上才是代价。**自用的工具照样要查**：命令要上自己的 PATH，撞名是自己每天踩。
-两轮应用的结果：项目名 **`uting` 六项全空**（2026-08-21），
+两轮应用的结果：项目名 **`ting` 六项全空**（2026-08-21），
 命令名 **`ut-*` 这类长前缀全空、光杆短名全被占**。由此得出的规则不是调研结果而是决定，
 住在 `ARCHITECTURE.md`「平级动词，没有内核」，这里不复述。**下表留档只为一个目的：挡住重复调研。**
 
 | 候选 | 六项结果 / 否掉的理由 |
 |---|---|
-| `uting` | **全空** —— 采用（`ARCHITECTURE.md`「平级动词，没有内核」）。已知瑕疵：挪威语里是真词，意为"陋习"，当彩蛋接受 |
+| `ting` | **全空** —— 采用（`ARCHITECTURE.md`「平级动词，没有内核」）。已知瑕疵：挪威语里是真词，意为"陋习"，当彩蛋接受  |
 | `tingyu` / `qingyin` | **全空** —— 备选，未采用 |
-| `ut-play` / `ut-search` 等长前缀 | **全空** —— 采用（`ARCHITECTURE.md`「平级动词，没有内核」） |
+| `t-play` / `ut-search` 等长前缀 | **全空** —— 采用（`ARCHITECTURE.md`「平级动词，没有内核」）  |
 | 光杆 `ut` | **全占** —— npm / PyPI / crates，外加 `boost-ext/ut` 1438★ |
 | `utt` | 被占 —— npm / PyPI，外加 `larose/utt` 349★ |
 | `ytt` | 撞 carvel 的 YAML 模板工具（1873★，`brew install ytt`），且撞的是同一批 k8s 用户 |
@@ -68,7 +68,7 @@
 | `tin` | 撞 Usenet 阅读器 |
 | `kiku`、单音节拼音（`yin`/`yun`/`sheng`/`qu`…）、`tuna`、`dial` | crates / npm 上已被抢完，或各有主 |
 
-**规律**：短的 `yt*` / `t*` 这块地已经被翻过一遍，还空着的只有拼前缀拼出来的 `uting`。
+**规律**：短的 `yt*` / `t*` 这块地已经被翻过一遍，还空着的只有拼前缀拼出来的 `ting`。
 
 ---
 
@@ -221,7 +221,7 @@
 - **`shellcheck --severity=warning` 基线是一个被跟踪的计数，不是一张干净的体检单**
   （2026-08-27 八个脚本重测，`--format=json1` 计数 —— 一行上落两条时 `grep '^In'` 会少数）
   共 **22 条**：SC2088×8、SC2128×5、SC2178×4、SC2174×3、SC2054×2、**SC2034×0**。
-  **2026-08-30 重测为 23 条**：SC2088 变成 9 —— 多的那一条是 `shell/uting` 的 `pref_value_ok`
+  **2026-08-30 重测为 23 条**：SC2088 变成 9 —— 多的那一条是 `shell/ting` 的 `pref_value_ok`
   里又一个 `"~/"*` **模式**（随写回闸进来），与下面那八条同族同为误报。别的分类一个没变。
   **2026-08-30 视图塌缩之后（同日晚）重测为 14 条**：SC2088×9、SC2174×3、SC2054×2，
   **SC2128/SC2178 归零**。这不是把它们修好了：`filter_live` / `read_query_input` /
@@ -233,7 +233,7 @@
   带来任何一条新的分类**，其中一条真实的 SC2034（`quality_sort_for_tier` 收下 mode 却不用它，
   因为这个站没有视频轨）在落地前就改掉了：外层 case 保留、只有一条 `*)` 分支，
   于是那张 (mode, tier) 表在三个引擎里形状相同，而"这个站把 mode 这一轴压没了"是看得见的。
-  - SC2128/SC2178 那 9 条（塌缩之前）**全在 `uting`、全是假阳性** —— `filter_live` /
+  - SC2128/SC2178 那 9 条（塌缩之前）**全在 `ting`、全是假阳性** —— `filter_live` /
     `read_query_input` 的 `local query=""` 与全局 argv 数组同名，shellcheck 不跟踪作用域。
     **每一个引擎文件与播放器文件里 SC2128/SC2178 一直是零。**
   - SC2174 那 3 条同形、同为已知可接受项：`mkdir -p -m 700` 的 mode 只作用于最深一层，
@@ -524,12 +524,12 @@ UI 与播放分离的架构里，MPRIS 该由谁来发布，是个真问题 —�
 4. **mpv 原生直链可播**：后半边产出的必须是 `mpv --no-ytdl` 直接支持的开放媒体直链，无私有二次解密或 DRM 阻碍；
 5. **免鉴权低风控高可用**：支持匿名开箱可用，无高频滑动人机验证、封号风控或易失效的 JSVMP 逆向包袱。
 
-**候选媒体源实测比对矩阵（2026-09-12 网调与本地实调）：**
+**候选媒体源实测比对矩阵（2026-09-12 网调与本地实调；SoundCloud / 播客于同日二次复核）：**
 
 | 候选平台 | 搜索机制（前半边） | 直链与播放（后半边） | 外部依赖 | 免登录可用性 / 风控现状 | 第一性原理判定 |
 |---|---|---|---|---|---|
-| **SoundCloud (`sc`)** | `yt-dlp` 原生 `scsearch`（实测 <1s 返回规范 JSON） | `yt-dlp` 提取标准 HLS `m3u8`，mpv 直接播放 | **零新增**（`yt-dlp` + `jq`） | **极高**（官方免登录开放，无风控阻断） | **✅ 最佳首选（工程与契约最契合）** |
-| **Apple Podcasts / RSS (`pod`)** | 官方 iTunes Search API（公开免鉴权 REST） | 各大托管商静态 MP3 直链，秒开播放 | **零新增**（纯 `curl` + `jq`，甚至免 `yt-dlp`） | **极高**（永久公开官方接口，零风控） | **✅ 最佳品类互补（填补播客长音频空白）** |
+| **SoundCloud (`sc`)** | `yt-dlp` 原生 `scsearch` 可返回契约所需搜索元数据 | `yt-dlp` 提取标准 HLS `m3u8`，mpv 可直接解码；Set 的 flat 条目缺时长 | **零新增**（`yt-dlp` + `jq`） | 匿名搜索与样本解析可用；官方 extractor 明示约 600 请求/10 分钟的 API 限流 | **⚠️ 条件首选：单曲双半边成立，`--items` 与请求预算未闭环** |
+| **Apple Podcasts / RSS (`pod`)** | iTunes Search API 可匿名搜索单集 | Apple 页面可由 yt-dlp 解出 MP3；直接 MP3 的托管 host 随节目变化 | **零新增路径存在**（`curl` + `jq` + 既有 `yt-dlp`） | 样本匿名可用；未测得足以支撑“永久”“零风控”的长期证据 | **⚠️ 品类互补，但 host 路由、Lookup 截断与 RSS 身份未决** |
 | **QQ 音乐 (TME)** | Web 接口 `musicu.fcg` | `GetVkeyServer / CgiGetVkey`，VIP 曲目锁 30s | 需 Node.js 跑 JSVMP 逆向签名 | **极低**（未带 sign/未登录直接返回 `code: 2001` 弹登录） | **❌ 否决（违反零依赖、高维护负债）** |
 | **小宇宙播客 (Xiaoyuzhou)** | **无公开 Web 搜索接口**，仅 App API | 需传设备指纹与 App 请求头 | 需逆向 Token 管理 | **极低**（依赖动态 `x-jike-access-token`，第三方调用封号） | **❌ 否决（触碰「喜马拉雅 NO」红线）** |
 | **汽水音乐 (Luna / 字节)** | PC 接口需设备指纹与专有签名 Header | 音频流经 `AES-CTR` 加密，带 `spade_a` | 需本地解密中间层 | **差**（无直链，需先下流再解密才能播） | **❌ 否决（违反 mpv 纯直链架构）** |
@@ -538,12 +538,14 @@ UI 与播放分离的架构里，MPRIS 该由谁来发布，是个真问题 —�
 
 **实测要点与推荐结论：**
 
-1. **推荐首选：SoundCloud (`sc`)**
-   - **双半边实测**：`yt-dlp --dump-json --flat-playlist "scsearch5:lofi"` 在 1.1s 内返回包含 `id/title/duration/webpage_url/view_count/thumbnails` 的完整元数据；解析端调用 `yt-dlp -j -f "ba/b" <url>` 直接输出 `https://playback.media-streaming.soundcloud.cloud/.../playlist.m3u8`，mpv 原生直接播放；同时天然支持 SoundCloud Sets/Playlists 容器（对应 `--items`）。
-   - **生态价值**：弥补海外独立音乐、电子音乐（EDM/House）、DJ Sets 与长音频混音生态，无版权碎片墙。
-2. **推荐备选：开放播客生态 (`pod`，Apple Podcasts / iTunes Search API + RSS Enclosure)**
-   - **双半边实测**：Apple 官方 iTunes Search API（`https://itunes.apple.com/search?term=...&entity=podcastEpisode`）为永久公开 REST 接口，纯 `curl + jq` 在 200ms 内完成；各大播客托管商分发标准静态 MP3 直链，零风控、毫秒级起播。
-   - **生态价值**：填补系统在长音频谈话、科技播客、新闻等专业听觉场景的空白。
+1. **条件首选：SoundCloud (`sc`)**
+   - **已经闭环的半边**：`yt-dlp 2026.08.19` 的 `scsearch` 返回 `id/title/duration/webpage_url/view_count/thumbnails`；数字 Track ID 与网页 URL 都能解出签名 HLS，`mpv 0.41.0 --no-ytdl --ao=null --frames=1` 实测解码为 AAC 44100 Hz 双声道。
+   - **尚未闭环的容器**：`yt-dlp --flat-playlist -J https://soundcloud.com/forss/sets/ecclesia` 的条目有 `id/url/title`，却没有 `duration` 或 `live_status`，不能直接投影成当前 `--items` 条目。非 flat 是否会把一次列表放大为逐曲请求、并撞上 extractor 明示的约 600 请求/10 分钟限流，仍需测量。
+   - **长音频不是差异点**：`scsearch3:lofi hip hop` 的样本含 7200.255 秒与 3704.629 秒 DJ Mix；SoundCloud 也需要面对长音频体验，只是它不阻断现有显式 seek 与 `--start`。
+2. **待裁决候选：开放播客生态 (`pod`)**
+   - **单集路径成立**：iTunes Search `entity=podcastEpisode` 返回 Apple 单集 ID、页面、时长、简介与 MP3；Apple 单集页可由 yt-dlp 解出直接 MP3。
+   - **节目容器未闭环**：故事 FM Lookup 声明 `trackCount:991`，`limit=200` 只给最近 200 集；改变 offset 仍返回同一批。RSS 经 yt-dlp 可见全部 991 集与时长，但 flat 条目的稳定 ID、规范网页 URL 和分批成本仍需设计。
+   - **路由身份未闭环**：直接 MP3 的 host 由各节目托管商决定；若 resolver 接受任意 host，就违反本仓“一引擎一站点白名单”的现行边界。只接受 Apple 页面可以形成 Apple Podcasts 引擎，但不能据此称为开放播客引擎。
 3. **国内源否决留档**：
    - QQ 音乐：`musicu.fcg` 全面启用 JSVMP 与动态 sign 校验，未登录返回 `{"code":2001, "feedbackURL":".../login"}`；
    - 小宇宙：Web 端完全无公开搜索接口，App 接口依赖 `x-jike-access-token`，被官方严密风控封号（见 `ultrazg/xyz` 警告）；
@@ -641,23 +643,26 @@ spotuify 用守护进程 + unix socket 解决它；本仓用 detached 进程 + �
    未来国内音乐平台若继续收紧免登录音源接口，像 `go-music-dl` 这种依靠 `music-lib`
    多平台逆向算法解密的库能否维持长期维护。
 
-### 12.3 2026-09-12 已实测关闭的第四音源候选问号
+### 12.3 2026-09-12 第四音源候选复核
 
-1. **SoundCloud 的双半边闭环度（已证可用）**：
+1. **SoundCloud 的搜索、单曲解析与播放（已证可用）**：
    - 搜索：`yt-dlp --dump-json --flat-playlist "scsearch5:lofi"` 实测可在 1.1s 内返回平铺元数据（带 id/title/duration/thumbnails/webpage_url）；
    - 解析：`yt-dlp -j -f "ba/b"` 实测直接提取标准 HLS `m3u8` 直链，`mpv --no-ytdl` 无缝起播；
-   - 容器：支持 Sets/Playlists 批量展开，完全对接套件 `--items` 动词；零新增外部依赖。
-2. **开放播客生态（Apple Podcasts / iTunes Search API + RSS）（已证可用）**：
-   - 搜索：`https://itunes.apple.com/search?term=...&entity=podcastEpisode` 官方 REST 接口永久免鉴权、免登录，纯 `curl + jq` 在 200ms 内响应；
-   - 解析：托管商 CDN 直接输出原始 MP3/AAC 静态直链，无防盗链与鉴权头要求，生命周期永久有效；
-   - 架构契合：纯 `curl + jq` 双半边自洽，甚至不需要 `yt-dlp`。
-3. **QQ 音乐 / TME 免登录与逆向算法可用性（已证不可行）**：
+   - 起播偏移：SoundCloud 的 `#t=1:30` 会让 yt-dlp 回退 generic extractor，且不给 `start_time`；若接入，引擎必须在请求前自行解析并剥离。
+2. **SoundCloud Sets/Playlists（重开，尚未闭环）**：
+   - `--flat-playlist -J` 的 Set 顶层能给出标题、ID 与总数，条目却没有 `duration` 或 `live_status`；这不满足套件当前 `--items` 的可播条目判据；
+   - 非 flat 路径会不会逐曲取数、耗时多少、在大 Set 上是否触发约 600 请求/10 分钟的上游限流，仍须实测；因此不能再写“完全对接 `--items`”。
+3. **开放播客生态（单集已证，容器与路由重开）**：
+   - 搜索与单集：iTunes Search 可匿名返回单集记录，Apple 页面可由 yt-dlp 解析出 MP3 直链与时长；
+   - 容器：样本节目共有 991 集，而 Lookup 至多返回最近 200 集，offset 实测不翻页；RSS 能看到全部条目，但稳定 ID、规范 URL 与分页成本仍需设计；
+   - 路由：各托管商 MP3 不共享一个站点 host，不能在未修改架构边界的情况下让一个 `pod-resolve` 接受任意直链。Apple-only 与开放 RSS 是两个不同的引擎命题。
+4. **QQ 音乐 / TME 免登录与逆向算法可用性（已证不可行）**：
    - 实测 `https://u.y.qq.com/cgi-bin/musicu.fcg` 接口：未带动态签名或未携带登录态时，直接返回 `{"code":2001, "feedbackURL":"https://y.qq.com/wk_v17/common_login.html#/login"}`；
    - 站方已上深度混淆的 JSVMP 虚拟机与动态 sign 签名，且版权歌曲全量锁 VIP，纯 bash 3.2 无法在零依赖下稳定维护。
-4. **小宇宙播客免鉴权与封号风险（已证不可行）**：
+5. **小宇宙播客免鉴权与封号风险（已证不可行）**：
    - 实测与查阅开源客户端（`ultrazg/xyz`, `MosesHe/xiaoyuzhoufm-mcp`）证实：小宇宙 Web 站无任何搜索端点；App API 强制校验 `x-jike-access-token`；
    - 站方风控对第三方 API 调用执行封号策略，触发与「喜马拉雅 NO」相同的否决判据。
-5. **汽水音乐直链私有加密传输机制（已证不可行）**：
+6. **汽水音乐直链私有加密传输机制（已证不可行）**：
    - 查阅 `guowenye/qishui-api` 与 `music-lib` 源码证实：音频直链采用私有 `AES-CTR` 加密，返回 `spade_a` 需本地二次解密，无法直接作为直链喂给 mpv 播放。
 
 ---

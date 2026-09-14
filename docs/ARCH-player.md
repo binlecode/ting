@@ -4,7 +4,7 @@
 
 ## 模块功能和结构
 
-**管什么**：**播放执行、脱离终端的后台生命周期、IPC 通信与两大持久存储** —— 核心执行者 `shell/ut-play`（模式映射、mpv 参数装配、错误分类、detached 进程组、状态机与墓碑记录）、播放队列消费，以及两个不认站点的持久存储：播放列表存储 `ut-playlist`（JSON 文件、互斥锁、原子写入）与收听日志 `ut-history`（JSONL、无锁 `O_APPEND`、防并发截断）。
+**管什么**：**播放执行、脱离终端的后台生命周期、IPC 通信与两大持久存储** —— 核心执行者 `shell/t-play`（模式映射、mpv 参数装配、错误分类、detached 进程组、状态机与墓碑记录）、播放队列消费，以及两个不认站点的持久存储：播放列表存储 `t-playlist`（JSON 文件、互斥锁、原子写入）与收听日志 `t-history`（JSONL、无锁 `O_APPEND`、防并发截断）。
 🔴 **播放器绝不接触站点知识**：不调 `yt-dlp`、不决定 Cookie、不拼音源 URL，全靠调用 `<engine>-resolve` 获得直链。
 
 **不管什么**（边界表，走错门会得到相反的建议）：
@@ -21,11 +21,11 @@
 ### 一张图：播放器生命周期与存储系统架构
 
 ```
-   调用方（CLI / Agent / uting）
+   调用方（CLI / Agent / ting）
         |
         v
    +-----------------------------------------------------------------------------------------+
-   | ut-play（主进程：前置 reap_dead_players 墓碑清理 -> 参数校验 -> 动词路由）             |
+   | t-play（主进程：前置 reap_dead_players 墓碑清理 -> 参数校验 -> 动词路由）              |
    |   [前台/后台播放调度]                                                                   |
    |     调用 <engine>-resolve 获取直链 -> run_mpv（唯一 mpv 接缝）                          |
    |   [生命周期控制动词]                                                                    |
@@ -35,22 +35,22 @@
         | -d / --queue（后台脱离模式: set -m 创建独立进程组）| 交互控制
         v                                                    v
    +-------------------------------------------+   +-----------------------------------------+
-   | detached 独立进程组                       |   | 运行时临时目录: $TMPDIR/uting-<uid>/    |
+   | detached 独立进程组                       |   | 运行时临时目录: $TMPDIR/ting-<uid>/     |
    |   detached_child_loop (队列消费主循环)    |   |   players/<id>.json     活动播放器状态  |
    |     |                                     |   |   players/dead/<id>.json 死亡记录(墓碑) |
    |     +-> mpv --input-ipc-server=<sock>     |<->|   mpv-<id>.sock         IPC 通信套接字  |
    |           单曲播放结束 -> detached_epitaph|   |   queue-<id>.json       待播队列文件    |
-   |                        -> ut-history 记录 |   |   lock-<id>/            操作文件互斥锁  |
+   |                        -> t-history 记录 |   |   lock-<id>/            操作文件互斥锁   |
    +----+--------------------------------------+   +-----------------------------------------+
         |
-        v ut-history --record - (管道行写回，UT_HISTORY=0 可关闭)
+        v t-history --record - (管道行写回，UT_HISTORY=0 可关闭)
    +-----------------------------------------------------------------------------------------+
    | 持久化存储层: $UT_STATE_DIR/（用户级数据，与站点及播放状态解耦）                       |
-   |   [ut-playlist 歌单库]                                                                  |
+   |   [t-playlist 歌单库]                                                                   |
    |     $UT_STATE_DIR/playlists/<name>.json (mkdir 互斥锁 + 临时文件原子替换原子覆盖)       |
-   |   [ut-history 收听日志]                                                                 |
+   |   [t-history 收听日志]                                                                  |
    |     $UT_STATE_DIR/history/<YYYY-MM>.jsonl (无锁 O_APPEND，单行强制限制 < 4096 字节)     |
-   |   存储数据模型: 一条记录 = {engine, url, title...} = 等价于一次 ut-play 完整可播调用    |
+   |   存储数据模型: 一条记录 = {engine, url, title...} = 等价于一次 t-play 完整可播调用     |
    +-----------------------------------------------------------------------------------------+
 ```
 
@@ -61,7 +61,7 @@
 
 ## 接口与 API
 
-`ut-play` 的动词面（播放、`-d` 生命周期、五个 socket 动词、三个队列动词）与两个存储的
+`t-play` 的动词面（播放、`-d` 生命周期、五个 socket 动词、三个队列动词）与两个存储的
 动词面，argv、信封与退出码由各命令的 `--help` 陈述、由 `tests/contract.sh` 证明；
 形状的 why 在 `ARCH-cli-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
 那个 mpv socket 是契约的公开部分（「运行时 IPC」）。
@@ -75,11 +75,11 @@ prose 会腐烂，检查会红。
 **终端可视化（`-f viz`，别名 `waves` / `wave`）** —— 前台阻塞，占满整个 pane：
 
 ```sh
-ut-play -f viz -- URL                              # 已证 · 最小调用
-UT_VIZ_STYLE=wave ut-play -f viz -- URL            # 已证 · 这一次换风格（默认 bars，两个都跑过）
-ut-play -f viz --volume 0 -- URL                   # 已证 · 只要画面
-ut-play -f viz --start 90 --quality low -- URL     # 已证 · 起播偏移 + 低码率（可视化不看画质）
-ut-play --engine bili -f viz -- BV…                # 已证 · 换引擎，同一个 mode
+t-play -f viz -- URL                               # 已证 · 最小调用
+UT_VIZ_STYLE=wave t-play -f viz -- URL             # 已证 · 这一次换风格（默认 bars，两个都跑过）
+t-play -f viz --volume 0 -- URL                    # 已证 · 只要画面
+t-play -f viz --start 90 --quality low -- URL      # 已证 · 起播偏移 + 低码率（可视化不看画质）
+t-play --engine bili -f viz -- BV…                 # 已证 · 换引擎，同一个 mode
 ```
 
 **「已证」在这里证的是 argv，不是画面。** 五行每一行 `tests/contract.sh` 都以同样的 flag、
@@ -118,7 +118,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 只能靠人记得，一个报错的陷阱由套件记得。
 
 门只守**播放**那条路：带着生命周期动词时 `-f` 本来就不画任何东西，而 `-j` 正是读回答的常规
-方式，所以 `ut-play --status -j` 一类的调用不受影响。
+方式，所以 `t-play --status -j` 一类的调用不受影响。
 
 **第四条是唯一一条来自「环境」而不是 argv 的**，2026-09-01 落地，而它真正的内容是一个**选择**：
 非 UTF-8 locale 下**拒绝，不降级**。两个候选是「画布与 algo 一起降到纯 ASCII」和这一条。
@@ -126,7 +126,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 换回来的是一张烂到会被当成 bug 的图；至于最顺手的那个杠杆 `--vo-tct-algo=plain`，`ROADMAP.md`
 里本来就有一条记着的 NO 否掉它，理由是同一个。**一句说得清怎么改的拒绝，胜过一张不能信的图。**
 
-它**不读 `YT_ASCII`**，而且不该开这个头：那是 `uting` 给自己渲染器用的 chrome 开关，播放器不读
+它**不读 `YT_ASCII`**，而且不该开这个头：那是 `ting` 给自己渲染器用的 chrome 开关，播放器不读
 它 —— 一个 UI 的知识不往下渗进播放器（`CLAUDE.md` 的总纲）。locale 是事实，`YT_ASCII` 是某一个
 面对这个事实的意见。判据取 `LC_ALL` → `LC_CTYPE` → `LANG`，与 mpv 自己解析 CTYPE 的顺序相同，
 所以不必再去跑一次 `locale`；三个都没设 = C locale，照样拒绝 —— 那正是 cron / launchd 里出事的
@@ -143,7 +143,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 ### 模式 → 格式 → mpv —— **模式是共享的，格式表是引擎的**
 
 `-f MODE` 是播放器的 flag，原样传给引擎；一个模式作为格式字符串**意味着什么**是站点知识，
-所以 `format_for_mode()` 住在每个 `<engine>-resolve` 里，绝不在 `ut-play` 里。播放器从头到尾
+所以 `format_for_mode()` 住在每个 `<engine>-resolve` 里，绝不在 `t-play` 里。播放器从头到尾
 没见过格式字符串，除了把它当作一个不透明的值记进播放器文件、且再也不读。
 `--quality TIER` 是同一分界线的另一面：档位在**门口**校验（bogus 档退 1），然后**原样**转发
 给引擎 —— (mode, tier) → yt-dlp sort 的那张表是引擎自己的（`quality_sort_for_tier`），
@@ -153,7 +153,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 这张表**跨三个文件**，所以它在这里陈述一次 —— 没有任何一个文件单独说得出它：
 
 ```
-  MODE（播放器 flag）  <engine>-resolve: format_for_mode()   ut-play: mpv 选项集
+  MODE（播放器 flag）  <engine>-resolve: format_for_mode()   t-play: mpv 选项集
   ──────────────────   ─────────────────────────────────     ───────────────────────────────
   audio                YT_AUDIO_FORMAT (ba/b)                 --no-video（仅音频）
   video                YT_VIDEO_FORMAT (bv*+ba/b)             默认 VO
@@ -163,7 +163,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
                        （给了 -S SORT 时原样转发为 --format-sort）
 ```
 
-播放接缝只有一个：`shell/ut-play` 的 `run_mpv()` —— 它读引擎调用填好的 `RESOLVED_*` 全局量，
+播放接缝只有一个：`shell/t-play` 的 `run_mpv()` —— 它读引擎调用填好的 `RESOLVED_*` 全局量，
 拼出 mpv 的命令行（`--no-ytdl`、detached 才有的音量与 IPC socket、来自信封的请求头与媒体标题、
 `stream_urls[0]` 与可能的 `--audio-file`）。
 
@@ -188,7 +188,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 `video`/`fast` 会把媒体**标题**经 libass 渲染成视频 OSD。当标题里带着没有字体覆盖的字形
 （emoji —— 在 YouTube 上遍地都是），libass 会逐帧吐一条 `fontselect: failed to find any
 fallback with glyph …`，macOS CoreText 再吐一条 `.LastResort` note。再加上 mpv 默认启动会打
-8–10 行元数据，把 `uting` 的菜单顶进 scrollback、并挤掉进度条。修法分两部分，且要让窗口
+8–10 行元数据，把 `ting` 的菜单顶进 scrollback、并挤掉进度条。修法分两部分，且要让窗口
 OSD/OSC 与终端进度条都保持稳定：
 
 1. **`--msg-level=display-tags=warn,osd/libass=error`** —— 从源头压掉 libass 警告与多行元数据
@@ -257,7 +257,7 @@ rc 130（`stopped_by_user`），其余一切保守落到 `unknown`。`forbidden`
 
 `?t=601s` 是 YouTube 的语法，`?t=601` 是 B 站的语法。**播放器一种都不认**，它认得的只有
 "从第 N 秒开始"这一件事，而那是 mpv 的一个 flag。写法的识别在引擎
-（`ARCH-engine.md`「起播偏移」），缝是信封的 `start_seconds`。让 `ut-play` 去 parse query
+（`ARCH-engine.md`「起播偏移」），缝是信封的 `start_seconds`。让 `t-play` 去 parse query
 string，就等于把站点知识重新长回播放器里 —— 正是 ARCHITECTURE.md「站点知识的边界」划走的那部分。
 
 **两个来源，一个去处。** `resolve_media` 把信封的 `start_seconds` 读进 `RESOLVED_START`
@@ -280,13 +280,13 @@ string，就等于把站点知识重新长回播放器里 —— 正是 ARCHITEC
 （「运行时 IPC」），所以 `--start 601` 之后它自然从 601 起报。起播偏移是那个数的**成因**，
 不是一个新事实 —— 多一个只写不读的键，正是这个记录一贯拒绝的那种字段。
 
-**TUI 上没有这个功能的入口，而那不是漏了人面。** `uting` 的行来自 `<engine>-search`，而搜索
+**TUI 上没有这个功能的入口，而那不是漏了人面。** `ting` 的行来自 `<engine>-search`，而搜索
 结果的 `url` 从来不带 `t=` —— 没有任何一条 TUI 里的行会**携带**一个偏移，所以没有键位可加。
 ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是满足的：agent 面就是 `--start`
 加信封的 `start_seconds`，而它本来就没有人面。（真要从 TUI 跳到某一秒，那个动作已经有词了 ——
 `--seek-to`。）
 
-**`ut-history` 的 `seconds` 也不变。** 它是墙钟差，回答"你听了多久"，与从哪里开始无关。
+**`t-history` 的 `seconds` 也不变。** 它是墙钟差，回答"你听了多久"，与从哪里开始无关。
 已知后果，明确接受：一条从 601s 听到结尾的行，读起来是"听了 3000 秒 / 全长 3601 秒"，看着像
 没听完 —— 但那是**如实记录了收听时长**。要区分"听完了"与"听了一半"的消费方今天一个也没有；
 出现了再说（「收听日志」的同一条界线）。
@@ -297,7 +297,7 @@ ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是�
 
 ### 进程组模型（为什么是它，而不是 PID 树）
 
-一次 detached 播放是 `bash ut-play`，加上引擎那些短命的 `<engine>-resolve`/`yt-dlp`/`curl`
+一次 detached 播放是 `bash t-play`，加上引擎那些短命的 `<engine>-resolve`/`yt-dlp`/`curl`
 子进程，再加上 `mpv` —— 在没有 curl 的机器上，还可能有**一个更晚才生出来的（重试）mpv**。
 两个事实让"朴素地杀进程树"失效：
 
@@ -309,7 +309,7 @@ ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是�
 所以它永远够得到每一个后代。
 
 ```
-   detach_play()                     # shell/ut-play
+   detach_play()                     # shell/t-play
       ensure_state_dir()             # 0700 的 STATE_DIR + players/（socket 是一条控制通道）
       id = new_player_id()           # mktemp token；启动前 socket 路径就已知
       set -m                         # monitor 模式：被后台化的作业成为组长
@@ -320,7 +320,7 @@ ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是�
       写下 players/<id>.json，再 rm 掉那个光秃秃的 mktemp token（状态住在 <id>.json 里）
 
    ┌─ 进程组  pgid = 57678（播放器 <id>）───────────────────────┐
-   │  57678  bash ut-play -f audio --engine yt HANDLE（组长）    │
+   │  57678  bash t-play -f audio --engine yt HANDLE（组长）    │
    │    ├─ <engine>-resolve（yt-dlp + curl，短命）               │
    │    └─ 57712  mpv --no-ytdl --input-ipc-server=…sock         │ ← 改挂到 init
    └──────────────────────────────────────────────────────────────┘   但 pgid 不变
@@ -330,20 +330,20 @@ ARCHITECTURE.md「两个存储」"每个功能都要有 agent 面"在这里是�
    group_alive(pgid): pgid 先过 is_live_pid（正整数），再看 pgrep -g pgid 有没有成员
 ```
 
-soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()` /
+soft ref：`shell/t-play` 的 `detach_play()` / `stop_group()` / `group_alive()` /
 `is_live_pid()` / `ensure_state_dir()` / `new_player_id()`。
 
 **记录里读回来的 pid 是不可信输入，而 0 是个通配符。** `pgrep -g 0` 与 `kill -TERM 0` 在
 macOS 与 Linux 上都指"**调用者自己**的进程组"。所以一条 pid 没写成、抢跑或被截断的记录，
 若不设门禁，代价不是"这次播放停不下来"：`group_alive` 恒真，随后 `stop_group` 把 TERM
-广播给 ut-play 自己、启动它的那个 shell、以及那个终端的整个前台组 —— 一次 `--stop` 带走的是
+广播给 t-play 自己、启动它的那个 shell、以及那个终端的整个前台组 —— 一次 `--stop` 带走的是
 整个会话。因此每一条会发信号的路径先问一次 `is_live_pid`：**正整数，否则一个信号都不发**。
 `--next` 的 USR1 打的是 pid 而不是组，但 USR1 的默认处置就是终止，0 在那儿同样致命，
 所以它在自己的调用点上问同一个问题。这条门禁与下一段的 pid 复用是同一件事的两半：
 它挡住的是**无效**的 pid，下一段说的是**有效、但已经不是它**的那个 pid。
 
-**记录里的 `{engine, url}` 就是这条记录代表的那次调用**（`ut-play --engine E -- URL`），
-与 `ut-playlist` 存的记录同一个形状。它在启动时写下、并在每条队列轨道回填时跟着换 ——
+**记录里的 `{engine, url}` 就是这条记录代表的那次调用**（`t-play --engine E -- URL`），
+与 `t-playlist` 存的记录同一个形状。它在启动时写下、并在每条队列轨道回填时跟着换 ——
 一条队列可以混源，所以它不是一次性的（「队列」）。
 
 **句柄是一个单调 token，不是 pid。** `new_player_id` 用 `basename "$(mktemp …)"` 铸出句柄 ——
@@ -361,7 +361,7 @@ glob 永远不会碰它，否则每次启动都要漏一个文件。
 stdin 重定向到 `/dev/null` —— 但只在作业控制**关**的时候，而那恰恰是上面为了拿到进程组而
 `set -m` 打开的东西。于是买下 pgid 的那两行，悄悄把**启动者的** stdin 交给了子进程，对一个
 交互式调用方来说那就是终端。mpv 于是保持 `input-terminal` 打开，读的是与启动者同一个 tty：
-在 `uting` 下两个进程逐字节抢输入，而 mpv 自己的默认键位占着 `[`/`]`（播放**速度**）、`9`/`0`、
+在 `ting` 下两个进程逐字节抢输入，而 mpv 自己的默认键位占着 `[`/`]`（播放**速度**）、`9`/`0`、
 `Space`、`q`、`s`、`m` —— 与 TUI 绑的是同一批键。谁的 `read()` 赢了字节就归谁，于是按键
 "时灵时不灵"，mpv 赢的时候 `[`/`]` 还会悄悄改变流的速度。用 `lsof` 在 pty 下验证过：修之前，
 包装层与 mpv 都持有 `/dev/ttysNNN`，mpv 答 `input-terminal=true`；修之后两者都持有 `/dev/null`，
@@ -387,7 +387,7 @@ stdin 重定向到 `/dev/null` —— 但只在作业控制**关**的时候，�
 
 > **为什么回填不用后台作业 —— 记下来是因为这个坑是通用的。** 一个后台作业（比如每次 detached
 > 播放额外跑一整个 `yt-dlp --print "%(title)s"`）会继承 shell 的 stdout，于是一个**捕获**我们
-> 输出的调用方（`out=$(ut-play -d -j …)`，正是 `uting` 干的事）会一直阻塞到那个管道的**每一个**
+> 输出的调用方（`out=$(t-play -d -j …)`，正是 `ting` 干的事）会一直阻塞到那个管道的**每一个**
 > 写端都关闭为止，而不是到我们退出为止：一次"瞬时"的 detach 实测**捕获下 1.67s、不捕获 0.04s**，
 > fd 一重定向就回到 0.04s。信封喂出来的回填根本没有后台作业，所以这个坑在这里不会出现 ——
 > 但任何未来写在动词里、且调用方可能捕获的 `… &`，都必须自己关掉 fd。
@@ -399,7 +399,7 @@ stdin 重定向到 `/dev/null` —— 但只在作业控制**关**的时候，�
    它启动一个独立的播放器。生命周期动词负责挑目标。
 
         ┌───────────────── （没有活着的播放器）◄────────────────┐
-        │              ut-play -d -- HANDLE   （多少次都行）      │
+        │              t-play -d -- HANDLE   （多少次都行）      │
         │                             ▼                          │
         │                   ┌────────────────────┐               │
         │  --status → 列出  │ N 个活播放器        │ --set-volume N│
@@ -410,7 +410,7 @@ stdin 重定向到 `/dev/null` —— 但只在作业控制**关**的时候，�
         │     时 --id 可省） resolve_target       → {ambiguous,   │
         └──── 删掉它的 state/sock/log              players:[...]} 退 4）
 
-   状态：${TMPDIR:-/tmp}/uting-$(id -u)/players/<id>.json（+ mpv-<id>.sock、mpv-<id>.log、
+   状态：${TMPDIR:-/tmp}/ting-$(id -u)/players/<id>.json（+ mpv-<id>.sock、mpv-<id>.log、
          queue-<id>.json），墓碑在 players/dead/<id>.json —— 其中失败的**队列曲目**是
          <id>-q<pos>.json，形状相同（「队列」）
 ```
@@ -448,12 +448,12 @@ stdin 重定向到 `/dev/null` —— 但只在作业控制**关**的时候，�
 
 **`-d` 拒绝 `-f ascii|viz`。** 一个 detached 进程没有控制终端，所以终端渲染类的模式无处可画；
 这道守卫在解析期就执行（`die`），而不是默默启动一个往自己日志里涂转义序列的播放器。`audio` 是
-常态；`video`/`fast` 被接受，因为它们的 mpv 窗口是一个不需要这个终端的 GUI 面。`uting` 用同一
+常态；`video`/`fast` 被接受，因为它们的 mpv 窗口是一个不需要这个终端的 GUI 面。`ting` 用同一
 张清单校验 `-f`。
 
 **`-d -j` 的信封带着 `sock` 与 `log`。** 它们本来就在状态文件里，而信封里没有它们时，客户端只能
 从播放器**私有的**状态布局去**重建** socket 路径 —— 在第二个脚本里硬编码
-`$TMPDIR/uting-$(id -u)/mpv-<id>.sock`，一旦播放器搬了状态目录就会静默失效（「运行时 IPC」）。
+`$TMPDIR/ting-$(id -u)/mpv-<id>.sock`，一旦播放器搬了状态目录就会静默失效（「运行时 IPC」）。
 
 ### 运行时 IPC 控制（`--set-volume`、`--pause`/`--resume`、`--seek`/`--seek-to`）
 
@@ -484,7 +484,7 @@ N 条互相独立的控制通道。于是多播放器完全是**这一层**的�
 尽力而为的风险。`patch_player_meta` **另外**还做 pid 守卫，于是解析窗口内的一次 `--stop` 会赢，
 它的回收永远不会被一次迟到的标题写入覆盖掉。
 
-**IPC socket 是 `-d` 契约的一个公开部分（而且 `volume` 是活读的）。** `uting` 把每拍一次的**读**
+**IPC socket 是 `-d` 契约的一个公开部分（而且 `volume` 是活读的）。** `ting` 把每拍一次的**读**
 （进度 + 暂停态）和按住不放的音量键直接走 socket，而不是每次按键 fork 一个动词：它的
 Now-Playing 视图每秒刷一次，否则每一拍都要付一条进程链。它的暂停与 seek 键**确实**搬去了动词 ——
 一次按键一次调用付得起，一拍一次付不起 —— 而 ARCHITECTURE.md「已知约束」记着划出这条线的那次实测。
@@ -493,14 +493,14 @@ Now-Playing 视图每秒刷一次，否则每一拍都要付一条进程链。�
 批准了那条 JSON-RPC 通道。对 `--status` 的后果：状态文件里的 `volume` 只知道启动时的 `--volume`
 与 `--set-volume`，所以一个经 socket 改音量的客户端会让它说谎。因此 `--status` 报的是**活的**
 音量，取不到时才回退到记录值。它对 `nc` 是软门，从而保住 `--status`"只依赖 jq"的性质。
-已验证：在 `uting` 里按两下 `0`，把一个以 `--volume 0` 启动的播放器推到 `10`，`--status` 报的
+已验证：在 `ting` 里按两下 `0`，把一个以 `--volume 0` 启动的播放器推到 `10`，`--status` 报的
 就是 `10` —— 只读记录值的话它会永远报 `0`。
 
 **`--status` 也交出 `sock` 与 `log`，理由与 `-d` 完全一样。** `-d` 的信封把 socket 交给了**发起
-那次播放**的客户端。但接管一个不是自己起的播放器的客户端（`uting` 启动时的探测，ARCH-tui.md
+那次播放**的客户端。但接管一个不是自己起的播放器的客户端（`ting` 启动时的探测，ARCH-tui.md
 「启动时接管」）从来没见过那个信封，它手上只有 `--status`。少了这一步投影，它唯一的出路就是照着
 状态目录布局把 `$STATE_DIR/mpv-<id>.sock` 拼出来 —— 正是 `-d` 信封当初为了消灭而存在的那份重复，
-而 `uting` 确实曾经硬编码过一次。这两个键状态文件本来就存着，所以补的是投影，不是新事实：
+而 `ting` 确实曾经硬编码过一次。这两个键状态文件本来就存着，所以补的是投影，不是新事实：
 `--status` 的消费方要么多收到两个它不读的键，要么终于能控制它看见的播放器。
 
 **十三个属性，一次往返（`live_props` / `read_player_live`）。** 同样的论证覆盖 `pause`、
@@ -550,7 +550,7 @@ video-format / width / height（实测 2026-09-04，经 ne 引擎的 mp3：四�
 **它是一个总是在场的对象，而不是一组可能缺席的键。** `media` 永远有全部九个成员，取不到就是
 `null`；让调用方去分辨"键不在"与"值是 null"，是白让人多做一次判断 —— 与 `failed:[]` 永远在场
 是同一个论证。人机面刻意**不**印它：`--status` 的散文行连 position 那一对都放弃了（"要playhead
-的人有 `uting`"），九个字段更不可能挤上去，而"到底在解码什么"的人机面是 `uting` 的详情块
+的人有 `ting`"），九个字段更不可能挤上去，而"到底在解码什么"的人机面是 `ting` 的详情块
 （ARCH-tui.md「编排」的 details 段），那里有地方摊开。散文那一路仍然读满十三个属性 —— `read_player_live`
 是**一个**函数，null 政策只存在一份，而代价是一条它本来就要开的连接上的几行字，不是第二次往返。
 
@@ -575,7 +575,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 留在 netcat 上，用 `request_id` 过滤买回健壮性 —— 比引入一个工具链其余部分都不需要的依赖便宜。
 **具体用哪个 netcat 由 `resolve_nc_unix` 按能力探测**（`-h` 文本里有没有 `-U`）：BSD/openbsd 的
 `nc -U -w1` 优先，没有就落 `ncat -U -w 1 -i 1`（ncat 的 `-w` 只管连接超时，空闲兜底是 `-i`），
-两个都没有，socket 动词才拒。`ut-play` 与 `uting` 各带一份探测（十个对等文件不共享库）。延迟是
+两个都没有，socket 动词才拒。`t-play` 与 `ting` 各带一份探测（十个对等文件不共享库）。延迟是
 地板不是天花板（约 ≤1s/次）：mpv 把 socket 一直开着，所以回复之后若没有后续事件，读端可能一直
 坐到超时 —— 对人驱动的调节没问题，对紧循环不行。探测在分派处惰性把门，绝不进全局 `require_deps`，
 于是一次光秃秃的搜索永远不必要求它。
@@ -589,7 +589,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 - lwilletts/mpvc —— `set_volume` 命令形状的参考；它的回复解析（grep `"success"`、没有
   `request_id`）**刻意不抄**。
 
-### 队列 —— 一个正在被消费的播放列表（`--queue`、`--enqueue`、`--next`）
+### 队列 —— 一个正在被消费的播放列表（`--queue`、`--enqueue`、`--next`、五个 `--queue-*`）
 
 一个 detached 播放器播的是一条**队列**。单个句柄就是一条长度为一的队列，于是只有一条代码路径
 而不是两条：每一次 `-d` 启动都在 fork 之前写下一份队列文件，正是这一点让 `--enqueue`、`--next`
@@ -597,7 +597,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 `--status` 的 `queue` 键在一个活播放器上永不为 null。
 
 ```
-   ${TMPDIR:-/tmp}/uting-$(id -u)/queue-<id>.json    {schema:1, pos, items:[{engine,url,…}]}
+   ${TMPDIR:-/tmp}/ting-$(id -u)/queue-<id>.json    {schema:1, pos, items:[{engine,url,…}]}
                                   lock-queue-<id>/   它自己的 mkdir 锁
 ```
 
@@ -625,6 +625,34 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 硬规矩是**没有任何一条路径同时持有两把** —— 取一把、写、放掉，再取另一把。一把锁最多让你卡住；
 两把锁能死锁，而在这种有界自旋下，症状甚至不是挂起，而是两次五秒停顿之后一次**静默的**不带锁写入。
 
+**队列文件的写者清单，以及为什么外面的人一个字节都不许碰它。** 写它的只有这个文件里的五处：
+`queue_write_new`（`-d` 启动，fork 之前）、`queue_append`（`--enqueue`）、`queue_bump`（`--next`，
+在父进程里）、`queue_advance_from`（**子进程**，每个曲目边界上，对 `pos` 的 CAS）、以及
+`queue_edit`/`queue_clear_tail`（五个 `--queue-*`）。**其中两个是并发的**：子进程的推进是任何
+外部调用方都控制不了的一口钟。所以队列的改写只能是**动词**，不能是别的进程直接改那个文件 ——
+`ting` 的队列视图（ARCH-tui.md「`u` 是第六个行源」）因此一次也不碰 `queue-<id>.json`：绕过
+`lock_queue_state` 的写入，丢的不是自己的那一次改动，而是别人的。
+
+**索引不是标识，所以改写要带身份别针。** 这是队列与歌单的分界：歌单没有并发写者，队列有。
+一个调用方读到的索引是**对某一刻的猜测**，而队列随播放器一起消失 —— 删错了在任何地方都找不
+回来。于是三个改写动词都要一个必需的 `--expect-url`，在**同一次锁内**先比 `items[INDEX].url`，
+再比 `INDEX > pos`，两者都过才写（契约与退出码：ARCH-cli-contract.md「命令规格」「退出码」）。
+- **被否：给队列文件加一个全局 `rev` 版本号。** 要在每个写点各加一次自增，而它能挡住的东西
+  `--expect-url` 已经挡住了 —— 后者还额外告诉调用方**是哪一首**对不上。
+- **一件让别针便宜的事实：`pos` 前进不移动 `items`，`--enqueue` 只追加也不移动。** 真正会重排
+  `items` 的只有队列动词自己，而那正是别针拦下的那一类。
+- **`--queue-jump` 把移动与推进放进同一次 jq 改写**，而不是"先 `--queue-mv` 再 `queue_bump`"：
+  那是两次取锁，中间开一个窗口，一条曲目正好在那里结束就把 `pos` 推过刚填好的位置。写完之后
+  它走 `--next` 的同一条收尾 —— `kill -USR1` 发给**子 shell 的 pid**，绝不发给进程组（理由见
+  「进程组模型」：USR1 的默认处置是终止，发给进程组会把 mpv 从它该推进的那个循环底下杀掉）。
+  子进程的 `next` 分支因此只是 `continue`，不再自己推进 —— 父进程已经把 `pos` 放好了。
+
+**队列条目只有四个字段，而在播那一条的标题可以是空的。** `read_queue_items` 把接受的每一种
+形状都归一化成 `{engine, url, title, duration}`；一个从裸句柄起的播放器（`t-play -d -- URL`）
+因此写下一条只有 url 的队列。标题是**之后**才知道的，而回填进的是**播放器记录**
+（`patch_player_meta`），队列文件写过一次就不再动 —— 所以 `--queue-show` 会对那一条报 `title:null`。
+这不是缺陷的对立面：它是一笔还没付的账，记在 ROADMAP.md 上。
+
 **JIT 解析，一次一首。** 一个流 URL 几小时就过期，所以一条预先全解析的队列播到一半就会 403；
 每个条目都在轮到它时才解析。代价是两首之间的空档，而这笔账是有意付的。两个后果是契约性的
 （ARCH-cli-contract.md「数据契约」）：一次解析失败**推进**队列而不是杀掉播放器 —— 否则上游一分钟
@@ -648,7 +676,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 的形状，加一个字段是新增，改一个已发字段不是。
 
 读的时候**不取锁**：读者要么看到 `mv` 之前的那份文件、要么看到之后的那份，永远不会看到写了一半
-的。这一半曾是 `uting` 焦点卡上"前方队列块"的数据源；那张卡随视图塌缩删掉之后，TUI 只读它的
+的。这一半曾是 `ting` 焦点卡上"前方队列块"的数据源；那张卡随视图塌缩删掉之后，TUI 只读它的
 `pos`/`len` 两个数（`ARCH-tui.md`），`upcoming` 这一半今天没有 TUI 读者，它是 agent 面的。
 
 **三条 bash 3.2 的事实塑造了子进程的循环，每一条都是量出来的，不是推出来的。**
@@ -735,7 +763,7 @@ SIGUSR1，绝不发给整个组 —— USR1 的默认处置是终止，所以一
 
 **为什么没有第三个值。** "播完这首继续下一首"确实是一个真特性，但它是**队列**，不是循环模式：
 播放器拿到一条十项的队列，分不清它来自 TUI 的顺序起播、来自十次 `--enqueue`、还是来自
-`ut-playlist --show | ut-play -d --queue -`。把它写成 `loop` 的一个值，等于让 `--status` 复述一个
+`t-playlist --show | t-play -d --queue -`。把它写成 `loop` 的一个值，等于让 `--status` 复述一个
 播放器无法验证的启动 flag，而一个不可观测的状态字段迟早会撒谎。所以 `--loop sequential` 是用法
 错误（退 1），并且那句话点名 `--queue -`：猜错的调用方猜的是一个真东西，只是猜错了门。
 
@@ -744,28 +772,28 @@ SIGUSR1，绝不发给整个组 —— USR1 的默认处置是终止，所以一
 
 ## 两个持久存储
 
-### 持久状态层（`ut-playlist`）—— 以及它与 `players/` 之间那条线
+### 持久状态层（`t-playlist`）—— 以及它与 `players/` 之间那条线
 
 「进程组模型」到「队列」描述的是**本来就该死**的状态：一条播放器记录住在
-`${TMPDIR:-/tmp}/uting-$(id -u)`，进程组一走它就被回收，整个目录重启即清。这对一个**正在跑的
+`${TMPDIR:-/tmp}/ting-$(id -u)`，进程组一走它就被回收，整个目录重启即清。这对一个**正在跑的
 进程**是正确的，对一份用户攒了半年的清单则是致命的。所以第一个收听功能（ARCHITECTURE.md「两个存储」）
 从第二个、独立的存储开始：
 
 ```
-   $UT_STATE_DIR/                      默认 ${XDG_STATE_HOME:-~/.local/state}/uting
+   $UT_STATE_DIR/                      默认 ${XDG_STATE_HOME:-~/.local/state}/ting
      playlists/<name>.json             一个播放列表一个文件，原子 temp+mv
      playlists/.lock-<name>/           mkdir 锁，与 lock_player_state 同一个原语
 ```
 
 **一条记录是一次调用，不是一个引用。** 一个条目是搜索结果的一个子集，外加从信封里折进来的
-`engine`，因为 `engine` + `url` 恰好就是 `ut-play --engine E -- URL` 的那两个参数。只存一个
+`engine`，因为 `engine` + `url` 恰好就是 `t-play --engine E -- URL` 的那两个参数。只存一个
 光秃秃的 URL 等于把路由这个事实扔掉，逼后面某个面去猜它 —— 而按
 ARCHITECTURE.md「站点知识的边界」，那是一个硬性的用法错误，不是一次静默的错标。`channel`、`view_count`、`live_status`
 刻意不存：播放用不着它们，而它们会过期成错误答案。
 
 **为什么是它自己的命令，而不是在已有东西上加个 flag。** 这个存储与播放器只共享锁这一个原语，
-与引擎则毫无共享。放进 `ut-play` 会给播放器一份跨播放的状态、以及第二种要它拥有的文件；放进
-`uting` 则成了"由渲染器写的状态" —— 正确性往**上**加、加进 UI，于是两个面里只有一个继承它。
+与引擎则毫无共享。放进 `t-play` 会给播放器一份跨播放的状态、以及第二种要它拥有的文件；放进
+`ting` 则成了"由渲染器写的状态" —— 正确性往**上**加、加进 UI，于是两个面里只有一个继承它。
 作为自己的动词，它对 agent 是一次调用，对 TUI 是同一次调用。
 
 **与播放器那把锁的三处不同，全都由"持久"逼出来。** `lock_player_state` 超时后**不带锁**继续，
@@ -788,9 +816,9 @@ ARCHITECTURE.md「站点知识的边界」，那是一个硬性的用法错误�
 `Rock` 与 `rock` 是同一个播放列表。这一条是**记下来**而不是归一化掉：bash 3.2 没有 `${var,,}`，
 而 `tr` 对 UTF-8 是错的，所以在这里写任何归一化，对最需要它的那些名字恰恰是撒谎。
 
-**TUI 拿它做什么、不做什么。** `uting` 长出两个键 —— `a` 把焦点行加进去，`b` 把一个播放列表当作
-行源打开 —— 且**自己什么也不存**：两者都带着 JSON 外壳调用 `ut-playlist`，与 `play_selected`
-外壳调用 `ut-play` 是同一种方式。交给 `--add` 的条目是按 url 从**搜索信封**里裁出来的，不是从行
+**TUI 拿它做什么、不做什么。** `ting` 长出两个键 —— `a` 把焦点行加进去，`b` 把一个播放列表当作
+行源打开 —— 且**自己什么也不存**：两者都带着 JSON 外壳调用 `t-playlist`，与 `play_selected`
+外壳调用 `t-play` 是同一种方式。交给 `--add` 的条目是按 url 从**搜索信封**里裁出来的，不是从行
 数组重建的：信封带着引擎标签和精确的字段拼写，于是 TUI 从头到尾不认识条目记录 —— 而且行数组是
 过滤且重排过的，对它的下标并不是对 `.results` 的下标。
 
@@ -809,7 +837,7 @@ ARCHITECTURE.md「站点知识的边界」，那是一个硬性的用法错误�
 **这里没有的东西：队列。** 一条队列是"一个正在被消费的播放列表"，它归播放器，住在播放器的运行时
 状态里 —— 判据与被否掉的两个家在「队列」。
 
-### 收听日志（`ut-history`）—— 持久存储的另一半
+### 收听日志（`t-history`）—— 持久存储的另一半
 
 播放列表是人放进去的。日志是播放器写下的。它们共享状态根目录与条目记录，此外没有任何共享：
 
@@ -842,8 +870,8 @@ ARCHITECTURE.md「站点知识的边界」，那是一个硬性的用法错误�
 什么也不写；而同一个空档以**失败**告终时**会**写一行，因为"我试着播它、它播不了"恰恰是历史存在
 的意义，而且那是唯一一行"`seconds` 是 0 却说出了真话"的记录。
 
-**播放器写，存储存。** `ut-play` **按名字**调 `ut-history`，与它调引擎是同一种方式，而且对 JSONL
-与按月分片一无所知；`ut-history` 则从不播放。它不在 PATH 上时，什么也不记、什么也不说 ——
+**播放器写，存储存。** `t-play` **按名字**调 `t-history`，与它调引擎是同一种方式，而且对 JSONL
+与按月分片一无所知；`t-history` 则从不播放。它不在 PATH 上时，什么也不记、什么也不说 ——
 **这套套件没有的能力，是靠"没有那个命令"来声明的**，同一条规矩也让 `bili-resolve` 没有
 `--transcript`。这次写发生在一个**先**忽略了 INT 与 TERM 的子 shell 里，而 `SIG_IGN` 能活过
 `exec`，所以一旦它被 fork 出来，哪怕产出它的子进程一毫秒后就被杀，那一行照样落地。

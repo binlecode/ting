@@ -4,7 +4,7 @@
 # same extractor. Agent-facing.
 #
 # The other half of the youtube engine pair (`yt-search` + `yt-resolve`); the player
-# (`ut-play`) is source-agnostic and knows neither. Everything YouTube-specific about
+# (`t-play`) is source-agnostic and knows neither. Everything YouTube-specific about
 # turning a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
 # format-per-mode table, the GVS proof-of-origin probe, and captions. It has NO playback,
 # lifecycle, or mpv logic and never starts a process that outlives it.
@@ -31,7 +31,7 @@ done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 
 # THE version of the whole suite, declared once — in a data file, not in code. See the same
-# block in yt-search / ut-play. CLAUDE.md § one fact, one place.
+# block in yt-search / t-play. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
     UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
@@ -40,12 +40,24 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in t-play for why, and
 # ARCH-cli-contract.md「配置面」 for the keys.
-UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+TING_CONFIG="${TING_CONFIG:-${UT_CONFIG:-}}"
+if [[ -z "$TING_CONFIG" ]]; then
+    if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ting/config" ]]; then
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+    else
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+    fi
+fi
+UT_CONFIG="$TING_CONFIG"
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+    eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
+    eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
+done
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
-    local file="$1" line key val
+    local file="$1" line key val _ting_k _ut_k
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -56,17 +68,27 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(TING|UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        TING_CONFIG | TING_DEFAULTS | TING_ENGINE_DIR | TING_VERSION | UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
             val="${val%?}"
         fi
         [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
-        eval "[[ -n \"\${$key+x}\" ]]" && continue
-        eval "$key=\$val"
+        if [[ "$key" == TING_* ]]; then
+            _ut_k="UT_${key#TING_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ut_k+x}\" ]] || $_ut_k=\$val"
+        elif [[ "$key" == UT_* ]]; then
+            _ting_k="TING_${key#UT_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ting_k+x}\" ]] || $_ting_k=\$val"
+        else
+            eval "[[ -n \"\${$key+x}\" ]]" && continue
+            eval "$key=\$val"
+        fi
     done < "$file"
 }
 # FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
@@ -84,7 +106,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
-# executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
+# executables carry. Name == prefix is deliberate: it lets `t-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
 # both the player and the TUI. docs/ARCHITECTURE.md「命令拓扑」.
 ENGINE_NAME="yt"
@@ -200,9 +222,9 @@ SUB_LANG=""
 # which half. ARCH-cli-contract.md「配置面」.
 SUB_LANG_CHAIN="$YT_SUB_LANG_CHAIN"
 
-# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# Glyph fallback shares ONE switch with ting (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
-# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as uting does.
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as ting does.
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -364,7 +386,7 @@ classify_yt_dlp_error() {
 #
 # 0700 rather than a bare /tmp path because captions are CONTENT and the captured yt-dlp
 # stderr can name a cookie database. The engine does not reach into the player's state dir:
-# `players/` has exactly one owner (ut-play).
+# `players/` has exactly one owner (t-play).
 SCRATCH_DIR=""
 ERR_FILE=""
 cleanup_scratch() {
@@ -383,7 +405,7 @@ ensure_scratch() {
 
 # The yt-dlp format string a playback mode resolves to. This table is the reason format
 # selection belongs to the engine and not the player: `bv*+ba/b` is a yt-dlp expression,
-# and the player must never learn to read one. ut-play sends a MODE and gets back bytes.
+# and the player must never learn to read one. t-play sends a MODE and gets back bytes.
 format_for_mode() {
     case "$1" in
     video) echo "$YT_VIDEO_FORMAT" ;;
@@ -546,7 +568,7 @@ normalize_target() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: t-play --engine NAME)"
         vid=$(url_video_id "$t")
         if [[ -n "$vid" ]]; then
             tval=$(url_time_param "$t")
@@ -675,7 +697,7 @@ normalize_container() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: t-play --engine NAME)"
         id=$(url_list_id "$t")
         ;;
     youtube.com/* | www.youtube.com/* | m.youtube.com/* | music.youtube.com/* | \
@@ -1188,8 +1210,8 @@ transcript_fail() {
 # search row — which is why a container gets its own verb and its own envelope instead of a
 # `kind` on the row model. ARCH-engine.md「容器（--items）」.
 #
-# EVERY ITEM IS AN ITEM RECORD: `{engine, id, url, title, duration}` is what ut-playlist stores
-# and what ut-play --queue consumes, and the key is `items` because that is the name both of
+# EVERY ITEM IS AN ITEM RECORD: `{engine, id, url, title, duration}` is what t-playlist stores
+# and what t-play --queue consumes, and the key is `items` because that is the name both of
 # them already read. `--items -j` therefore pipes into either with nothing renamed, and neither
 # changed a line to accept it. Each record carries its own `engine` and a complete playable url,
 # because a record here is a CALL, not a reference.
@@ -1268,7 +1290,7 @@ resolve_items() {
         return 0
     fi
 
-    # Prose, in the vocabulary --info and ut-playlist --show already speak: the title, a dashed
+    # Prose, in the vocabulary --info and t-playlist --show already speak: the title, a dashed
     # summary line, then one line per item. An EMPTY list prints its title and a count of 0 —
     # that is an answer, not an error.
     local title count total_txt
@@ -1390,10 +1412,10 @@ returns as results[].id). Knowing that shape is this engine's job, not the playe
 
 Options:
   -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
-           (default: audio). The MODE -> yt-dlp format table lives here, not in ut-play.
+           (default: audio). The MODE -> yt-dlp format table lives here, not in t-play.
   -S SORT  yt-dlp format-sort override (--format-sort)
   --quality TIER  Quality tier: auto | low | medium | high (default: auto). The
-           (mode, tier) -> format-sort table lives here, not in ut-play; -S overrides it
+           (mode, tier) -> format-sort table lives here, not in t-play; -S overrides it
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, chapters, description) — nothing is resolved
@@ -1404,8 +1426,8 @@ Options:
            (UU…) or a channel (…/@handle, …/channel/UC…) — one yt-dlp call. Takes the id,
            the URL, or the list= of a watch URL; a channel is read at its videos tab. A mix
            (RD…) is refused: it is regenerated per request, so its pages would not line up.
-           Every element is an item record, so the list pipes into ut-playlist --add and
-           ut-play --queue unmapped. At most 500 videos per call — has_more/next_cursor say
+           Every element is an item record, so the list pipes into t-playlist --add and
+           t-play --queue unmapped. At most 500 videos per call — has_more/next_cursor say
            whether there are more and how to ask
   --cursor TOKEN  Continue an --items listing: pass back the next_cursor of the envelope
            before it. Opaque, and the same shape in every engine of this suite
@@ -1450,8 +1472,9 @@ Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagat
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
-  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/ting/config (KEY=value, one
+  per line, # comments; the pre-rename .../uting/config is read when there is no ting
+  one); TING_CONFIG relocates it, and UT_CONFIG still does. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   YT_COOKIE_BROWSER      Browser profile cookies are read from (default: chrome; "none"
                          for anonymous) — the decision --auth reports
@@ -1460,7 +1483,7 @@ Environment:
   YT_VIDEO_FORMAT_FAST   Format for fast mode
   YT_SUB_LANG_CHAIN      --transcript language priority chain (default: en,zh-Hans,zh,ja)
 
-To search: yt-search <query>   ·   To play: ut-play <id|URL>
+To search: yt-search <query>   ·   To play: t-play <id|URL>
 EOF
 }
 
@@ -1540,7 +1563,7 @@ while (($#)); do
     -f | --format-mode)
         [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
+        # Canonical modes only — the alias table (ba/bv/…) is t-play's, which normalizes
         # before it calls an engine (ARCH-cli-contract.md「命令规格」).
         validate_enum "$2" audio video fast ascii viz ||
             die "-f must be one of: audio, video, fast, ascii, viz"
@@ -1556,7 +1579,7 @@ while (($#)); do
     --quality)
         [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical tiers only — the alias table, if one ever grows one, is ut-play's
+        # Canonical tiers only — the alias table, if one ever grows one, is t-play's
         # (the same rule as -f: the engine seam carries canonical spellings).
         validate_enum "$2" auto low medium high ||
             die "--quality must be one of: auto, low, medium, high"
@@ -1566,7 +1589,7 @@ while (($#)); do
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
     # a caller holding the wrong verb is told which one it wants (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
-        echo "yt-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        echo "yt-resolve: $1 is a playback flag — use t-play for playback" >&2
         exit 1
         ;;
     -n | -m | -M | -s)
@@ -1651,7 +1674,7 @@ if [[ -n "$CURSOR" ]]; then
     CURSOR_OFFSET="${CURSOR#o:}"
 fi
 
-# The mirror of that check, and the other half of the gate ut-play used to hold for
+# The mirror of that check, and the other half of the gate t-play used to hold for
 # --transcript: -f / -S pick a FORMAT, and only stream resolution resolves one. Next to
 # --info or --transcript they were accepted and quietly did nothing, which is precisely
 # what a gating layer exists to reject rather than ignore (ARCH-cli-contract.md「门模型」).

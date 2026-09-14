@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uting pre-push gate. This is a solo repo whose working branch IS main (54 commits,
+# ting pre-push gate. This is a solo repo whose working branch IS main (54 commits,
 # zero merges), so it does NOT block a direct push to main the way actop's does —
 # blocking the normal workflow would only teach --no-verify. It blocks the two things
 # that are actually unrecoverable, and warns on the rest:
@@ -48,15 +48,15 @@ done
 for f in shell/*; do
   [ -f "$f" ] || continue
   head -n 1 "$f" | grep -q '^#!' || continue
-  if ! /bin/bash -n "$f" 2>/tmp/uting-push-syntax.$$; then
+  if ! /bin/bash -n "$f" 2>/tmp/ting-push-syntax.$$; then
     {
       echo ""
       echo "BLOCKED: $f does not parse under /bin/bash -n:"
-      sed 's/^/    /' "/tmp/uting-push-syntax.$$"
+      sed 's/^/    /' "/tmp/ting-push-syntax.$$"
     } >&2
     fail=1
   fi
-  rm -f "/tmp/uting-push-syntax.$$"
+  rm -f "/tmp/ting-push-syntax.$$"
 done
 
 if [ $warn_tag -eq 1 ]; then

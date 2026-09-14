@@ -1,6 +1,6 @@
-# uting
+# ting
 
-**u-ting / 你听** — an agent-first media engine with a terminal face.
+**ting / 听** — an agent-first multi-source media engine with a terminal face.
 
 Search a source, play it through mpv detached from your terminal, and keep controlling it — from
 a TUI if you are a human, from a single-line JSON contract if you are a program. Three sources
@@ -8,27 +8,27 @@ ship (YouTube, Bilibili, NetEase Cloud Music); a fourth is a new pair of scripts
 anywhere else — the third one was.
 
 ```sh
-uting                                  # interactive: search, browse, play, control
+ting                                   # interactive: search, browse, play, control
 yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
 bili-search -j -n 25 -- "周杰伦"        # machine: the second source, the same envelope
 ne-search -j -n 25 -- "钢琴"            # machine: the third; rows carry a real `access`
-ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
-ut-play -d --start 601 -- "<url>"      # machine: open at 601s (a link's own &t= does this too)
+t-play -d -j -- "<url>"                # machine: launch detached, get {id, pid, sock}
+t-play -d --start 601 -- "<url>"       # machine: open at 601s (a link's own &t= does this too)
 yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
-ut-play --status -j                    # machine: what is playing, where, how loud
-ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --seek-to N
-ut-playlist --show chill -j | ut-play -d --queue -   # machine: play a list, one player
-ut-play --enqueue - --id <id> -j       # machine: append to it; --next skips a track
-ut-play --set-loop one --id <id> -j    # machine: repeat this track (off|one; a LIST is --queue)
-ut-play --stop --id <id> -j            # machine: stop it
-ut-history --ls -n 20 -j               # machine: what was played, when, for how long
+t-play --status -j                     # machine: what is playing, where, how loud
+t-play --pause --id <id> -j            # machine: also --resume, --seek ±N, --seek-to N
+t-playlist --show chill -j | t-play -d --queue -     # machine: play a list, one player
+t-play --enqueue - --id <id> -j        # machine: append to it; --next skips a track
+t-play --set-loop one --id <id> -j     # machine: repeat this track (off|one; a LIST is --queue)
+t-play --stop --id <id> -j             # machine: stop it
+t-history --ls -n 20 -j                # machine: what was played, when, for how long
 ```
 
 ## Status
 
 **Reference implementation.** This is a working shell suite that its author uses daily, published
 together with a design document that is longer than most of the code it describes. Since `v0.8.0`
-it is also tagged and installable from a tap (`brew install binlecode/actop/uting`) — what ships
+it is also tagged and installable from a tap (`brew install binlecode/actop/ting`) — what ships
 is these scripts, not a binary, so the Go rewrite stays ruled out
 (see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why).
 
@@ -39,7 +39,7 @@ sets for you.
 
 ## What it is
 
-- **`ut-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
+- **`t-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
   (id / pid / socket / lock / state dir / reap) and the **queue** a player consumes — a lone
   handle is a queue of one, each item resolved when it is reached because a stream URL expires —
   and defines the contract. It EXECUTES a start offset (`--start SEC`, or the one a link carried)
@@ -71,20 +71,20 @@ sets for you.
   plaintext search endpoint is gone, so `ne-search` speaks the browser's encrypted `weapi` — two
   AES passes through `openssl`, which is a dependency of that **one file** and of nothing else in
   the suite. Its `--transcript` is the song's lyrics.
-- **`ut-playlist`** — the playlist store, and the first piece of state the suite keeps *after* a
+- **`t-playlist`** — the playlist store, and the first piece of state the suite keeps *after* a
   reboot. Durable, user-level, engine-agnostic: it holds `{engine, url, title, …}` records under
-  `${XDG_STATE_HOME:-~/.local/state}/uting/playlists/`, one file per list, written atomically
+  `${XDG_STATE_HOME:-~/.local/state}/ting/playlists/`, one file per list, written atomically
   under a lock. It knows no site and no playback — `engine` + `url` are exactly the two arguments
-  of `ut-play`, so a stored record is a call rather than a reference. Optional: without it the
+  of `t-play`, so a stored record is a call rather than a reference. Optional: without it the
   rest of the suite is unchanged.
-- **`ut-history`** — the listening log, and the other half of that store: one line of
+- **`t-history`** — the listening log, and the other half of that store: one line of
   `history/<YYYY-MM>.jsonl` per track, written by the player itself as each track ends —
   whether it ended on its own, was skipped, or was stopped. Append-only and lock-free, which
   is why every line is kept under 4 KB. A row is the same record a playlist holds plus the
   four fields a listening has (`played_at`, `ended_at`, `seconds`, `reason`), so
-  `ut-history --ls -j` pipes straight into `ut-playlist --add` or `ut-play -d --queue -`.
+  `t-history --ls -j` pipes straight into `t-playlist --add` or `t-play -d --queue -`.
   `UT_HISTORY=0` turns the writing off; optional, like the playlist store.
-- **`uting`** — the human face. One self-rendered list, live filter, pagination that
+- **`ting`** — the human face. One self-rendered list, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
 
@@ -99,8 +99,8 @@ ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it
 comes from an engine, not from `~/Music`.
 
 **All three listening features have landed** (`docs/ARCHITECTURE.md`「两个存储」): playlist
-management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
---queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
+management (`t-playlist`, the `a` and `b` keys), the queue (`t-play
+--queue/--enqueue/--next`, `+` and `>`), and the listening history (`t-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
 alongside its keybinding, or it is not done. **Favourites is deliberately not a feature**: it is
 a playlist with a fixed name. A downloader and channel subscriptions are unscheduled.
@@ -131,11 +131,11 @@ without it exits 2 and says so, rather than letting an unset variable surface 10
 later.
 
 To change settings for yourself, don't edit that file. Write only the keys you want in
-`${XDG_CONFIG_HOME:-~/.config}/uting/config`:
+`${XDG_CONFIG_HOME:-~/.config}/ting/config`:
 
 ```sh
-mkdir -p ~/.config/uting
-cat >> ~/.config/uting/config <<'EOF'
+mkdir -p ~/.config/ting
+cat >> ~/.config/ting/config <<'EOF'
 UT_DEFAULT_ENGINE=bili        # search Bilibili unless --engine says otherwise
 UT_MAX_SEARCH_RESULTS=400     # let one query fetch more rows
 YT_THEME=nord
@@ -160,7 +160,7 @@ reach `PATH`, `TMPDIR` or `LD_PRELOAD`. `UT_ENGINE_DIR` wears an allowed prefix 
 the hole in that: it names a directory of programs the suite runs, so it is refused from both
 files and read from the environment only.
 
-The shipped `config` is **never written by any command**. Your own file is: `uting` writes
+The shipped `config` is **never written by any command**. Your own file is: `ting` writes
 eleven preference keys back to it as you change them at runtime — the engine, sort field,
 play mode, quality tier, theme, language, result count, key-hint tier, row numbers, list
 mode and loop mode, each behind the key that changes it. The edit is in place, one pass and one rename, so your
@@ -177,7 +177,7 @@ own config or the environment.
 **A source that does not ship with the suite** is still just a `<name>-search` +
 `<name>-resolve` pair. Three places are scanned for one, in this order: next to the suite's
 own scripts, then `$UT_ENGINE_DIR` (default
-`${XDG_DATA_HOME:-~/.local/share}/uting/engines`), then `PATH`. A name already installed
+`${XDG_DATA_HOME:-~/.local/share}/ting/engines`), then `PATH`. A name already installed
 beside the suite wins, so a pair you drop in that directory can add a source but never
 replace a built-in one. `docs/ARCH-cli-contract.md`「加一个引擎 —— 清单」 is what such a pair
 has to satisfy.
@@ -189,44 +189,49 @@ chain, the write-back and the rules that span files, rather than restating the l
 ## Try it
 
 ```sh
-git clone git@github.com:binlecode/uting.git
-cd uting
-./shell/uting "lofi hip hop"     # or: ./shell/uting  and type a query
+git clone git@github.com:binlecode/ting.git
+cd ting
+./shell/ting "lofi hip hop"      # or: ./shell/ting  and type a query
 ```
 
 Or install the released version:
 
 ```sh
-brew install binlecode/actop/uting
+brew install binlecode/actop/ting
 ```
 
 For daily use from a checkout, symlink onto your PATH. Each command goes under its own name —
 the suite ships no second spelling for anything:
 
 ```sh
-ln -s "$PWD/shell/uting"        ~/bin/uting
-ln -s "$PWD/shell/ut-play"      ~/bin/ut-play
+ln -s "$PWD/shell/ting"         ~/bin/ting
+ln -s "$PWD/shell/t-play"       ~/bin/t-play
 ln -s "$PWD/shell/yt-search"    ~/bin/yt-search
 ln -s "$PWD/shell/yt-resolve"   ~/bin/yt-resolve
 ln -s "$PWD/shell/bili-search"  ~/bin/bili-search
 ln -s "$PWD/shell/bili-resolve" ~/bin/bili-resolve
 ln -s "$PWD/shell/ne-search"    ~/bin/ne-search
 ln -s "$PWD/shell/ne-resolve"   ~/bin/ne-resolve
-ln -s "$PWD/shell/ut-playlist"  ~/bin/ut-playlist
-ln -s "$PWD/shell/ut-history"   ~/bin/ut-history
+ln -s "$PWD/shell/t-playlist"   ~/bin/t-playlist
+ln -s "$PWD/shell/t-history"    ~/bin/t-history
 ```
 
-Only `uting` is strictly required: every command resolves its siblings from its own location,
+Four of these verbs used to be spelled `uting`, `ut-play`, `ut-playlist` and `ut-history`.
+The checkout still answers to those: `shell/` carries a symlink for each, so a `~/bin` link
+made under an old name keeps working and a `git pull` never breaks a shell you already set up.
+They are a compatibility layer, not a second spelling — everything below uses the new names.
+
+Only `ting` is strictly required: every command resolves its siblings from its own location,
 so a single symlink is enough to use the whole suite by hand. The rest are for calling the verbs
 directly — which is what an agent does.
 
-The human face carries the project's own name, so `~/bin/uting` is a plain symlink to
-`shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
-Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
+The human face carries the project's own name, so `~/bin/ting` is a plain symlink to
+`shell/ting` — same word at both ends, no alias in between. Want something shorter to type?
+Make one — `alias ut=ting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
 thing to keep in sync (`docs/ARCHITECTURE.md`「平级动词，没有内核」).
 
-`uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
+`ting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
 entry point reports the same number: it is declared once, in `VERSION`.
 
@@ -244,6 +249,8 @@ stopped moving, and the two were unhitched deliberately when the packaging decis
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
 `c` the focused row's parts · `i` the focused row's chapters · `+` add to the queue · `>` next track ·
+`u` the running player's queue — and inside it, `Enter` play that one now · `x` drop it ·
+`p`/`P` move it earlier/later · `X` drop everything still waiting ·
 `Space` pause · `-`/`=` volume · `#` row numbers (the jump's partner: it prints the
 number `Nj` takes) · `Tab` list mode ·
 `[`/`]` seek · `r` loop mode · `s` stop · `l` language · `t` theme · `q` quit
@@ -256,13 +263,25 @@ back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a
 shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
 you are typing.
 
-There is ONE view. `b`, `h`, `c` and `i` each replace the rows in it and are pressed again to
-come back — a playlist, the listening log, a video's parts, a video's chapters. Nothing
-toggles a second renderer, so `Tab` is unbound and prints nowhere.
+There is ONE view. `b`, `h`, `c`, `i` and `u` each replace the rows in it and are pressed again
+to come back — a playlist, the listening log, a video's parts, a video's chapters, the queue
+the running player is working through. Nothing toggles a second renderer, so `Tab` is unbound
+and prints nowhere.
+
+`u` is the half of `+` that lets you see what you queued. Until it existed the queue was a
+number on the status line: you could add to it blind and had no way to look, reorder, or take
+back a mistake. It puts the WHOLE queue on screen — played rows included, so the row numbers
+and the indexes the CLI takes are one set of numbers rather than two — with the track being
+heard on a ground of its own. Its four write keys only exist while it is open, and each one is
+a `t-play --queue-*` call: the TUI never edits the queue file, because the player's own child
+is writing to it too, at every track boundary. `x` on the track that is playing says so rather
+than doing it — `s` stops it and `>` skips it. `u` opens from the search rows only (there is
+one stash slot, so a queue opened on top of a playlist would lose the way back to it), and only
+when the queue holds more than the one track being played.
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
-drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by the same rule.
+drawn only when `t-playlist` is installed and `h` only when `t-history` is, by the same rule.
 `c` and `i` follow the same rule off a CAPABILITY rather than an install: `c` is drawn only
 when the session's engine has `--parts`, which YouTube never will — one id there is one file —
 and `i` only when it has `--info`. Three of them go one step further and read the VIEW as well:
@@ -315,10 +334,10 @@ either one directly.
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/ARCH-cli-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. Under two minutes in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, in ~30s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. The check total is deliberately not quoted here: it moves with every check that lands, it was already stale in this sentence twice over, and the suite prints its own — **`0 failed` is the number that means passing**. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `ting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/ARCH-cli-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. Under two minutes in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, in ~30s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. The check total is deliberately not quoted here: it moves with every check that lands, it was already stale in this sentence twice over, and the suite prints its own — **`0 failed` is the number that means passing**.  |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4 *and* `status:"ambiguous"` (4 alone is also what an idle call answers, so the field is the half that separates them), a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches —
-from a real `ut-playlist --show -j` envelope, so the documented pipeline is what starts the
+from a real `t-playlist --show -j` envelope, so the documented pipeline is what starts the
 player rather than an array written to look like one —
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
@@ -374,7 +393,7 @@ surface.
 - [`docs/ARCH-engine.md`](docs/ARCH-engine.md) — the site half: query shaping, the Bilibili
   transport, the login / PO-token probe, handle grammar, `--info` / `--transcript`.
 - [`docs/ARCH-player.md`](docs/ARCH-player.md) — the player, the queue and the two durable
-  stores: the detached lifecycle, runtime IPC, `ut-playlist` and `ut-history`.
+  stores: the detached lifecycle, runtime IPC, `t-playlist` and `t-history`.
 - [`docs/ARCH-tui.md`](docs/ARCH-tui.md) — the human face: one view with five row sources, in-place rendering,
   the width layer, the reflow and the three play states.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the recorded NOs with their reopen conditions, the

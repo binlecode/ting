@@ -1,7 +1,7 @@
-# ARCHITECTURE —— uting
+# ARCHITECTURE —— ting
 
-`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `ne-search` · `ne-resolve` ·
-`ut-playlist` · `ut-history` · `uting` —— 一套"搜索 + 终端播放"的 CLI 套件，为 **LLM/agent 调用方**设计的程度
+`t-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `ne-search` · `ne-resolve` ·
+`t-playlist` · `t-history` · `ting` —— 一套"搜索 + 终端播放"的 CLI 套件，为 **LLM/agent 调用方**设计的程度
 不亚于为人设计。范围是整套套件，这份是伞状的那一份：**图、流程、伪码与决定**。
 具体怎么落地，各面各住一份，本文的引用一律指过去：
 
@@ -57,7 +57,7 @@
 ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分发收益不兑现，成本是一次无法二分的回归。
 
 1. **差异化在契约，不在渲染。** 真正难而有价值的是 JSON envelope、退出码分类、脱离终端的
-   生命周期 —— 都与语言无关。而 `uting` 的大头是在重新实现 Go TUI 栈免费给的东西：显示宽度
+   生命周期 —— 都与语言无关。而 `ting` 的大头是在重新实现 Go TUI 栈免费给的东西：显示宽度
    （`go-runewidth`/`uniseg`）、事件循环与 resize（`bubbletea`）、样式（`lipgloss`）。
    那不是护城河，是重写会**删掉**（而非搬迁）的负债 —— 但删负债是**内部**收益，
    不改变产品对人与 agent 呈现的任何一件事。
@@ -68,7 +68,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
    在**风险**维度成立，在**分发**维度不成立 —— 而分发才是唯一能兑现的外部收益。
 
 3. **agent 对接的是窄动词的 argv + 它们背后的契约。** 没有壳可言 —— 窄动词就是实现本身，
-   `ut-play` 与六个引擎命令都是平级 peer。所以真要换语言，能换的单位也只有**播放器**，
+   `t-play` 与六个引擎命令都是平级 peer。所以真要换语言，能换的单位也只有**播放器**，
    而引擎整条留在 shell：它们才是随外部网站变动而频繁改的那一半（第 6 条）。
    **但"守护进程 + CLI 动词 + JSON"这个形状不是本项目独有的**
    （`RESEARCH-tui-player.md` §3.3）：`spotify-player` 用不同音源做了同一件事且早于本项目。
@@ -106,7 +106,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
  │            │                                        │
  │            ▼                                        │  单行 JSON envelope + 退出码
  │      ┌───────────┐                                  │  （契约本身就是产品面，「冻结面」）
- │      │   uting   │ ───── 调的是同一批命令 ─────────►│
+ │      │   ting    │ ───── 调的是同一批命令 ─────────►│
  │      └───────────┘   人机面：只有渲染               │
  │                      站点与播放一样都不碰           │
  └───────────────────────────────────────────┬─────────┘
@@ -114,18 +114,18 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
  ┌ 十个平级可执行文件：一层，无内核，无共享库（「命令拓扑」）────────────────────────────
  │
  │   ┌───────────────────────────┐   -j envelope   ┌───────────────────────────┐
- │   │ yt-search     yt-resolve  │ ◄────────────── │ ut-play                   │
+ │   │ yt-search     yt-resolve  │ ◄────────────── │ t-play                    │
  │   │ bili-search   bili-resolve│ ──────────────► │  队列 · detached 生命周期 │
  │   │ ne-search     ne-resolve  │  直链 + 请求头  │  死亡记录 · 运行时 IPC    │
  │   └───────────────────────────┘                 └────┬─────────────────┬────┘
  │     引擎：一站一对                                    │ --record        │
  │     站点知识**只**住这里                              │                 │
- │                                                      ▼                 │
+ │                                                     ▼                 │
  │   ┌───────────────────────────┐   人存的 / 播放器写的                  │
- │   │ ut-playlist   ut-history  │ ◄──────────────────────────────────────┘
+ │   │ t-playlist    t-history   │ ◄──────────────────────────────────────┘
  │   └───────────────────────────┘   两个存储：既不认站点，也不认播放
  │        ▲
- │        └── uting 也从这里取行渲染（--show -j / --ls -j）；一条记录就是一次调用
+ │        └── ting 也从这里取行渲染（--show -j / --ls -j）；一条记录就是一次调用
  └──────────────────────────────────────────────────────────────────────────────
          │  yt-dlp · curl · openssl · jq              │  mpv --no-ytdl · nc -U <sock>
          │  （站点原语只在引擎里）                    │  （播放原语只在播放器里）
@@ -169,11 +169,11 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 
 ### 调用形状 —— 非交互与把门（接口：argv → 退出码，每个动词自己把门；「端到端控制流」）
 
-- **除 `uting` 之外的一切都是非交互的**：一个能提问的动词就是 agent 会挂住的动词；
+- **除 `ting` 之外的一切都是非交互的**：一个能提问的动词就是 agent 会挂住的动词；
   把能力拿掉，那种失败模式就不可能发生。（「端到端控制流」）
 - **一个没有东西可作用的动词 → 用法错误，且点名正确的那个动词**；绝不提问。（「端到端控制流」）
 - **搜索是它自己的动词**（`<engine>-search`），**不是**播放器的一种多态拼法：
-  `ut-play` 拿到一个非句柄时点名那个动词，而不是去猜。（「端到端控制流」）
+  `t-play` 拿到一个非句柄时点名那个动词，而不是去猜。（「端到端控制流」）
 
 ### 播放器 —— 播放与 detached 生命周期（接口：`-d` 信封的 id/pid/socket、`--status`/`--stop`；「调用栈」-B/B′/C）
 
@@ -238,14 +238,14 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 ### 配置 —— 两个根数据文件（接口：`KEY=value` 数据文件 + 四级链；「命令拓扑」）
 
 - **默认值声明一次**：根上的 `config`，**当数据读、绝不 source**；链是
-  标志 > 环境 > 用户配置 > 出厂。出厂那份没有命令会写；用户那份由 `uting` 写回十一个偏好键。
+  标志 > 环境 > 用户配置 > 出厂。出厂那份没有命令会写；用户那份由 `ting` 写回十一个偏好键。
   （「命令拓扑」；键表与写回：ARCH-cli-contract.md「配置面」）
 
-### 人机面 —— `uting`（接口：键位 + 自绘渲染，对下只调那些动词；ARCH-tui.md）
+### 人机面 —— `ting`（接口：键位 + 自绘渲染，对下只调那些动词；ARCH-tui.md）
 
-- **`uting` 画自己的菜单**（不用 picker/TUI 框架）并把活委派给动词。（ARCH-tui.md）
+- **`ting` 画自己的菜单**（不用 picker/TUI 框架）并把活委派给动词。（ARCH-tui.md）
 - **套件里任何地方都不用 fzf / 交互式依赖。**（ARCH-tui.md）
-- **`uting` 只组合那些动词** —— 不碰引擎的内部，也不碰 mpv，
+- **`ting` 只组合那些动词** —— 不碰引擎的内部，也不碰 mpv，
   除非经由播放器已经公布出来的那个 socket。（ARCH-cli-contract.md「门模型」）
 - **TUI 里不用 emoji**：一份封闭的字形库存，全部文本呈现，宽度表因此**精确**
   而不只是保守。**一个新字形先进宽度表，而且要进对的那一张** —— EastAsianWidth 把盒绘块
@@ -299,70 +299,84 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 可执行文件，自己把自己的 flag，自己调自己的原语。它们的划分依据是*各自持有哪一类知识*，
 而不是谁调谁：
 
-- **播放器**（`ut-play`）持有播放与 detached 生命周期，**不认识任何站点**；
+- **播放器**（`t-play`）持有播放与 detached 生命周期，**不认识任何站点**；
 - **一个引擎是一对** —— `<name>-search`（查询 → 结果）与 `<name>-resolve`
   （句柄 → 流 URL + 请求头，外加该站点支持的只读动词）—— 它持有某一个站点的**全部**知识；
-- **两个存储**（`ut-playlist`、`ut-history`）持有用户级的持久状态，既不认站点也不认播放 ——
+- **两个存储**（`t-playlist`、`t-history`）持有用户级的持久状态，既不认站点也不认播放 ——
   一条记录是 `{engine, url}`，那是一次**调用**而不是一个引用（`ARCH-player.md`「持久状态层」）；
   播放列表是人放进去的，日志是播放器写下的（ARCH-player.md「收听日志」）；
-- **人机面**（`uting`）持有渲染，以上三样一样都不持有。
+- **人机面**（`ting`）持有渲染，以上三样一样都不持有。
 
 ```
                           PATH 上的入口（用户自建的符号链接）
         ~/bin/
-        ├── uting        → <checkout>/shell/uting          人机面
-        ├── ut-play      → <checkout>/shell/ut-play        agent 面
+        ├── ting         → <checkout>/shell/ting           人机面
+        ├── t-play       → <checkout>/shell/t-play         agent 面
         ├── yt-search    → <checkout>/shell/yt-search      agent 面
         ├── yt-resolve   → <checkout>/shell/yt-resolve     agent 面
         ├── bili-search  → <checkout>/shell/bili-search    agent 面
         ├── bili-resolve → <checkout>/shell/bili-resolve   agent 面
         ├── ne-search    → <checkout>/shell/ne-search      agent 面
         ├── ne-resolve   → <checkout>/shell/ne-resolve     agent 面
-        ├── ut-playlist  → <checkout>/shell/ut-playlist    agent 面（可选）
-        └── ut-history   → <checkout>/shell/ut-history     agent 面（可选）
+        ├── t-playlist   → <checkout>/shell/t-playlist     agent 面（可选）
+        └── t-history    → <checkout>/shell/t-history      agent 面（可选）
               一个命令一个名字；不发短名（「平级动词，没有内核」）
+
+**改名留下的四条符号链接，住在 checkout 里而不是 `~/bin` 里。** 套件从 `uting` 改叫 `ting`
+时，四个动词跟着改了名（`uting`→`ting`、`ut-play`→`t-play`、`ut-playlist`→`t-playlist`、
+`ut-history`→`t-history`；六个引擎脚本的名字里从来没有套件名，所以一个也没动）。
+`shell/` 里因此并排躺着四条旧名 → 新名的符号链接：
+
+```
+   shell/uting → ting   shell/ut-play → t-play   shell/ut-playlist → t-playlist
+                        shell/ut-history → t-history
+```
+
+它们**在仓库里**，不在用户的 `~/bin` 里，这是有意的：一个照着旧名建了 `~/bin/ut-play` 的
+用户，链接指的是 checkout 里的路径，那条路径必须继续存在 —— 否则一次 `git pull` 会当场
+打断他的 shell 而不是给他一次改名。同理，`ting` 找它的三个兄弟时也是**新名在先、旧名兜底**
+（`t-play` 找 `t-history` 用同一条链），所以一份只装了新名的部署不依赖这四条链接。
+它们是**兼容层，不是第二套名字**：文档、help 文本、错误信息里只出现新名，
+`tests/contract.sh` 只用四条链接各答一次来钉住它们还活着。
 
    运行时依赖图 —— 站点知识**只**在一对引擎里，播放**只**在播放器里：
 
-     uting ──► <engine>-search -j ──► 渲染 ──► ut-play -d -j --engine <该行的引擎>
+     ting  ──► <engine>-search -j ──► 渲染 ──► t-play -d -j --engine <该行的引擎>
         │  ▲                                           │
-        │  ├──── ut-playlist --show -j   同样的行，另一个来源（ARCH-player.md「持久状态层」）
-        │  └──── ut-history  --ls   -j   还是同样的行（ARCH-player.md「收听日志」）
+        │  ├──── t-playlist  --show -j   同样的行，另一个来源（ARCH-player.md「持久状态层」）
+        │  └──── t-history   --ls   -j   还是同样的行（ARCH-player.md「收听日志」）
         └──► nc -U <sock>  （路径是播放器公布的；ARCH-player.md「运行时 IPC」）
                                                        ▼
-                                   ut-play ──► <engine>-resolve -j -f MODE
+                                   t-play  ──► <engine>-resolve -j -f MODE
                                         │            （名字靠拼接，「站点知识的边界」；
                                         │              yt-dlp / curl 住在**这里**）
                                         ├──► mpv --no-ytdl <直链>
-                                        └──► ut-history --record -   （一首一行）
+                                        └──► t-history  --record -   （一首一行）
 ```
 
-**这些名字怎么来的（「平级动词，没有内核」）。** 三条命名规矩，一条对一类受众：人机面用发行名（`uting`），
-播放器带套件前缀（`ut-`），一个引擎带它那个**站点**的名字 —— 因为那是调用方必须知道的
-唯一一件事。不发短名：六项筛查里长前缀全空、短名全被占（`RESEARCH-tui-player.md` §2；
-挪威语里 `uting` 是真词"陋习"，当彩蛋接受）。挡住重提的落选名：`ut-list`（与 `-l/--list`
-撞车）· `ut-lib`/`ut-store`（两件事挤一个命令）· `ut-queue`（队列是播放器的运行时状态，
-`ARCH-player.md`「队列」）。说 "tui" 而不说 "ui"：uting 恰恰是一个全屏的*终端* UI。
+**这些名字怎么来的（「平级动词，没有内核」）。** 三条命名规矩，一条对一类受众：人机面用发行名（`ting`），
+播放器与存储带套件前缀（`t-play` / `t-playlist` / `t-history`），一个引擎带它那个**站点**的名字 —— 因为那是调用方必须知道的
+唯一一件事。早先曾用 `ting` / `ut-` 前缀，多音源扩展后统一升华为纯粹的 `ting`（听）与 `t-` 前缀。说 "tui" 而不说 "ui"：ting 恰恰是一个全屏的*终端* UI。
 
 **引擎名就是命令前缀（「站点知识的边界」）。** `--engine yt` 靠字符串拼接找到 `yt-resolve`
-（`ut-play` 的 `engine_resolve_bin`：先试 `$SCRIPT_DIR/$ENGINE-resolve`，再试
+（`t-play` 的 `engine_resolve_bin`：先试 `$SCRIPT_DIR/$ENGINE-resolve`，再试
 `$UT_ENGINE_DIR`，再试 PATH，都没有就退 1 并把三个地方都说出来）。这就是全部的"注册表" ——
-**`uting` 走的是同一个顺序**，否则两个面会对"有哪些源"给出不同答案
+**`ting` 走的是同一个顺序**，否则两个面会对"有哪些源"给出不同答案
 （三处的顺序与理由：`ARCH-cli-contract.md`「加一个引擎 —— 清单」）。加第三个源等于加一对新文件，
 播放器与 TUI **一个字都不用改** —— 这正是 Bilibili 引擎被造出来要检验的那条主张，
 而它成立了：步骤 C 两个文件都没动。
 
-**`uting` 怎样在不持有名单的前提下找到引擎。** 启动时按**对**发现（`scan_engines` ——
-装了一半的引擎不算引擎），它交给 `ut-play` 的 `--engine` 永远来自信封自己的 `engine` 字段，
+**`ting` 怎样在不持有名单的前提下找到引擎。** 启动时按**对**发现（`scan_engines` ——
+装了一半的引擎不算引擎），它交给 `t-play` 的 `--engine` 永远来自信封自己的 `engine` 字段，
 绝不来自某个默认值。机制与规则住在 `ARCH-tui.md`。
 
 **为什么一个引擎是两个命令（`<name>-search` / `<name>-resolve`），而不是 `yt search|resolve` 子命令。** 一个窄动词的 flag 面也窄，
 而这正是小模型敢调它的原因：`yt-search` 从字面上就不可能接受 `--detach`，
-`ut-play` 从字面上就不可能去搜索。子命令分发器会把这些面重新并回一套 argv 文法，
+`t-play` 从字面上就不可能去搜索。子命令分发器会把这些面重新并回一套 argv 文法，
 并把门重新塞回程序内部 —— 那正是拆分之前门所在的位置。`resolve` 是暴露出来的，
-但它不是给模型用的：实际上它的调用方是 `ut-play`，模型看见的是 `<engine>-search` 加 `ut-play`。
+但它不是给模型用的：实际上它的调用方是 `t-play`，模型看见的是 `<engine>-search` 加 `t-play`。
 
-**为什么播放器绝不能叫得出自己的引擎。** `ut-play` 从不读引擎的文件，不 source 它任何东西，
+**为什么播放器绝不能叫得出自己的引擎。** `t-play` 从不读引擎的文件，不 source 它任何东西，
 也不持有一份合法名字的清单 —— 一个未知的 `--engine` 是靠"拼出来的那条路径不存在"被发现的。
 这与把版本号放进 `VERSION` 是同一条依赖方向的规矩：一个一行的数据文件，
 因为把变量放进十个独立可执行文件中的任何一个，都会让另外九个反过来向*它*要版本 ——
@@ -371,9 +385,9 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 它坐在**仓库根**，而不是脚本旁边：它版本化的是这套套件，不是 `shell/`，
 而根目录是读者 —— 以及其他任何项目 —— 找它的地方。每个入口点都从自己**解析之后**的位置
 往上一层去够它，这也是为什么 `SCRIPT_DIR` 前面那段符号链接链的行走是承重的、不是装饰：
-`~/bin/ut-play` 是一条指进 checkout 的符号链接（README「Try it」的开发者装法；brew 装出来的
+`~/bin/t-play` 是一条指进 checkout 的符号链接（README「Try it」的开发者装法；brew 装出来的
 那份同样是一条链，指进 Cellar），所以一个朴素的 `dirname`
-得到的是 `~/bin`，那里既没有 `VERSION` 也没有引擎。`ut-play` 曾是唯一一个不走这段行走的
+得到的是 `~/bin`，那里既没有 `VERSION` 也没有引擎。`t-play` 曾是唯一一个不走这段行走的
 入口点，于是通过符号链接调用时 `--version` 答的是 `unknown`；现在它按它兄弟们一直以来的
 方式解析。`tests/contract.sh` **通过一条真符号链接**把这个值钉死在文件上，
 因为十个入口点全都打印 `unknown` 时，它们彼此完全一致。
@@ -392,7 +406,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 
 其余全是契约面，只住 `ARCH-cli-contract.md`「配置面」：这个文件为什么**不可选**（缺了退 2，
 不给 `--version` 留后门）、命名空间白名单与拒收名单、刻意不进出厂文件的那几个旋钮、
-键表、优先级链，与 `uting` 的写回。
+键表、优先级链，与 `ting` 的写回。
 
 **为什么每个动词自己把门（「平级动词，没有内核」 的反面）。** 旧形状是一个内核加两层把门的包装，门是一个*层*。
 搜索与抽取搬出去之后，播放器只剩一个动词，于是也就不存在需要防守的绕过路径了 ——
@@ -401,7 +415,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 门表、每个动词的门臂措辞，与"消息里的 `<engine>` 是拼出来的、不是写死的 `yt`"这条规矩：
 ARCH-cli-contract.md「门模型」与「命令规格」。
 
-**自定位的兄弟，而不是 PATH 查找。** 以 `~/bin/uting` 被调用时，脚本的 `$0` 是那条**符号链接**，
+**自定位的兄弟，而不是 PATH 查找。** 以 `~/bin/ting` 被调用时，脚本的 `$0` 是那条**符号链接**，
 不是代码本身 —— 所以每个脚本先解析自己的符号链接链，再拿真实文件所在的目录去找兄弟。
 机制就是这么多，而这正是为什么 checkout 可以放在任何地方、且不需要一个 `bin/` 条目也能工作。
 
@@ -418,14 +432,14 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
 
 **支配原则，不因拆分而变，只被拆分磨得更锋利：** 正确性往**下**加 —— 与播放有关就加在
 播放器里，与站点有关就加在引擎里 —— 这样每一个面都继承它；绝不往**上**加进某个 UI。
-一个本可以由 `ut-play` 做的修复却做在了 `uting` 里，那是一个"改错了文件"的 bug。
+一个本可以由 `t-play` 做的修复却做在了 `ting` 里，那是一个"改错了文件"的 bug。
 
 **十个脚本之间的重复是刻意的，不是漂移，而这里就是它被数的地方。** `ut_read_config` 在
 **十个入口点**里各出现一次，十份逐字节相同（函数体 sha 一致，2026-09-02 复测）—— 配置层是
 一个根上的数据文件加一份复制过去的读取器，不是第十一个文件（「两个根数据文件」）；同理 `die` 在**十个**里
-各一份，`fmt_dur` 在**八个**里 —— 六个引擎，加上 `ut-playlist` 与 `ut-history` 两个存储：
+各一份，`fmt_dur` 在**八个**里 —— 六个引擎，加上 `t-playlist` 与 `t-history` 两个存储：
 它们同样在整形 JSON，所以一个 bash 版本存在的唯一意义就是每行 fork 一次 jq；`require_deps`
-在**七个**里（两个存储与 `uting` 不跑 yt-dlp/curl），`ensure_scratch` 与那些信封发射器在六个
+在**七个**里（两个存储与 `ting` 不跑 yt-dlp/curl），`ensure_scratch` 与那些信封发射器在六个
 引擎里各一份。**副本自己不数自己**：两个存储的 `fmt_dur` 注释指回这里，六个引擎的指回
 ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那儿）—— 因为一个写在副本里的序数，
 会在下一对引擎落地时**无声地**过期。这一段自己就是那句话的证据：网易云那一对落地时，
@@ -440,7 +454,7 @@ ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那
 **源流。** 这套套件源自一个大一统的 `yt-search-n-play.sh`：它的非交互内核变成了
 `shell/yt` 加两个把门的动词，然后再次拆成这份文档描述的播放器与引擎对；
 它那个自绘 TUI（菜单 chrome、`display_menu`、`read_nav_input`、`read_query_input`、
-方向键翻页、阻塞式播放语义）被重新安家到如今的 `uting` —— 同一个菜单，只是如今委派给那些动词。
+方向键翻页、阻塞式播放语义）被重新安家到如今的 `ting` —— 同一个菜单，只是如今委派给那些动词。
 那个原版的**播放**行为几乎没有留下什么：如今播放是 detached 的，
 所以"播放前不 clear"与"播放后不清空 stdin"描述的是一个 TUI 已经不再运行的前台 mpv，
 而行如今是量过并省略的、不再任它折行。**活下来的**是菜单的形状与它的键位表；
@@ -448,7 +462,7 @@ ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那
 
 ## 原语与接缝（可替换点）
 
-**接缝如今按文件切开。** 没有任何一个文件同时担任其中两个角色，而 `ut-play` 里的一次 yt-dlp
+**接缝如今按文件切开。** 没有任何一个文件同时担任其中两个角色，而 `t-play` 里的一次 yt-dlp
 调用、或引擎里的一次 mpv 调用，都是分层违规，不是接缝。
 
 | 原语 | 角色 | 谁可以调它 | 接缝（唯一的调用点） |
@@ -457,7 +471,7 @@ ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那
 | **mpv** | 播放 | 只有播放器 | `run_mpv()`（唯一的播放接缝）+ `mpv_supports_vo()` 能力探测 |
 | **curl** | HTTP 传输 | `bili-search` 与 `ne-search`（各自的传输层）；`bili-resolve`（仅 `--parts`）、`ne-resolve`（仅 `--transcript`）；`yt-resolve`（仅探测） | `fetch_page_once`（`bili-search` 与 `ne-search` 各一份）、`fetch_view_once` / `fetch_pagelist_once`（`bili-resolve` 的 `--parts`，首选与回落两个端点，ARCH-engine.md「多 P」）、`fetch_lyric_once`（`ne-resolve` 的 `--transcript`）—— 全套件仅有的四处手工拼请求，全部对着公开端点；`probe_raw`（`yt-resolve`，可取性探测） |
 | **openssl** | AES-128-CBC | 只有 `ne-search` | `weapi_params`（`ne-search`）—— 全套件唯一一处加密。**引擎局部依赖**：不进必需依赖表，缺它只少这一个命令（ARCH-engine.md） |
-| **nc** | mpv JSON-IPC | 播放器，以及作为客户端的 `uting` | `live_props`（读）与 `ipc_command`（命令 —— 五个 socket 动词共用）（`ut-play`）；TUI 自己的客户端（`ARCH-tui.md`） |
+| **nc** | mpv JSON-IPC | 播放器，以及作为客户端的 `ting` | `live_props`（读）与 `ipc_command`（命令 —— 五个 socket 动词共用）（`t-play`）；TUI 自己的客户端（`ARCH-tui.md`）   |
 | jq | JSON 整形 | 所有人 | 无处不在 |
 
 **mpv 藏在一个函数后面。** 五种播放模式（audio/video/fast/ascii/viz）全部经由 `run_mpv` 出去
@@ -498,11 +512,11 @@ ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那
 只是各自的 flag 集不同（ARCH-cli-contract.md「命令规格」）。
 
 ```
-   $ ut-play -d -j --engine yt -- "https://youtu.be/ID"
+   $ t-play -d -j --engine yt -- "https://youtu.be/ID"
         │
         ▼
    ┌───────────────────────────────────────────────────────────────────
-   │ ut-play
+   │ t-play
    │  (a) 长选项**归一化**循环
    │      --json→-j  --detach→-d  --list→-l  --help→-h --version→-V
    │      --color/--volume/--start/--engine/--quality/--id → 变量；--queue → QUEUE_INPUT
@@ -522,7 +536,7 @@ ARCH-engine.md「搜索子系统」（一个引擎自己的时长规矩住在那
    │  (d) IS_HANDLE？非空**且**不含空白
    │      （整个判断就这么多 —— 见下）
    │  (e) **路由**（先匹配先赢）：
-   │        没句柄也没动作 → die，点名 <engine>-search / uting（「调用形状」）
+   │        没句柄也没动作 → die，点名 <engine>-search / ting（「调用形状」）
    │        ACTION=status     → do_status      （只要 jq；退 0）
    │        ACTION=stop       → do_stop        （只要 jq；退 0|4）
    │        ACTION=set-volume → do_set_volume  （jq+nc；退 0|4）
@@ -548,7 +562,7 @@ id 的*形状*（`dQw4w9WgXcQ`、`BV1FPjy6TEiE`）是引擎知识，而把它交
 播放器仍然作为用法错误拒绝的，是那些**根本不是句柄**的东西：空的，或者含空白 ——
 那是一条搜索查询，归另一个动词管。
 
-**由构造保证的非交互（「调用形状」）。** 除 `uting` 之外没有任何动词会提问。"没有句柄"那道守卫跑在
+**由构造保证的非交互（「调用形状」）。** 除 `ting` 之外没有任何动词会提问。"没有句柄"那道守卫跑在
 mpv 依赖检查**之前**，于是消息讲的是缺输入，而不是缺播放器 ——
 而 `-V` 在任何依赖门之前就被回答，因为"要先装上 yt-dlp 才能知道自己装的是哪个版本"是反的。
 
@@ -602,11 +616,11 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 **B. 播放 —— 播放器问一个引擎，然后播一条直链**
 
 ```
-   $ ut-play -j --engine yt -- <handle>
+   $ t-play -j --engine yt -- <handle>
          │
          ▼
    ┌──────────────────────────────────────────────────────────────────
-   │ 进程 1 ：ut-play
+   │ 进程 1 ：t-play
    │    resolve_via_engine:  "$SCRIPT_DIR/$ENGINE-resolve"（否则 PATH）
    │         │               未知引擎 → 退 1，并把它的名字说出来
    │         ▼
@@ -633,18 +647,18 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 **B′. detached 播放 —— 多一个进程，而父进程在毫秒级返回**
 
 ```
-   $ ut-play -d -j --engine yt -- <handle>
+   $ t-play -d -j --engine yt -- <handle>
          │
          ▼
-   进程 1 ：ut-play，那个**会返回的**父进程
+   进程 1 ：t-play，那个**会返回的**父进程
         detach_play: ensure_state_dir · new_player_id · lock_player_state
              ├── nohup bash "$SELF" -f MODE --engine <name> -- <handle> &
-             │      是一个**全新的 ut-play**，不是直接的 mpv。set -m + disown，
+             │      是一个**全新的 t-play**，不是直接的 mpv。set -m + disown，
              │      于是播放器活过这个父进程的退出（ARCH-player.md「进程组模型」）；stdin → /dev/null（「播放与 detached 生命周期」）
              └── 发出 {status:"started", id, pid, sock, log, title:null} 然后**退出**
                         │
                         ▼
-   进程 2 ：ut-play（YT_DETACHED=1、YT_PLAYER_ID=<id>、YT_IPC_SOCK=<sock>）
+   进程 2 ：t-play（YT_DETACHED=1、YT_PLAYER_ID=<id>、YT_IPC_SOCK=<sock>）
             → 进 detached_child_loop（一个播放器消费一条队列 —— 单句柄就是
             长度 1 的队列，ARCH-player.md「队列」）：每一首走上面的 B，自己回填自己的
             记录（patch_player_meta —— 不是一个后台兄弟进程，ARCH-player.md「进程组模型」），
@@ -654,11 +668,11 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 **C. 生命周期控制 —— 不抽取，也不起新 mpv**
 
 ```
-   $ ut-play --status -j    |    --set-volume 60 --id <id>    |    --stop --all
+   $ t-play --status -j    |    --set-volume 60 --id <id>    |    --stop --all
          │
          ▼
    ┌──────────────────────────────────────────────────────────
-   │ ut-play
+   │ t-play
    │    reap_dead_players → resolve_target
    │    read_player_live → live_props ──► nc -U <sock> ──┐
    │    do_stop → stop_group ──► 杀掉整个进程组           │
@@ -668,8 +682,8 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
          没有 yt-dlp · 没有新 mpv · 每个播放器一次 socket 往返
 ```
 
-`uting` 不增加第四种形状：它把 **A**（`<engine>-search -j`）与 **B′**
-（`ut-play -d -j --engine`）作为子进程跑；控制走 **C** 的动词（暂停、seek、跳队列 ——
+`ting` 不增加第四种形状：它把 **A**（`<engine>-search -j`）与 **B′**
+（`t-play -d -j --engine`）作为子进程跑；控制走 **C** 的动词（暂停、seek、跳队列 ——
 一次按键一次调用），只有每拍一次的**读**与按住不放的音量键用它自己的 `nc -U` 直连
 播放器的 socket —— 划出这条线的实测在 「已知约束」（`ARCH-tui.md`、ARCH-player.md「运行时 IPC」）。
 
@@ -707,7 +721,7 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 ## 人 —— 交互式浏览与播放
 
 ```
-   $ uting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
+   $ ting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
      → 自绘菜单，**一个视图**：浏览 / 翻页 / 实时过滤 / 新搜索；Enter 播放是
        **detached、非阻塞**的 —— 菜单保住它的终端，音乐在后续每一步操作之间继续放。
        轮换键改源 / 排序 / 模式 / 质量档 / 语言 / 主题（改的设置写回用户配置 ——
@@ -718,7 +732,7 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
        则 seek），`+` 入队、`a` 存进播放列表都带着那个偏移。
        Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收**自己起的**播放器；
        开屏时就已经在放的那个是接管来的，留着继续放 —— ARCH-tui.md「启动时接管」）
-     完整键位面：`uting --help`（键表本身）、ARCH-tui.md（行为与 why）；
+     完整键位面：`ting --help`（键表本身）、ARCH-tui.md（行为与 why）；
      命令面与那道 TTY 门在 ARCH-cli-contract.md「命令规格」
 ```
 
@@ -731,8 +745,8 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
    url=$(jq -r '.results[0].url'  <<<"$env")
    eng=$(jq -r '.engine'          <<<"$env")
    # 2) 播放（阻塞式散文），或者拿一个机器可读的结果：
-   ut-play --engine "$eng" -- "$url"                       # 散文
-   ut-play -j --engine "$eng" -- "$url" | jq -r .reason    # → ok 时是 null；失败时是枚举
+   t-play --engine "$eng" -- "$url"                        # 散文
+   t-play -j --engine "$eng" -- "$url" | jq -r .reason     # → ok 时是 null；失败时是枚举
 ```
 
 换一个源就是把这三行里的 `yt-search` 换成 `bili-search`，别的什么都不变 ——
@@ -763,13 +777,13 @@ ARCH-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 ## Agent —— 后台播放加生命周期控制
 
 ```
-   ut-play -d --engine yt -- "$u1"        # detach 播放器 1（立即返回，约 0.03s）
-   ut-play -d --engine bili -- "$u2"      # **第二个引擎**的播放器，并排跑
-   ut-play -j --status                    # {"status":"players","players":[{id,…},{id,…}]}（退 0）
-   id=$(ut-play -j --status | jq -r '.players[0].id')
-   ut-play -j --set-volume 70 --id "$id"  # 播放器 1 的实时音量 → {"status":"ok",id,volume:70}
-   ut-play --stop --id "$id"              # 只停播放器 1（幂等）
-   ut-play --stop --all                   # 停掉每一个；不留孤儿
+   t-play -d --engine yt -- "$u1"         # detach 播放器 1（立即返回，约 0.03s）
+   t-play -d --engine bili -- "$u2"       # **第二个引擎**的播放器，并排跑
+   t-play -j --status                     # {"status":"players","players":[{id,…},{id,…}]}（退 0）
+   id=$(t-play -j --status | jq -r '.players[0].id')
+   t-play -j --set-volume 70 --id "$id"   # 播放器 1 的实时音量 → {"status":"ok",id,volume:70}
+   t-play --stop --id "$id"               # 只停播放器 1（幂等）
+   t-play --stop --all                    # 停掉每一个；不留孤儿
 ```
 
 `players/` 恰好有一个所有者，所以 `--status` 与 `--stop --all` 看得见每一个播放器，
@@ -787,7 +801,7 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
 
 - detached 的 `ascii`/`viz`（没有终端可画）—— 在解析期就被拒（ARCH-player.md「状态机」）；
   `audio` 是常态，而 `video`/`fast` 会开它们自己的 GUI 窗口。
-- 阻塞式播放（`ut-play -- <handle>` / `-j`）只在播放结束时才返回；非阻塞的 agent 流程请用
+- 阻塞式播放（`t-play -- <handle>` / `-j`）只在播放结束时才返回；非阻塞的 agent 流程请用
   `--detach` + `--status`/`--stop`，或者 `<engine>-resolve`。
 - **范围说明（「两个存储」）：三个收听功能全部已落地**，在 shell 版里，
   按它们彼此依赖的顺序 —— 播放列表管理（ARCH-player.md「持久状态层」、ARCH-cli-contract.md「命令规格」）、
@@ -796,11 +810,11 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
   **一个只有键位、没有动词的功能只做了一半。**
   收藏刻意不是一个功能（它是一个名字固定的播放列表）；下载器未排期。
 - **队列的编辑 —— 重排、出队、循环、随机 —— 刻意不进 v1。** 那些是对一条队列的操作；
-  第一版必须先证明队列会**推进**，而那是其余一切所依赖的部分。加它们是给 `ut-play` 加动词
+  第一版必须先证明队列会**推进**，而那是其余一切所依赖的部分。加它们是给 `t-play` 加动词
   （每个都带自己的 `-j` 信封，「两个存储」），不是加一个新命令 —— 队列归播放器（ARCH-player.md「队列」）。
-- `uting` 的行是每次搜索对缓存结果的一次 jq —— 小 N 没问题；不是为几千条结果设计的。
-- **播放器里的 URL 嗅探** —— `ut-play` 从不猜一条光秃秃的 URL 属于哪个引擎；
-  调用方说（`--engine`），而 `uting` 永远知道，因为搜索是它做的。
+- `ting` 的行是每次搜索对缓存结果的一次 jq —— 小 N 没问题；不是为几千条结果设计的。
+- **播放器里的 URL 嗅探** —— `t-play` 从不猜一条光秃秃的 URL 属于哪个引擎；
+  调用方说（`--engine`），而 `ting` 永远知道，因为搜索是它做的。
   推迟到第三个引擎让一张模式注册表值那个重量时再说（ARCH-cli-contract.md「命令规格」）。
 - **一个共享的引擎库** —— 刻意不建；那份重复是"一个引擎是一对自足文件"的代价（「命令拓扑」）。
 - 不套 MCP 包装（「定位与设计目标」）。不依赖第三方媒体客户端（「系统全景」）。
@@ -824,7 +838,7 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
        `--next` 一发出，再拒绝 `--pause` 就只是任意。
     3. **代价是反的。** 动那个冻结面是一次刻意且有记录的行为（「冻结面」）。
        五个一起做只开**一次**；分两批做要开两次。
-    4. **代码本来就存在，只是长在错的文件里。** `uting` 的 `toggle_pause` / `seek_relative`
+    4. **代码本来就存在，只是长在错的文件里。** `ting` 的 `toggle_pause` / `seek_relative`
        已经直接驱动 IPC 好几个月了，所以这次是把逻辑往**下**搬、并**净删**了 TUI 代码 ——
        那是支配原则，而不是给播放器做加法。
   属于这里的是**代码到底是什么**：
@@ -832,17 +846,17 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
       没有 `--toggle-pause`（mpv 的 `cycle pause` 不回值，信封只能猜结果状态）。
       动词面与"信封报**读回**的属性、绝不报被要求的值"这条机制：
       ARCH-cli-contract.md「命令规格」、ARCH-player.md「运行时 IPC」。
-    - **什么**没有**搬，以及决定它的那个数字。** `uting` 每拍一次的**读**
+    - **什么**没有**搬，以及决定它的那个数字。** `ting` 每拍一次的**读**
       （`fetch_play_times`，一条连接四个属性）留在 socket 上：每 1 秒一拍付一条进程链是真代价 ——
       这一半是那条判据里唯一站得住的部分。按住不放的 `9`/`0` 音量键也一样 ——
-      在一个活播放器上各按 10 次实测：**走 socket 每次 10 ms，走 `ut-play --set-volume`
+      在一个活播放器上各按 10 次实测：**走 socket 每次 10 ms，走 `t-play --set-volume`
       每次 60 ms**（后者还要解析目标、并在锁下补状态文件）。那超过了为这个选择设的 50 ms 线，
       所以那两个键留下了，而这个例外**带着它的数字**被记下来，而不是留成一处没人解释的不一致。
       暂停与 seek 是一次按键一次调用、不是一拍一次，所以它们乐意付 —— 而 TUI 因此**净删**了
       IPC 写代码，这才是重点：**播放的正确性如今住在播放器里，每一个调用方都继承它。**
   仍然**刻意**不在范围内的：
     - **前台**播放的实时音量 —— 它有一个真 tty，所以 mpv 自己的音量键本来就能用；不需要 IPC。
-      （`uting` 已经不是前台了：它 detached 地播、经 socket 调音量，而 `--status` 会把它活读出来。）
+      （`ting` 已经不是前台了：它 detached 地播、经 socket 调音量，而 `--status` 会把它活读出来。）
     - **`netcat-traditional` / busybox-only 的主机** —— `resolve_nc_unix` 按**能力**探测
       一个带 `-U` 的 netcat（机制与落点：ARCH-player.md「运行时 IPC」），主流发行版因此直接通，
       剩下的这一类装一个带 `-U` 的变体即可。**socat 依旧被拒**
@@ -876,7 +890,7 @@ ARCH-cli-contract.md「命令规格」）与 `-j`（结构化结果），
 | 写回把用户手写的配置改坏（丢注释、写下一个读不回来的值、架空一条 symlink） | 就地只改匹配行 `=` 右边的值 + round-trip 闸 + `mv` 到**解析后**的真实路径 | ARCH-cli-contract.md「配置面」 |
 | 一个被环境压住的键被写进文件，此后每次启动读到又扔掉 | 读配置**之前**记下哪些键已在环境中，对它们写回是 no-op 加一行提示 | ARCH-cli-contract.md「配置面」 |
 | 跑一次测试套件改掉开发者自己的配置、历史或正在听的播放器 | `tests/` 下每个入口点各自 export `TMPDIR`/`UT_STATE_DIR`/`UT_CONFIG`，外加 `contract.sh` 在两个出口断言用户真实配置的 `cksum` 没变 | `tests/contract.sh` 门口 |
-| `uting` 在没有 TTY 时被跑起来（agent、管道） | 要求 `-t 0 && -t 1`，否则 `die` —— 绝不挂起等一个不会来的按键 | ARCH-cli-contract.md「退出码、TTY、依赖」 |
+| `ting` 在没有 TTY 时被跑起来（agent、管道） | 要求 `-t 0 && -t 1`，否则 `die` —— 绝不挂起等一个不会来的按键 | ARCH-cli-contract.md「退出码、TTY、依赖」  |
 | 标题里的 tab / 换行 / glob 撑破一行或撑破过滤 | 字段用 US 切分；过滤是纯 bash 的 `nocasematch` + 加引号的词元 | ARCH-tui.md |
 | 一个自己画输入的 UI 让终端亮起 Secure Input / 锁图标 | `-echo` 必须连着 `-icanon`（终端反应的是这一对），并从恢复光标的同一个 trap 里恢复 | 「可移植性契约」 |
 | `set -u` 下的空数组展开在 3.2 上中止 | 展开前先守卫 | 「可移植性契约」 |
@@ -960,7 +974,7 @@ bash）下行为一致。我们*不*依赖 Homebrew 的 bash —— 一个被管
    空数组 + set -u    ：在一个**空**数组上光秃秃地写 "${arr[@]}"，在 3.2 上会**中止**
                         （"unbound variable"）。用下面两种可移植写法之一：
                           ((${#arr[@]})) && cmd "${arr[@]}"          （守卫，核心里的写法）
-                          cmd ${arr[@]+"${arr[@]}"}                  （内联，uting 里的写法）
+                          cmd ${arr[@]+"${arr[@]}"}                  （内联，ting 里的写法）
    算术 + set -e      ：光秃秃的 ((expr)) 是一条**命令**，而当表达式求值为 0 时它的退出码是 1。
                         在 set -e 下那会中止脚本。所以绝不要把 ((x = 1 - x)) 或 ((n += w))
                         写成一条语句 —— 写 x=$((1 - x)) / n=$((n + w))。
@@ -968,7 +982,7 @@ bash）下行为一致。我们*不*依赖 Homebrew 的 bash —— 一个被管
    read -rsn1 是一个**字节**：在 3.2 上不是一个字符。在提示处键入的一个 CJK 字符会作为
                         2–3 个独立的"键"到达（验证过：你 → e4 bd a0），
                         所以任何把按键累积成文本的读取器，都必须从首字节把那个 UTF-8 序列
-                        重新拼起来（uting 的 utf8_complete）。首字节要按**表成员关系**分类，
+                        重新拼起来（ting 的 utf8_complete）。首字节要按**表成员关系**分类，
                         与 char_w 的做法一致 —— **不要**用字节范围比较：
                           `LC_ALL=C [[ … ]]`  根本不是合法的 bash。赋值前缀只作用于简单命令，
                             而 [[ 是保留字，于是 bash 会把那个裸字节当命令名去跑；
@@ -1000,8 +1014,8 @@ bash）下行为一致。我们*不*依赖 Homebrew 的 bash —— 一个被管
                         而当**任何地方都没有**匹配时有一条快速退出路径（48KB 只要 5ms），
                         这恰恰就是这个写法读起来"免费"的原因：一个手写的、标题很短的测试信封
                         走的是快路径，而每一个真实标题都含空格、走的是慢路径。
-                        在这条规矩存在之前量到的：`yt-search -j -n 25 | ut-playlist --add`
-                        在一次这样的展开里花了 16s，`ut-play -d --queue -` 花了 16.5s。
+                        在这条规矩存在之前量到的：`yt-search -j -n 25 | t-playlist --add`
+                        在一次这样的展开里花了 16s，`t-play -d --queue -` 花了 16.5s。
                         所以"是不是空白"的判断是一次**匹配**，绝不是一次替换：
                           [[ "$s" == *[![:space:]]* ]]   含有非空白字符
                           [[ "$s" != *[![:space:]]* ]]   是空白或空

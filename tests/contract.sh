@@ -35,7 +35,7 @@
 # one, and 0 failed is the number that means passing. That 28 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
-# after (shell/ut-playlist:lock_playlist).
+# after (shell/t-playlist:lock_playlist).
 #
 # Per-SECTION figures are deliberately absent: this file's output is block-buffered the moment
 # it is piped or redirected, so timestamping its section headers dates the flush, not the work.
@@ -49,7 +49,7 @@
 # It starts no process it did not have to and talks to no peer — every live claim is
 # tests/playback.sh's.
 # The TUI section is the near-exception and is held to the same line: the process there is a
-# real `uting` on a real tty, it is CHECKED to leave no player behind, and the EXIT trap reaps
+# real `ting` on a real tty, it is CHECKED to leave no player behind, and the EXIT trap reaps
 # one if it ever does.
 #
 # Usage:  tests/contract.sh            all checks
@@ -78,7 +78,7 @@ done
 # THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
 # than restating it. ARCHITECTURE.md「风险登记」 carries the one-line risk row; this is its why.
 #
-# `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
+# `t-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/ting-$(id -u)", shell/t-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
 # player they are listening to, touches players in their real players/, and
 # rm -rf's their real failure record — three side effects on live user state, in a suite whose
@@ -88,19 +88,26 @@ done
 # invoked or asserted: the player is the real one and its state is really written, just not on
 # top of the user's. The playlist store already had this in UT_STATE_DIR; the half that kills
 # processes is the half that needed it more.
-UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-contract.XXXXXX") || exit 1
+UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ting-contract.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
-STATE_DIR="$TMPDIR/uting-$(id -u)"
+STATE_DIR="$TMPDIR/ting-$(id -u)"
+[[ -d "$STATE_DIR" ]] || STATE_DIR="${TMPDIR:-/tmp}/ting-$(id -u)"
 
 # ---- the config file, pointed somewhere disposable ----------------------------------
 # The same argument as TMPDIR above, one layer out. Every command in the suite now reads
-# ${XDG_CONFIG_HOME:-~/.config}/uting/config, so without this line a developer whose real
+# ${XDG_CONFIG_HOME:-~/.config}/ting/config, so without this line a developer whose real
 # config sets UT_MAX_SEARCH_RESULTS or UT_SORT_FIELD would see this file go red on their
 # machine and green on everyone else's — the worst failure a suite can have, because the
 # red is not in the subject. It points at a real, EMPTY file rather than a missing path so
 # the loader's read path is the one exercised for the rest of the run; the checks that
 # prove the loader actually loads something write their own file and set UT_CONFIG
 # themselves.
+# TING_* is DROPPED rather than mirrored, and that is the whole isolation story in one line:
+# every export below is a UT_ name, and TING_ now outranks UT_ in the loader — so a developer
+# with TING_CONFIG or TING_STATE_DIR exported would have this file's own redirection silently
+# overruled and would run against their real files. The checks that prove the TING_ names work
+# set them themselves, one command at a time.
+unset TING_CONFIG TING_STATE_DIR
 export UT_CONFIG="$UT_TEST_TMP/config"
 : > "$UT_CONFIG"
 
@@ -109,7 +116,7 @@ export UT_CONFIG="$UT_TEST_TMP/config"
 # a new session inherits the tmux SERVER's environment, not this shell's, which is why the
 # TUI section passes its own knobs explicitly — and it does not reach whatever a future check
 # forks in a way nobody predicted here. That gap used to be harmless because nothing in the
-# suite WROTE a config; uting now writes eleven preference keys back to the user's file, so an
+# suite WROTE a config; ting now writes eleven preference keys back to the user's file, so an
 # unisolated caller does not merely read a developer's config, it edits it, and the value it
 # leaves is one they never chose.
 #
@@ -117,27 +124,34 @@ export UT_CONFIG="$UT_TEST_TMP/config"
 # this line was written — which is exactly what three call sites each remembering to export
 # cannot do. cksum rather than a timestamp: it is POSIX (macOS `stat` and GNU `stat` do not
 # share a format string), and the claim is that the file's CONTENT is the one the user left.
-REAL_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
-cfg_fingerprint() { cksum < "$REAL_CFG" 2>/dev/null || echo absent; }
+#
+# BOTH spellings are watched, not just the one this checkout would create. The rename gave
+# the loader a two-name chain (ting first, the pre-rename uting second), so which file a
+# leaked write lands in depends on the developer's machine, not on this suite — and a guard
+# that watches only one of them is green on exactly the machine it was meant to protect.
+REAL_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+REAL_CFG_LEGACY="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+_cfg_sum() { [ -r "$1" ] && cksum < "$1" || echo absent; }
+cfg_fingerprint() { printf '%s|%s' "$(_cfg_sum "$REAL_CFG")" "$(_cfg_sum "$REAL_CFG_LEGACY")"; }
 REAL_CFG_SUM=$(cfg_fingerprint)
 # Called before each summary, so both exits make the claim. Absent on both sides is a skip and
 # not a green: a machine with no config to damage proves nothing about one that has it. Absent
 # then PRESENT is a fail, which is the shape a leaked write takes on that same machine.
 report_real_config() {
-    if [ "$REAL_CFG_SUM" = absent ] && [ "$(cfg_fingerprint)" = absent ]; then
-        echo "  skip  (no config at $REAL_CFG to watch)"
+    if [ "$REAL_CFG_SUM" = "absent|absent" ] && [ "$(cfg_fingerprint)" = "absent|absent" ]; then
+        echo "  skip  (no config at $REAL_CFG or $REAL_CFG_LEGACY to watch)"
         return 0
     fi
     report "your own config is untouched" "$REAL_CFG_SUM" "$(cfg_fingerprint)"
 }
 
 # ---- …and the real STATE DIR, watched the same way ------------------------------------
-# The config file got this guard when uting learned to write one. The playlist store and the
+# The config file got this guard when ting learned to write one. The playlist store and the
 # listening log have been writable by every check in this file since long before that, and
 # they had no guard at all — the discipline was three sections each remembering to point
 # UT_STATE_DIR somewhere disposable, which is exactly the kind of discipline that holds until
 # it doesn't. It didn't: a section added after the one that ends with `unset UT_STATE_DIR`
-# assigned the variable without exporting it, and every ut-playlist call in it went to the
+# assigned the variable without exporting it, and every t-playlist call in it went to the
 # user's real store and left a playlist there.
 #
 # So the same two fingerprints the config gets, around the same run, over the whole state
@@ -145,12 +159,14 @@ report_real_config() {
 # WHICH lists and logs exist, and a real listening session running in another window will
 # legitimately grow today's .jsonl while this file runs. A name appearing or vanishing is the
 # shape a leak takes, and it is the shape this catches.
-REAL_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/uting"
-state_fingerprint() { ls -R "$REAL_STATE" 2>/dev/null | cksum || echo absent; }
+# Both spellings again, and for the same reason the config guard above takes both.
+REAL_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/ting"
+REAL_STATE_LEGACY="${XDG_STATE_HOME:-$HOME/.local/state}/uting"
+state_fingerprint() { ls -R "$REAL_STATE" "$REAL_STATE_LEGACY" 2>/dev/null | cksum; }
 REAL_STATE_SUM=$(state_fingerprint)
 report_real_state() {
-    if [ ! -d "$REAL_STATE" ]; then
-        echo "  skip  (no state dir at $REAL_STATE to watch)"
+    if [ ! -d "$REAL_STATE" ] && [ ! -d "$REAL_STATE_LEGACY" ]; then
+        echo "  skip  (no state dir at $REAL_STATE or $REAL_STATE_LEGACY to watch)"
         return 0
     fi
     report "your own store is untouched" "$REAL_STATE_SUM" "$(state_fingerprint)"
@@ -158,8 +174,8 @@ report_real_state() {
 
 # The reap comes FIRST and the directory second — the order playback.sh's cleanup already
 # uses, and for a reason this file learned the hard way. Nothing here presses Enter, but the
-# TUI section runs a real `uting`, and on 2026-08-25 a run whose `q` check came back red left
-# an `ut-play --engine yt -f audio` child and its mpv behind. With `rm -rf` as the whole of
+# TUI section runs a real `ting`, and on 2026-08-25 a run whose `q` check came back red left
+# an `t-play --engine yt -f audio` child and its mpv behind. With `rm -rf` as the whole of
 # the cleanup, the player's RECORD went with the directory: the process was orphaned to PID 1
 # and `--stop --all` could no longer reach it — a suite that "does not touch your state" had
 # left audio running that nothing but `kill` could stop.
@@ -168,7 +184,7 @@ report_real_state() {
 # its own: a bare `mpv .*--input-ipc-server` counts the user's players too. It is a report and
 # not a check because the CHECK for it is in the TUI section, where it can name the cause.
 cleanup() {
-    shell/ut-play --stop --all -j >/dev/null 2>&1
+    shell/t-play --stop --all -j >/dev/null 2>&1
     if pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" >/dev/null 2>&1; then
         echo "contract.sh: ORPHAN mpv still running after --stop --all:" >&2
         pgrep -fl "mpv .*--input-ipc-server=$STATE_DIR" >&2
@@ -275,89 +291,119 @@ err_has() {
 #   · the TUI section LAST, driven in a real tmux session.
 # Moving a section is therefore a deliberate act.
 echo "── rejections (1 = usage error) ───────────────────────────────────"
-report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
+report "core no args"             1 "$(rc /bin/bash shell/t-play)"
 report "yt-search no args"        1 "$(rc /bin/bash shell/yt-search)"
 report "yt-search --detach"       1 "$(rc shell/yt-search --detach -- x)"
 report "yt-search -f audio"       1 "$(rc shell/yt-search -f audio -- x)"
-report "ut-play bare query"       1 "$(rc shell/ut-play "a query")"
-report "ut-play -n"               1 "$(rc shell/ut-play -n 5 -- URL)"
-report "ut-play two actions"      1 "$(rc shell/ut-play --status --stop)"
-report "ut-play selector alone"   1 "$(rc shell/ut-play --status --id X)"
-report "ut-play -d + action"      1 "$(rc shell/ut-play -d --stop)"
-report "ut-play -- <query>"       1 "$(rc shell/ut-play -- "a query")"
-report "ut-play --status rejects a handle" 1 "$(rc shell/ut-play --status -- URL)"
-report "ut-play --stop rejects a handle"   1 "$(rc shell/ut-play --stop -- URL)"
+report "t-play bare query"       1 "$(rc shell/t-play "a query")"
+report "t-play -n"               1 "$(rc shell/t-play -n 5 -- URL)"
+report "t-play two actions"      1 "$(rc shell/t-play --status --stop)"
+report "t-play selector alone"   1 "$(rc shell/t-play --status --id X)"
+report "t-play -d + action"      1 "$(rc shell/t-play -d --stop)"
+report "t-play -- <query>"       1 "$(rc shell/t-play -- "a query")"
+report "t-play --status rejects a handle" 1 "$(rc shell/t-play --status -- URL)"
+report "t-play --stop rejects a handle"   1 "$(rc shell/t-play --stop -- URL)"
 # The gating wrapper is gone, so these three are the checks that it took its gate with it
 # rather than dropping it: an unknown long flag must not reach getopts as a bare `-`, and
 # the two verbs that moved to the engine must name the engine instead of half-working.
-report "ut-play unknown long flag" 1 "$(rc shell/ut-play --json-full -- URL)"
-report "--get-url is retired"     1 "$(rc shell/ut-play --get-url -- URL)"
-report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
+report "t-play unknown long flag" 1 "$(rc shell/t-play --json-full -- URL)"
+report "--get-url is retired"     1 "$(rc shell/t-play --get-url -- URL)"
+report "--info is the engine's"   1 "$(rc shell/t-play --info -- URL)"
 
 echo "── idle lifecycle: exit 0, ONE compact line, idempotent ───────────"
-report "--status exit"      0 "$(rc shell/ut-play --status -j)"
-report "--status one line"  1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
-report "--status is empty"  0 "$(jq_ok '.players==[]' shell/ut-play --status -j)"
-report "--stop --all exit"  0 "$(rc shell/ut-play --stop --all -j)"
-report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d ' ')"
+report "--status exit"      0 "$(rc shell/t-play --status -j)"
+report "legacy ut-play symlink answers" 0 "$(shell/ut-play --status -j >/dev/null 2>&1; echo $?)"
+report "legacy ut-playlist symlink answers" 0 "$(UT_STATE_DIR="$UT_TEST_TMP/legacy" shell/ut-playlist --ls -j >/dev/null 2>&1; echo $?)"
+report "legacy ut-history symlink answers" 0 "$(UT_STATE_DIR="$UT_TEST_TMP/legacy" shell/ut-history --ls -j >/dev/null 2>&1; echo $?)"
+report "legacy uting symlink answers --version" 0 "$(shell/uting --version >/dev/null 2>&1; echo $?)"
+
+# ── AND THE OTHER DIRECTION, which is the one that actually broke. The four symlinks above
+# make the OLD names work; nothing made the new ones work alone, because the TUI looked its
+# three siblings up under the old spelling only and this checkout carries both. A copy that
+# has just the ten renamed scripts in it is the only input that can tell those two apart —
+# and PATH has to lose any directory holding an old name as well, or an installed one
+# answers and the copy proves nothing. "Reached a gate" is the pass: which gate depends on
+# what the machine has, but "cannot locate" is the failure and it is unambiguous.
+NEWONLY=$(mktemp -d "${TMPDIR:-/tmp}/ting-newonly.XXXXXX")
+mkdir -p "$NEWONLY/shell"
+cp VERSION config "$NEWONLY/"
+cp shell/ting shell/t-play shell/t-playlist shell/t-history shell/yt-search shell/yt-resolve \
+    shell/bili-search shell/bili-resolve shell/ne-search shell/ne-resolve "$NEWONLY/shell/"
+NEWONLY_PATH=""
+_oldifs=$IFS
+IFS=:
+for _d in $PATH; do
+    [ -e "$_d/ut-play" ] && continue
+    NEWONLY_PATH="${NEWONLY_PATH:+$NEWONLY_PATH:}$_d"
+done
+IFS=$_oldifs
+case "$(env "PATH=$NEWONLY_PATH" "$NEWONLY/shell/ting" q </dev/null 2>&1 || true)" in
+*"cannot locate"*) _newonly=missing ;;
+*) _newonly=located ;;
+esac
+report "…and only the new names installed still finds the player" located "$_newonly"
+report "--status one line"  1 "$(shell/t-play --status -j | wc -l | tr -d ' ')"
+report "--status is empty"  0 "$(jq_ok '.players==[]' shell/t-play --status -j)"
+report "--stop --all exit"  0 "$(rc shell/t-play --stop --all -j)"
+report "--stop --all line"  1 "$(shell/t-play --stop --all -j | wc -l | tr -d ' ')"
 # --stop treats an empty set as idempotent success; --set-volume must NOT — there is no
 # volume it could have set, so this is the did-not-take-effect class (4), and the envelope
 # names the why so a caller can tell it from ambiguity (ARCH-cli-contract.md「数据契约」与「退出码」).
-report "idle --set-volume is 4"   4 "$(rc shell/ut-play --set-volume 50 -j)"
-report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-volume 50 -j)"
+report "idle --set-volume is 4"   4 "$(rc shell/t-play --set-volume 50 -j)"
+report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/t-play --set-volume 50 -j)"
 # Every socket verb answers the empty set the way --set-volume does — ONE taxonomy, not one
 # per verb. Stated as a loop over the verbs so a sixth one is covered the day it lands
 # instead of needing its own copied pair of lines.
 for v in --pause --resume "--seek +30" "--seek-to 0"; do
     # shellcheck disable=SC2086  # $v carries a flag AND its value on purpose
-    report "idle $v is 4"        4 "$(rc shell/ut-play $v -j)"
+    report "idle $v is 4"        4 "$(rc shell/t-play $v -j)"
 done
 # The envelope text comes from ONE helper (require_live_target), so asserting it once per
 # verb is raising a count, not covering a case — the exit codes above are what catch a verb
 # wired to the wrong helper.
-report "idle --pause says why"   0 "$(jq_ok '.status=="not_playing"' shell/ut-play --pause -j)"
+report "idle --pause says why"   0 "$(jq_ok '.status=="not_playing"' shell/t-play --pause -j)"
 # The 1-vs-4 split on the one verb that can fail both ways. A malformed value never reaches a
 # player, so it is usage (1); a well-formed call with no player to receive it is 4. Getting
 # these the same way round is what makes an agent retry a call it should have fixed instead.
-report "--seek unsigned is 1"     1 "$(rc shell/ut-play --seek 30 -j)"
-report "--seek non-numeric is 1"  1 "$(rc shell/ut-play --seek abc -j)"
-report "--seek-to negative is 1"  1 "$(rc shell/ut-play --seek-to -5 -j)"
+report "--seek unsigned is 1"     1 "$(rc shell/t-play --seek 30 -j)"
+report "--seek non-numeric is 1"  1 "$(rc shell/t-play --seek abc -j)"
+report "--seek-to negative is 1"  1 "$(rc shell/t-play --seek-to -5 -j)"
 # --seek -15 is a VALUE, not an unknown flag: the parser must take $2 verbatim.
-report "--seek accepts -15"       4 "$(rc shell/ut-play --seek -15 -j)"
+report "--seek accepts -15"       4 "$(rc shell/t-play --seek -15 -j)"
 # --start is the LAUNCH-time offset, and its whole gate is the value one. Whole seconds and
 # nothing else: mpv's own --start grammar (-60 counts from the end, 50% is a fraction) is
 # deliberately not published on this surface, so every spelling of it that a caller might
 # reach for has to come back 1 rather than start somewhere surprising. --start -60 is also
 # the mirror of the --seek case above — there a leading dash is a legal VALUE, here it is a
 # legal value that this flag refuses, and both go through $2 verbatim.
-report "--start negative is 1"    1 "$(rc shell/ut-play --start -60 -- URL)"
-report "--start hh:mm:ss is 1"    1 "$(rc shell/ut-play --start 10:00 -- URL)"
-report "--start non-numeric is 1" 1 "$(rc shell/ut-play --start abc -- URL)"
-report "--start fractional is 1"  1 "$(rc shell/ut-play --start 1.5 -- URL)"
-report "--start needs a value"    1 "$(rc shell/ut-play --start)"
+report "--start negative is 1"    1 "$(rc shell/t-play --start -60 -- URL)"
+report "--start hh:mm:ss is 1"    1 "$(rc shell/t-play --start 10:00 -- URL)"
+report "--start non-numeric is 1" 1 "$(rc shell/t-play --start abc -- URL)"
+report "--start fractional is 1"  1 "$(rc shell/t-play --start 1.5 -- URL)"
+report "--start needs a value"    1 "$(rc shell/t-play --start)"
 # …and it is refused BESIDE a lifecycle verb rather than silently ignored. Both verbs below
 # answer 4 when idle and this call has no player either, so a 1 can only have come from the
 # combination gate — the check cannot pass by accident on the idle path.
-report "--start with --status is 1" 1 "$(rc shell/ut-play --start 60 --status -j)"
-report "--start with --seek is 1"   1 "$(rc shell/ut-play --start 60 --seek +5 -j)"
+report "--start with --status is 1" 1 "$(rc shell/t-play --start 60 --status -j)"
+report "--start with --seek is 1"   1 "$(rc shell/t-play --start 60 --seek +5 -j)"
 # --id now names the playback verbs too, so it has to be ACCEPTED by one of them; the arms
-# that reject it elsewhere are already covered by "ut-play selector alone" and
-# "ut-play -d + action" above, which exercise the same case statement.
-report "--id on --pause parses"   4 "$(rc shell/ut-play --pause --id nope -j)"
+# that reject it elsewhere are already covered by "t-play selector alone" and
+# "t-play -d + action" above, which exercise the same case statement.
+report "--id on --pause parses"   4 "$(rc shell/t-play --pause --id nope -j)"
 
 # ── the queue verbs, idle. They address a player exactly as the socket verbs do (same
 # require_live_target, same 4), but they reach its queue FILE rather than mpv — so they are
 # checked here rather than folded into the loop above, and they must answer without nc.
 Q1='[{"engine":"yt","url":"https://www.youtube.com/watch?v=jNQXAC9IVRw"}]'
-report "idle --next is 4"        4 "$(rc shell/ut-play --next -j)"
-report "idle --next says why"    0 "$(jq_ok '.status=="not_playing"' shell/ut-play --next -j)"
-report "idle --enqueue is 4"     4 "$(rc_in "$Q1" shell/ut-play --enqueue - -j)"
+report "idle --next is 4"        4 "$(rc shell/t-play --next -j)"
+report "idle --next says why"    0 "$(jq_ok '.status=="not_playing"' shell/t-play --next -j)"
+report "idle --enqueue is 4"     4 "$(rc_in "$Q1" shell/t-play --enqueue - -j)"
 # The one place a repeated envelope assertion is NOT raising a count: --enqueue can exit 4
 # for two different reasons (no such player, or a queue it could not write), and only the
 # envelope says which. Proved by making it skip require_live_target — the exit code stayed 4
 # and this line is what went red.
-report "idle --enqueue says why" 0 "$(jq_in '.status=="not_playing"' "$Q1" shell/ut-play --enqueue - -j)"
-report "--id on --next parses"   4 "$(rc shell/ut-play --next --id nope -j)"
+report "idle --enqueue says why" 0 "$(jq_in '.status=="not_playing"' "$Q1" shell/t-play --enqueue - -j)"
+report "--id on --next parses"   4 "$(rc shell/t-play --next --id nope -j)"
 
 # The 1-vs-4 split again, on the verbs that take a PAYLOAD: a queue this process could not
 # parse never reaches a player, so it is usage (1) — and it is refused in the PARENT, which
@@ -366,50 +412,88 @@ report "--id on --next parses"   4 "$(rc shell/ut-play --next --id nope -j)"
 # got past its gate would LAUNCH A PLAYER, and this file starts none. The pairing with
 # "idle --enqueue is 4" above is what gives each of these teeth — 1 where the payload is
 # wrong, 4 where only the player is missing.
-report "bad JSON is 1"           1 "$(rc_in 'not json' shell/ut-play --enqueue -)"
-report "an empty queue is 1"     1 "$(rc_in '[]' shell/ut-play --enqueue -)"
-report "a url with a space is 1" 1 "$(rc_in '[{"engine":"yt","url":"a b"}]' shell/ut-play --enqueue -)"
-report "an empty url is 1"       1 "$(rc_in '[{"engine":"yt","url":""}]' shell/ut-play --enqueue -)"
-report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' shell/ut-play --enqueue -)"
+report "bad JSON is 1"           1 "$(rc_in 'not json' shell/t-play --enqueue -)"
+report "an empty queue is 1"     1 "$(rc_in '[]' shell/t-play --enqueue -)"
+report "a url with a space is 1" 1 "$(rc_in '[{"engine":"yt","url":"a b"}]' shell/t-play --enqueue -)"
+report "an empty url is 1"       1 "$(rc_in '[{"engine":"yt","url":""}]' shell/t-play --enqueue -)"
+report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' shell/t-play --enqueue -)"
 # The three shapes the verb takes, each proved by the SAME rejection: a payload that parses
 # reaches the player check (4), one that does not is usage (1). A search envelope is accepted
 # because a search result does not carry `engine` — that field is on the envelope, so only
 # taking the whole thing can label an item with its source (ARCH-cli-contract.md「数据契约」).
-report "a --show envelope parses" 4 "$(rc_in '{"status":"playlist","items":[{"engine":"yt","url":"x"}]}' shell/ut-play --enqueue - -j)"
-report "a search envelope parses" 4 "$(rc_in '{"status":"ok","engine":"yt","results":[{"url":"x"}]}' shell/ut-play --enqueue - -j)"
-report "a shapeless object is 1"  1 "$(rc_in '{"status":"ok"}' shell/ut-play --enqueue -)"
+report "a --show envelope parses" 4 "$(rc_in '{"status":"playlist","items":[{"engine":"yt","url":"x"}]}' shell/t-play --enqueue - -j)"
+report "a search envelope parses" 4 "$(rc_in '{"status":"ok","engine":"yt","results":[{"url":"x"}]}' shell/t-play --enqueue - -j)"
+report "a shapeless object is 1"  1 "$(rc_in '{"status":"ok"}' shell/t-play --enqueue -)"
 # --queue is a LAUNCH modifier: it needs -d, and it takes its handles from stdin ONLY. Each
 # arm names what to do instead rather than saying "invalid combination".
-report "--queue needs -d"        1 "$(rc_in "$Q1" shell/ut-play --queue -)"
-report "--queue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -- URL)"
-report "--enqueue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play --enqueue - -- URL)"
-report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - --status)"
+report "--queue needs -d"        1 "$(rc_in "$Q1" shell/t-play --queue -)"
+report "--queue rejects a handle" 1 "$(rc_in "$Q1" shell/t-play -d --queue - -- URL)"
+report "--enqueue rejects a handle" 1 "$(rc_in "$Q1" shell/t-play --enqueue - -- URL)"
+report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/t-play -d --queue - --status)"
+
+# ── the five queue-EDIT verbs, idle. The whole point of this block is the 1-vs-4 line: an
+# argument that is not a queue position at all is the argv being wrong, and no player could
+# make it right, so it is refused BEFORE a player is addressed (1). An argument that is a
+# position but not a waiting one depends on where the player got to, so it is decided under
+# the lock against the pos of the moment (4). Every check below is on the 1 side; the 4 side
+# needs a real queue and lives in playback.sh.
+#
+# "idle --queue-show is 4" is what gives the 1s their teeth: without it a gate that quietly
+# accepted a bad index would still exit non-zero here and look green.
+report "idle --queue-show is 4"   4 "$(rc shell/t-play --queue-show -j)"
+report "idle --queue-show says why" 0 "$(jq_ok '.status=="not_playing"' shell/t-play --queue-show -j)"
+report "idle --queue-clear is 4"  4 "$(rc shell/t-play --queue-clear -j)"
+report "--id on --queue-show parses" 4 "$(rc shell/t-play --queue-show --id nope -j)"
+# No index at all: the flag needs a value, and the message says which flag wanted one.
+report "--queue-rm needs an index" 1 "$(rc shell/t-play --queue-rm -j)"
+report "--queue-mv needs an index" 1 "$(rc shell/t-play --queue-mv -j)"
+report "--queue-jump needs an index" 1 "$(rc shell/t-play --queue-jump -j)"
+# An index that is not a non-negative integer is argv, not state. Kept separate from the
+# range check (4, in playback.sh) on purpose: -1 can never name a track, while 9 might.
+report "a negative index is 1"     1 "$(rc shell/t-play --queue-rm -1 --expect-url x -j)"
+report "a non-numeric index is 1"  1 "$(rc shell/t-play --queue-rm two --expect-url x -j)"
+report "a negative --to is 1"      1 "$(rc shell/t-play --queue-mv 2 --to -1 --expect-url x -j)"
+# THE PIN IS MANDATORY, and this is the line that says so. It is the only guard standing
+# between a stale index and a track removed from a queue that dies with its player — an
+# optional one would be missing exactly when it was needed.
+report "--queue-rm demands the pin" 1 "$(rc shell/t-play --queue-rm 2 -j)"
+report "--queue-mv demands the pin" 1 "$(rc shell/t-play --queue-mv 2 --to 1 -j)"
+report "--queue-jump demands the pin" 1 "$(rc shell/t-play --queue-jump 2 -j)"
+report "…and the message names the flag" 0 "$(err_has 'expect-url' shell/t-play --queue-rm 2)"
+# --to belongs to exactly one verb, and --queue-mv cannot do without it: a move with no
+# destination is not a move, and guessing one is how a track lands somewhere nobody asked.
+report "--queue-mv demands --to"   1 "$(rc shell/t-play --queue-mv 2 --expect-url x -j)"
+report "--to is only --queue-mv's" 1 "$(rc shell/t-play --queue-rm 2 --to 1 --expect-url x -j)"
+report "--expect-url is not --queue-show's" 1 "$(rc shell/t-play --queue-show --expect-url x -j)"
+report "--expect-url is not --queue-clear's" 1 "$(rc shell/t-play --queue-clear --expect-url x -j)"
+# The verbs are mutually exclusive actions like every other one, named in the error.
+report "two queue verbs conflict"  1 "$(rc shell/t-play --queue-show --queue-clear -j)"
 
 # ── the loop mode, idle. REPEAT is what the player has; playing ON to the next track is a
 # queue, and the two are told apart at the door. --loop and --set-loop are one enum with two
 # spellings, so both are driven — a value that is not off|one never reaches a player (1),
 # and a well-formed one with no player to receive it is the did-not-take-effect class (4).
-report "--loop needs a value"        1 "$(rc shell/ut-play --loop)"
-report "--loop bogus is 1"           1 "$(rc shell/ut-play --loop bogus -- URL)"
-report "--set-loop bogus is 1"       1 "$(rc shell/ut-play --set-loop bogus -j)"
+report "--loop needs a value"        1 "$(rc shell/t-play --loop)"
+report "--loop bogus is 1"           1 "$(rc shell/t-play --loop bogus -- URL)"
+report "--set-loop bogus is 1"       1 "$(rc shell/t-play --set-loop bogus -j)"
 # The value a caller is most likely to reach for, and the one arm whose TEXT is asserted:
 # playing on to the next track is a real feature under a different flag, so the message has
 # to route them to it. A plain "must be off or one" passes the exit code above and fails
 # here, which is what makes the pair worth two lines instead of one.
-report "--loop sequential is 1"      1 "$(rc shell/ut-play --loop sequential -- URL)"
-report "…and it names the queue"     0 "$(err_has 'queue' shell/ut-play --loop sequential -- URL)"
+report "--loop sequential is 1"      1 "$(rc shell/t-play --loop sequential -- URL)"
+report "…and it names the queue"     0 "$(err_has 'queue' shell/t-play --loop sequential -- URL)"
 # The same 1-vs-4 split the socket verbs carry, on the verb that reaches a player's RECORD
 # rather than its socket — so, like --enqueue and --next, it must answer without nc.
-report "idle --set-loop is 4"        4 "$(rc shell/ut-play --set-loop one -j)"
-report "idle --set-loop says why"    0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-loop one -j)"
-report "--id on --set-loop parses"   4 "$(rc shell/ut-play --set-loop one --id nope -j)"
-report "--set-loop rejects a handle" 1 "$(rc shell/ut-play --set-loop one -- URL)"
+report "idle --set-loop is 4"        4 "$(rc shell/t-play --set-loop one -j)"
+report "idle --set-loop says why"    0 "$(jq_ok '.status=="not_playing"' shell/t-play --set-loop one -j)"
+report "--id on --set-loop parses"   4 "$(rc shell/t-play --set-loop one --id nope -j)"
+report "--set-loop rejects a handle" 1 "$(rc shell/t-play --set-loop one -- URL)"
 # --loop is a LAUNCH modifier: beside a verb that addresses a running player it is a caller
 # who means --set-loop. Both verbs below answer 4 when idle, so a 1 can only have come from
 # the combination gate — the check cannot pass on the idle path by accident. (--start's own
 # pair of lines above has the same shape and is there for the same reason.)
-report "--loop with --pause is 1"    1 "$(rc shell/ut-play --loop one --pause -j)"
-report "--loop with --status is 1"   1 "$(rc shell/ut-play --loop one --status -j)"
+report "--loop with --pause is 1"    1 "$(rc shell/t-play --loop one --pause -j)"
+report "--loop with --status is 1"   1 "$(rc shell/t-play --loop one --status -j)"
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
@@ -421,22 +505,22 @@ report "--loop with --status is 1"   1 "$(rc shell/ut-play --loop one --status -
 # a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
 # pid is gone IS a dead player, which is the whole condition under test. The code (reap,
 echo "── the death record: contract fields present ───────────────────────"
-report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/ut-play --status -j)"
-report "--status still exits 0"    0 "$(rc shell/ut-play --status -j)"
-report "--status still one line"   1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
+report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/t-play --status -j)"
+report "--status still exits 0"    0 "$(rc shell/t-play --status -j)"
+report "--status still one line"   1 "$(shell/t-play --status -j | wc -l | tr -d ' ')"
 
 echo "── the playlist store: durable state, one file, one lock ──────────"
 # UT_STATE_DIR is exported, and that is the whole reason the knob exists: without it every
 # check below would write into the user's real playlists. It points somewhere disposable
 # for the rest of this file.
 export UT_STATE_DIR
-UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-plstore.XXXXXX")
-PL=shell/ut-playlist
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ting-plstore.XXXXXX")
+PL=shell/t-playlist
 ENV_JSON='{"status":"ok","engine":"yt","query":"q","count":2,"results":[{"id":"a1","title":"One","url":"https://www.youtube.com/watch?v=a1","channel":"c","duration":213,"duration_fmt":"00h:03m:33s","view_count":5,"live_status":"not_live"},{"id":"a2","title":"Two","url":"https://www.youtube.com/watch?v=a2","channel":"c","duration":null,"duration_fmt":null,"view_count":null,"live_status":"is_live"}]}'
 
 report "empty store: ok, exit 0"      0 "$(jq_ok '.status=="ok" and .count==0 and .playlists==[]' $PL --ls -j)"
 # ── ARCH-cli-contract.md「调用面」's first pipeline, RUN rather than printed:
-#     yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill
+#     yt-search -j -n 20 -- "lofi hip hop" | t-playlist --add chill
 # That block is the one place the suite documents commands COMPOSING, and until now nothing
 # executed a line of it: the storage side had checks, the pipeline did not, so a flag
 # misspelled there, an argument reordered, or a combination that stopped being legal would sit
@@ -444,7 +528,7 @@ report "empty store: ok, exit 0"      0 "$(jq_ok '.status=="ok" and .count==0 an
 # its reader's view; when the two disagree, the doc moves.
 #
 # The left half is a real search, which this hermetic half may not make, so it is a FIXTURE:
-# a search envelope is DATA the real ut-playlist really reads, not something that RUNS in
+# a search envelope is DATA the real t-playlist really reads, not something that RUNS in
 # place of yt-search (CLAUDE.md's testing rules). The right half is the doc's argv verbatim,
 # `-j` and all — prose mode, because that is what the documented line says, and the prose
 # writer is a different exit path from the -j one.
@@ -452,13 +536,13 @@ printf '%s' "$ENV_JSON" | $PL --add chill >/dev/null 2>&1
 report "search envelope | --add: 0"    0 "$?"
 report "a search envelope tags engine" 0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' $PL --show chill -j)"
 # An ITEM carries no engine — the envelope does. An engine tag that survived the store is
-# the only thing that makes a stored record a callable `ut-play --engine E -- URL`.
+# the only thing that makes a stored record a callable `t-play --engine E -- URL`.
 echo '[{"engine":"bili","id":"BV1","url":"https://www.bilibili.com/video/BV1","title":"三","duration":90}]' | $PL --add chill -j >/dev/null 2>&1
 report "an array keeps its own engine"  0 "$(jq_ok '[.items[].engine]|unique==["bili","yt"]' $PL --show chill -j)"
 report "--show is ONE line"             1 "$($PL --show chill -j | wc -l | tr -d ' ')"
 report "duration_fmt derived on read"   0 "$(jq_ok '.items[0].duration_fmt=="00h:03m:33s" and (.items[1].duration_fmt==null)' $PL --show chill -j)"
 # 4, not 1: the argv was well formed and the store had nothing to answer with — the same
-# split ut-play makes when --set-volume finds no player. 1 stays for a malformed call.
+# split t-play makes when --set-volume finds no player. 1 stays for a malformed call.
 report "--show missing: 4, not_found"   4 "$(rc $PL --show nope)"
 report "…and says so in the envelope"   0 "$(jq_ok '.status=="error" and .reason=="not_found"' $PL --show nope -j)"
 report "--rm out of range: 1"           1 "$(rc $PL --rm chill --index 9)"
@@ -476,8 +560,8 @@ report "…with reason exists"            0 "$(jq_ok '.reason=="exists"' $PL --r
 $PL --show mellow -j | $PL --add copy -j >/dev/null 2>&1
 report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -j)"
 # ── ARCH-cli-contract.md「调用面」's last pipeline, minus the player it needs:
-#     ut-playlist --show chill -j | ut-play --enqueue -
-# "a --show envelope parses" further up proves ut-play accepts the SHAPE, but it is a
+#     t-playlist --show chill -j | t-play --enqueue -
+# "a --show envelope parses" further up proves t-play accepts the SHAPE, but it is a
 # hand-written object and so cannot notice --show drifting away from it. This one can: a real
 # --show on the left, the real player's gate on the right. 4 is the whole claim — the payload
 # got past the parser and only a player to receive it was missing. The 1s beside it (bad JSON,
@@ -486,7 +570,7 @@ report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -
 #
 # --enqueue rather than the doc's `-d --queue -` on purpose: --queue would LAUNCH a player and
 # this file starts none. The launch off a real --show envelope is proved in playback.sh.
-report "a real --show reaches the gate" 4 "$($PL --show mellow -j | shell/ut-play --enqueue - -j >/dev/null 2>&1; echo $?)"
+report "a real --show reaches the gate" 4 "$($PL --show mellow -j | shell/t-play --enqueue - -j >/dev/null 2>&1; echo $?)"
 # An unreadable file on disk. Before this, jq's parse error escaped as exit 5 with no
 # envelope at all under -j — the failure yt-search was fixed for, reintroduced in a second
 # command. --show fails (the question was about that list); --ls still answers (the question
@@ -537,7 +621,7 @@ report "a held lock: 4, not 1"          4 "$LOCKED_ST"
 report "…with reason locked"            0 "$(jqv '.reason=="locked"' "$LOCKED")"
 # A lock left by a SIGKILLed writer must not wedge a playlist forever — and must not make the
 # next caller WAIT for it either: staleness is tested on the first failed mkdir, so this is
-# the fast path, not a second 5s spin (shell/ut-playlist:lock_playlist). Measured before the
+# the fast path, not a second 5s spin (shell/t-playlist:lock_playlist). Measured before the
 # reorder: 5.46s. After: 0.10s.
 touch -t 202001010000 "$UT_STATE_DIR/playlists/.lock-race"
 report "a stale lock is stolen"         0 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j >/dev/null 2>&1; echo $?)"
@@ -548,8 +632,8 @@ echo "── the listening log: append-only, one line, bounded ─────�
 # UT_STATE_DIR discipline as the playlist section above, and for a sharper reason: without it
 # these checks append to the log of what the user actually listened to, and --clear deletes
 # from it.
-UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-histore.XXXXXX")
-HL=shell/ut-history
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ting-histore.XXXXXX")
+HL=shell/t-history
 # A listening is the ITEM record plus the four fields a listening has and a list entry does
 # not. `channel` is in here on purpose: it is the field a caller would carry in by accident,
 # and the row on disk must not have it.
@@ -578,18 +662,18 @@ report "-n bounds what is printed"     0 "$(jq_ok '.count==1 and .items[0].id=="
 # that block documents commands COMPOSING, and a documented composition nothing runs is a
 # claim that reports green by default. Both halves here are the real commands; nothing offline
 # about this one is a substitute.
-$HL --ls -n 20 -j | shell/ut-playlist --add rediscover >/dev/null 2>&1
-report "--ls feeds ut-playlist --add"  0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' shell/ut-playlist --show rediscover -j)"
-# …and the fourth pipeline, `ut-history --ls -n 20 -j | ut-play -d --queue -`, at the SHAPE
+$HL --ls -n 20 -j | shell/t-playlist --add rediscover >/dev/null 2>&1
+report "--ls feeds t-playlist --add"  0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' shell/t-playlist --show rediscover -j)"
+# …and the fourth pipeline, `t-history --ls -n 20 -j | t-play -d --queue -`, at the SHAPE
 # level only — --queue launches, and this file starts nothing. A distinct producer from the
 # --show envelope the playlist section pipes in: both land on read_queue_items' `.items` arm,
 # but this one is emitted by a different command, so a --ls that renamed its array or dropped
 # `url` off a row would come back 1 here and nowhere else. What the 4 does NOT say is that the
-# per-item engine tag survived: read_queue_items falls back to ut-play's default engine for an
+# per-item engine tag survived: read_queue_items falls back to t-play's default engine for an
 # untagged item, so both spellings pass this gate. That claim is the store's own
-# ("an unknown key never lands" above reads the row; "--ls feeds ut-playlist --add" reads the
+# ("an unknown key never lands" above reads the row; "--ls feeds t-playlist --add" reads the
 # engine), and it is not restated here.
-report "--ls reaches the queue gate"   4 "$($HL --ls -n 20 -j | shell/ut-play --enqueue - -j >/dev/null 2>&1; echo $?)"
+report "--ls reaches the queue gate"   4 "$($HL --ls -n 20 -j | shell/t-play --enqueue - -j >/dev/null 2>&1; echo $?)"
 
 # THE 4096-BYTE PREMISE. The lock-free append is only atomic while one line fits under
 # PIPE_BUF, so the title is truncated to 200 bytes and the whole row is measured after. A
@@ -619,7 +703,7 @@ report "--clear empties the log"       0 "$(jq_ok '.status=="ok"' $HL --clear -j
 # Idempotent, like --stop on a player that already exited: the caller asked for an end state.
 report "--clear on an empty log: 0"    0 "$(jq_ok '.status=="ok" and .removed==0' $HL --clear -j)"
 
-# The gate. Same shape as ut-playlist's, and every arm names the command that owns the flag
+# The gate. Same shape as t-playlist's, and every arm names the command that owns the flag
 # rather than answering "unknown flag" to a caller who reached for a sibling.
 report "two actions at once: 1"        1 "$(rc $HL --ls --clear)"
 report "no action at all: 1"           1 "$(rc $HL -n 5)"
@@ -669,7 +753,8 @@ mkdir -p "$LINKDIR"
 for c in $ENTRY_POINTS; do ln -sf "$PWD/$c" "$LINKDIR/$(basename "$c")"; done
 report "…and it is VERSION, via a symlink" "$UT_VER" \
     "$(for c in "$LINKDIR"/*; do "$c" --version | awk '{print $NF}'; done | sort -u | tr -d '\n')"
-report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
+report "ting refuses a non-TTY" 1 "$(shell/ting </dev/null >/dev/null 2>&1; echo $?)"
+report "ting refuses a non-TTY" 1 "$(shell/ting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo "── gates: verbs, engine names and the host allowlist (no network) ─"
 # The last of the hermetic checks, and the ones most likely to be broken by the edit you are
@@ -762,7 +847,7 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # The third engine states its own two absences the same way, and they are absences of
 # DIFFERENT kinds — which is the point of asserting both. `--parts` is a verb this site has no
 # shape for (one song id is one file), so it falls through to the unknown-flag arm: that exact
-# wording is how `uting` and this file's own verb probe learn a verb is missing, and a friendlier
+# wording is how `ting` and this file's own verb probe learn a verb is missing, and a friendlier
 # sentence there would advertise a `c` key that cannot work. `--sub-lang` is the opposite —
 # the verb it belongs to IS here, but the CAPABILITY behind it is not: one lyric per song, tagged
 # with no language, so there is nothing to choose between and the flag is refused rather than
@@ -775,7 +860,7 @@ report "ne-resolve has no --sub-lang" 1 \
 # direction: this site HAS multi-part videos and the sibling site does not, so the verb
 # exists on one engine and must never appear on the other.
 #
-# THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
+# THE PAIR IS ALSO THE FEASIBILITY PROOF for how `ting` will probe an engine for the verb
 # without spending a request (ARCH-engine.md「接口」): it invokes `--parts` with NO
 # handle. The engine that has the verb answers with a usage error about the missing handle;
 # the engine that
@@ -824,16 +909,16 @@ report "--items refuses a song URL"     0 \
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
 # "the tool failed, retry later" and retry a name that will never exist.
-report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA_ID")"
-report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
+report "unknown engine is usage"  1 "$(rc shell/t-play --engine nope -- "$MEDIA_ID")"
+report "engine name is validated" 1 "$(rc shell/t-play --engine ../evil -- "$MEDIA_ID")"
 # The quality tier is validated at the door, before any dependency gate: a mistyped tier
 # is a usage error, and a legal one still falls into the gates the handle and the engine
 # own — the tier must not change what a wrong verb is worth (ARCH-cli-contract.md「命令规格」).
-report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra -- "$MEDIA_ID")"
-report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
-report "ut-play --quality keeps the engine gate" 1 \
-    "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
-# A bogus SCALAR knob in the user's config dies in uting the same way, naming the key the
+report "t-play rejects a bogus tier"     1 "$(rc shell/t-play --quality ultra -- "$MEDIA_ID")"
+report "t-play --quality needs a handle" 1 "$(rc shell/t-play --quality low)"
+report "t-play --quality keeps the engine gate" 1 \
+    "$(rc shell/t-play --quality low --engine nope -- "$MEDIA_ID")"
+# A bogus SCALAR knob in the user's config dies in ting the same way, naming the key the
 # user actually wrote. Stated over every scalar door rather
 # than the tier that
 # happened to be written first: each one is its own `case`, not one loop through one
@@ -843,7 +928,7 @@ report "ut-play --quality keeps the engine gate" 1 \
 # TTY gate a few lines further down the same file, so an exit code alone cannot separate
 # "refused the value" from "refused the pipe" and the check could not fail.
 for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe UT_RESOURCE_TICKS=fast UT_IMAGE=bogus; do
-    KNOB_OUT=$(env "$spec" shell/uting </dev/null 2>&1 || true)
+    KNOB_OUT=$(env "$spec" shell/ting </dev/null 2>&1 || true)
     case "$KNOB_OUT" in
     *"${spec%%=*}"*) KNOB_HIT=yes ;;
     *) KNOB_HIT=no ;;
@@ -852,12 +937,12 @@ for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe
 done
 
 # UT_VIZ_STYLE is the player's own scalar door and lives behind a MODE, so the loop above —
-# which drives uting — cannot reach it. Three claims, and the discriminator is the MESSAGE
+# which drives ting — cannot reach it. Three claims, and the discriminator is the MESSAGE
 # for the same reason it is up there: all three exit 1. A handle on a host no engine claims
 # keeps every one of them offline, because the host gate answers before yt-dlp is reached.
 VIZ_URL="https://example.com/x"
 viz_says_key() {
-    case "$(env "$1" shell/ut-play -f "$2" -- "$VIZ_URL" 2>&1 || true)" in
+    case "$(env "$1" shell/t-play -f "$2" -- "$VIZ_URL" 2>&1 || true)" in
     *UT_VIZ_STYLE*) echo yes ;;
     *) echo no ;;
     esac
@@ -871,14 +956,14 @@ report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_ke
 report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
 
 # UT_DEAD_KEEP is the player's history-pruning count; must fail fast on non-numeric or negative.
-dk_out=$(env UT_DEAD_KEEP=bogus shell/ut-play --status 2>&1 || true)
+dk_out=$(env UT_DEAD_KEEP=bogus shell/t-play --status 2>&1 || true)
 case "$dk_out" in
 *UT_DEAD_KEEP*) dk_hit=yes ;;
 *) dk_hit=no ;;
 esac
 report "UT_DEAD_KEEP: a bogus value dies naming the key" "yes" "$dk_hit"
 report "UT_DEAD_KEEP: a negative value exits 1" "1" \
-    "$(rc env UT_DEAD_KEEP=-1 shell/ut-play --status)"
+    "$(rc env UT_DEAD_KEEP=-1 shell/t-play --status)"
 
 # ── ARCH-player.md「终端可视化」's five worked calls, each run once. The PICTURE those
 # lines are about needs a real resolve and a real tty, so it stays 实测 in that doc — a
@@ -892,7 +977,7 @@ report "UT_DEAD_KEEP: a negative value exits 1" "1" \
 # and "one of these flags is not", and a check that cannot separate them cannot fail. The
 # handle is the check's own — a host no engine claims, which keeps every one of these offline
 # (the engine's host gate answers before yt-dlp is reached; measured at 0.05s) while still
-# proving the call got past ut-play entirely. Reaching the ENGINE is the pass, and the engine
+# proving the call got past t-play entirely. Reaching the ENGINE is the pass, and the engine
 # NAME in the message is what makes the --engine line more than a repeat of the first.
 #
 # LC_ALL is PINNED, and that is not decoration: -f viz refuses a non-UTF-8 locale (tct draws
@@ -909,21 +994,21 @@ viz_reaches_engine() { # <engine> <env assignments and argv…> — yes if it go
     *) echo no ;;
     esac
 }
-report "-f viz: the minimal call"     yes "$(viz_reaches_engine yt shell/ut-play -f viz -- "$VIZ_URL")"
+report "-f viz: the minimal call"     yes "$(viz_reaches_engine yt shell/t-play -f viz -- "$VIZ_URL")"
 # `bars` beside `wave`: the check above proves a legal style is not answered at the door, but
 # it drives one member of a two-member enum, and the default is the OTHER one — so a door that
 # only ever admitted its own default would be green up there and red here.
-report "…UT_VIZ_STYLE=bars, the default" yes "$(viz_reaches_engine yt UT_VIZ_STYLE=bars shell/ut-play -f viz -- "$VIZ_URL")"
-report "…with --volume 0"             yes "$(viz_reaches_engine yt shell/ut-play -f viz --volume 0 -- "$VIZ_URL")"
+report "…UT_VIZ_STYLE=bars, the default" yes "$(viz_reaches_engine yt UT_VIZ_STYLE=bars shell/t-play -f viz -- "$VIZ_URL")"
+report "…with --volume 0"             yes "$(viz_reaches_engine yt shell/t-play -f viz --volume 0 -- "$VIZ_URL")"
 # Three flags at once, which is the line most likely to rot: --start and --quality each have a
 # value gate of their own and each is checked alone above, but nothing had ever given both to
 # a MODE whose own gate refuses -d and --queue. A combination gate that grew one arm too wide
 # is exactly what this catches, and it is invisible to any single-flag check.
-report "…with --start 90 --quality low" yes "$(viz_reaches_engine yt shell/ut-play -f viz --start 90 --quality low -- "$VIZ_URL")"
+report "…with --start 90 --quality low" yes "$(viz_reaches_engine yt shell/t-play -f viz --start 90 --quality low -- "$VIZ_URL")"
 # The mode is engine-agnostic — it is the player's, not a site's — so the same -f viz has to
 # survive being pointed at the other engine. The name in the message is the assertion: a
 # --engine that was parsed and then dropped would come back naming `yt`.
-report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/ut-play --engine bili -f viz -- "$VIZ_URL")"
+report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/t-play --engine bili -f viz -- "$VIZ_URL")"
 
 # THE TERMINAL-RENDERING MODES CANNOT DETACH, and the refusal is a usage error, not a
 # tool failure — an agent reading 2+ would retry a combination that can never work. Stated
@@ -932,15 +1017,15 @@ report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/ut-
 # The queue is the same claim from the other side: it STARTS a detached player, so it
 # inherits the same impossibility without naming a mode at all.
 for _m in ascii viz; do
-    report "-d refuses -f $_m" 1 "$(rc shell/ut-play -d -f "$_m" -- "$VIZ_URL")"
-    report "--queue refuses -f $_m" 1 "$(rc_in '[]' shell/ut-play -f "$_m" --queue - )"
+    report "-d refuses -f $_m" 1 "$(rc shell/t-play -d -f "$_m" -- "$VIZ_URL")"
+    report "--queue refuses -f $_m" 1 "$(rc_in '[]' shell/t-play -f "$_m" --queue - )"
     # The third arm, and it was missing until 2026-09-01: -j captures the player's whole
     # stdout to emit one envelope, and stdout is where tct draws — so `-f viz -j` used to be
     # ACCEPTED, run the track to its end, and answer with a success-shaped envelope having
     # drawn nothing. The suite's only silent trap, and silent is why it had no check: an
     # unresolvable handle under -j also exits 1, so the exit code cannot separate "refused the
     # combination" from "could not resolve". The claim is the MESSAGE, like both siblings.
-    case "$(shell/ut-play -j -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
+    case "$(shell/t-play -j -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
     *"-j cannot use -f $_m"*) _jhit=yes ;;
     *) _jhit=no ;;
     esac
@@ -956,23 +1041,23 @@ for _m in ascii viz; do
     # shell). Its partner is viz_reaches_engine above, which pins a UTF-8 locale and asserts
     # the call goes THROUGH — a gate that fired unconditionally would be green here and red
     # there, so neither check alone can pass by accident.
-    case "$(env LC_ALL=C shell/ut-play -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
+    case "$(env LC_ALL=C shell/t-play -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
     *"needs a UTF-8 locale"*) _lhit=yes ;;
     *) _lhit=no ;;
     esac
     report "a C locale refuses -f $_m" yes "$_lhit"
     # The TUI states the same impossibility from its own side — its playback IS detached, so
     # the mode could never reach a terminal — and there the claim has to be the MESSAGE: the
-    # TTY gate a few lines further into `uting` also exits 1, so an exit code cannot separate
+    # TTY gate a few lines further into `ting` also exits 1, so an exit code cannot separate
     # "refused the mode" from "refused the pipe". Captured then matched, per this file's rule.
-    case "$(shell/uting -f "$_m" q </dev/null 2>&1 || true)" in
+    case "$(shell/ting -f "$_m" q </dev/null 2>&1 || true)" in
     *"must be one of"*) _mhit=yes ;;
     *) _mhit=no ;;
     esac
-    report "uting refuses -f $_m, naming the modes" yes "$_mhit"
+    report "ting refuses -f $_m, naming the modes" yes "$_mhit"
 done
 
-# ── THE ORDER OF `uting`'s TWO GATES, and ARCH-tui.md「调用面」's worked calls, which are
+# ── THE ORDER OF `ting`'s TWO GATES, and ARCH-tui.md「调用面」's worked calls, which are
 # the same check from two sides. That doc states the order as a fact — the flag gate answers
 # first, the TTY gate second — and both gates exit 1, so the order can only be pinned by
 # feeding the SAME stdin twice and reading two different messages. The `-f viz` arm of the
@@ -982,10 +1067,10 @@ done
 #
 # The same loop is also the doc's example block executed. Every line there ends at the TTY
 # gate when it is piped, so one assertion covers both claims — and it caught the block's fifth
-# line being wrong: it read `--theme nord --lang zh`, and `--lang` is not a uting flag at all
+# line being wrong: it read `--theme nord --lang zh`, and `--lang` is not a ting flag at all
 # (the chrome language is YT_LANG, cycled live by the `l` key). Nothing had ever run it. The
 # argv below is the corrected line, and the doc now matches it — the CHECK is the authority.
-uting_gate() { # <env assignments and argv…> — which gate answered
+ting_gate() { # <env assignments and argv…> — which gate answered
     case "$(env "$@" </dev/null 2>&1 || true)" in
     *"requires a terminal"*) echo tty ;;
     *"must be one of"*) echo mode ;;
@@ -994,20 +1079,20 @@ uting_gate() { # <env assignments and argv…> — which gate answered
     *) echo other ;;
     esac
 }
-report "uting: no query reaches the TTY gate" tty "$(uting_gate shell/uting)"
-report "…a bare query too"          tty "$(uting_gate shell/uting "lofi hip hop")"
-report "…search args forwarded"     tty "$(uting_gate shell/uting --engine bili -n 40 "周杰伦")"
+report "ting: no query reaches the TTY gate" tty "$(ting_gate shell/ting)"
+report "…a bare query too"          tty "$(ting_gate shell/ting "lofi hip hop")"
+report "…search args forwarded"     tty "$(ting_gate shell/ting --engine bili -n 40 "周杰伦")"
 # The legal -f, and the half that pins the order: identical stdin to the `-f viz` check above,
-# a different gate in the answer. A uting that checked the tty first would answer `tty` up
+# a different gate in the answer. A ting that checked the tty first would answer `tty` up
 # there too and this pair would say nothing.
-report "…menu args, and -f is legal" tty "$(uting_gate shell/uting -f video --volume 60 "lofi")"
-report "…chrome args"               tty "$(uting_gate YT_LANG=zh shell/uting --theme nord "lofi")"
+report "…menu args, and -f is legal" tty "$(ting_gate shell/ting -f video --volume 60 "lofi")"
+report "…chrome args"               tty "$(ting_gate YT_LANG=zh shell/ting --theme nord "lofi")"
 
 # ── WHERE A THIRD-PARTY ENGINE MAY LIVE: three places, one order, two files that have to
-# agree about them. `uting` scanned PATH only when the sibling glob came up empty, which made
+# agree about them. `ting` scanned PATH only when the sibling glob came up empty, which made
 # the one situation an installed third-party engine can actually be in — a checkout carrying
 # yt/bili/ne, the new pair somewhere else — unreachable: the TUI offered three sources while
-# `ut-play --engine` happily played a fourth. Two faces, one word "engine", different answers.
+# `t-play --engine` happily played a fourth. Two faces, one word "engine", different answers.
 # ARCH-cli-contract.md「加一个引擎 —— 清单」's last item states the claim and nothing had run it.
 #
 # What is put in each place is the REAL yt engine reached under a second name: the variables
@@ -1019,26 +1104,26 @@ report "…chrome args"               tty "$(uting_gate YT_LANG=zh shell/uting -
 # "must be one of: <the registry, in discovery order>". That message is the only place the
 # list is observable, and the ORDER in it is what pins precedence.
 engine_list() { # <env assignments and argv…> — the registry, in discovery order
-    env "$@" shell/uting --engine zzz-none q </dev/null 2>&1 | sed -n 's/.*must be one of: //p'
+    env "$@" shell/ting --engine zzz-none q </dev/null 2>&1 | sed -n 's/.*must be one of: //p'
 }
 PLUG=$UT_TEST_TMP/plugin-engines
 PATH_ENG=$UT_TEST_TMP/path-engines
 XDG_HOME=$UT_TEST_TMP/xdg-data
-mkdir -p "$PLUG" "$PATH_ENG" "$XDG_HOME/uting/engines"
-for _d in "$PLUG" "$PATH_ENG" "$XDG_HOME/uting/engines"; do
+mkdir -p "$PLUG" "$PATH_ENG" "$XDG_HOME/ting/engines"
+for _d in "$PLUG" "$PATH_ENG" "$XDG_HOME/ting/engines"; do
     ln -sf "$PWD/shell/yt-search" "$_d/zz-search"
     ln -sf "$PWD/shell/yt-resolve" "$_d/zz-resolve"
 done
-SIBLINGS=$(engine_list shell/uting)
+SIBLINGS=$(engine_list shell/ting)
 report "the checkout's own pairs are the registry" "bili ne yt" "$SIBLINGS"
-report "…a pair on PATH joins it"        "$SIBLINGS zz" "$(engine_list PATH="$PATH_ENG:$PATH" shell/uting)"
-report "…a pair in UT_ENGINE_DIR too"    "$SIBLINGS zz" "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+report "…a pair on PATH joins it"        "$SIBLINGS zz" "$(engine_list PATH="$PATH_ENG:$PATH" shell/ting)"
+report "…a pair in UT_ENGINE_DIR too"    "$SIBLINGS zz" "$(engine_list UT_ENGINE_DIR="$PLUG" shell/ting)"
 # The DEFAULT of that knob, driven rather than read: nothing sets UT_ENGINE_DIR here, so the
-# pair is only found if the inline default really chains through XDG_DATA_HOME. `uting` and
-# `ut-play` each declare that default in their own file (ten peers, no shared library), and
+# pair is only found if the inline default really chains through XDG_DATA_HOME. `ting` and
+# `t-play` each declare that default in their own file (ten peers, no shared library), and
 # this pair of checks is what stops the two copies drifting apart.
 report "…and its default chains through XDG_DATA_HOME" "$SIBLINGS zz" \
-    "$(engine_list XDG_DATA_HOME="$XDG_HOME" shell/uting)"
+    "$(engine_list XDG_DATA_HOME="$XDG_HOME" shell/ting)"
 # PRECEDENCE, which only the ORDER can state: the same name in the plugin dir does not appear
 # twice and does not move to the front, so the built-in is what runs. A plugin directory is
 # reachable by anything that can write one directory; letting it replace `yt-resolve` would
@@ -1046,12 +1131,12 @@ report "…and its default chains through XDG_DATA_HOME" "$SIBLINGS zz" \
 ln -sf "$PWD/shell/yt-search" "$PLUG/yt-search"
 ln -sf "$PWD/shell/yt-resolve" "$PLUG/yt-resolve"
 report "a plugin cannot shadow a built-in" "$SIBLINGS zz" \
-    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/ting)"
 # A pair is a PAIR, in the plugin dir as everywhere else: one half is a source that would list
 # results nothing can resolve, so the name never enters the registry.
 ln -sf "$PWD/shell/yt-search" "$PLUG/lone-search"
 report "…and a lone search half is not one" "$SIBLINGS zz" \
-    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/uting)"
+    "$(engine_list UT_ENGINE_DIR="$PLUG" shell/ting)"
 # UT_ENGINE_DIR IS REFUSED FROM A CONFIG FILE, and this is the check that says why the name
 # is on that list at all: it points at a directory of EXECUTABLES the suite runs, so a file
 # that could set it would be PATH under another spelling — exactly what「配置面」's prefix rule
@@ -1059,16 +1144,16 @@ report "…and a lone search half is not one" "$SIBLINGS zz" \
 ENGCFG=$UT_TEST_TMP/engine-dir.config
 printf 'UT_ENGINE_DIR=%s\n' "$PLUG" > "$ENGCFG"
 report "a config file cannot point at engines" "$SIBLINGS" \
-    "$(engine_list UT_CONFIG="$ENGCFG" shell/uting)"
+    "$(engine_list UT_CONFIG="$ENGCFG" shell/ting)"
 # THE PLAYER'S HALF of the same three places. It has no registry to print, so the claim is the
 # message: a resolver that was FOUND gets as far as the host gate, one that was not names the
 # three places it looked. Both exit 1.
 report "the player finds a plugin engine"  yes \
-    "$(viz_reaches_engine zz UT_ENGINE_DIR="$PLUG" shell/ut-play --engine zz -- "$VIZ_URL")"
+    "$(viz_reaches_engine zz UT_ENGINE_DIR="$PLUG" shell/t-play --engine zz -- "$VIZ_URL")"
 report "…by the same XDG default"          yes \
-    "$(viz_reaches_engine zz XDG_DATA_HOME="$XDG_HOME" shell/ut-play --engine zz -- "$VIZ_URL")"
+    "$(viz_reaches_engine zz XDG_DATA_HOME="$XDG_HOME" shell/t-play --engine zz -- "$VIZ_URL")"
 report "…and a config file cannot aim it"  no \
-    "$(viz_reaches_engine zz UT_CONFIG="$ENGCFG" shell/ut-play --engine zz -- "$VIZ_URL")"
+    "$(viz_reaches_engine zz UT_CONFIG="$ENGCFG" shell/t-play --engine zz -- "$VIZ_URL")"
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
@@ -1076,7 +1161,7 @@ report "…and a config file cannot aim it"  no \
 # job is routing a result back to its resolver into a field that lies.
 #
 # Engine-DISCOVERED, not hardcoded: the pair convention (`<name>-search` + `<name>-resolve`)
-# is the one `uting` already builds its registry from, so a third engine is covered the day
+# is the one `ting` already builds its registry from, so a third engine is covered the day
 # its pair lands rather than when someone remembers to add it here. And the claim is stated
 # as an invariant over ALL engines, needing no table of who owns what — which is why it
 # cannot drift from the engines themselves. Every host-gate function is duplicated per
@@ -1384,7 +1469,7 @@ report "yt-resolve still takes youtu.be" 1 \
 # plain URL, the desktop app's single-page route (the id lives in a FRAGMENT there, invisible
 # to a query parser), the mobile share host, and the bare number — and all four must
 # canonicalise to the one string `ne-search` puts in results[].url. They must, because
-# `ut-playlist --add` stores that string: two spellings of one track that do not collapse are
+# `t-playlist --add` stores that string: two spellings of one track that do not collapse are
 # two rows in a playlist and two rows in the listening log.
 #
 # It cannot pass vacuously — an engine that passed the typed handle through would answer four
@@ -1420,13 +1505,13 @@ report "ne refuses a non-song handle" 4 "$_ner"
 echo "── a part list is a playlist nobody saved yet ─────────────────────"
 # THE CLAIM --parts EXISTS TO MAKE GOOD ON: every element of a part list IS an item record,
 # so the list feeds the durable store and the player's queue with NO field renamed. The
-# SUBJECTS here are ut-playlist and ut-play; the part list is their INPUT.
+# SUBJECTS here are t-playlist and t-play; the part list is their INPUT.
 #
 # It is a FIXTURE — data a real command really reads — and it is a real capture, not a
 # hand-written shape: `bili-resolve --parts -j -- av170001` on 2026-08-29, ten parts, kept
 # whole. Hermetic because the pipeline is what is under test and re-fetching the same ten
 report "…and a record with no url is 1"   1 \
-    "$(rc_in '[{"engine":"bili"}]' shell/ut-play --enqueue - -j)"
+    "$(rc_in '[{"engine":"bili"}]' shell/t-play --enqueue - -j)"
 
 # --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
 # verb over. Under the dead proxy this verb reaches its transport and fails with 2; a version
@@ -1455,7 +1540,7 @@ echo "── the config file: precedence, and what it refuses ──────
 # and — the one that matters — a file that reaches past the suite into the environment. Each
 # check below feeds the discriminating input rather than the happy one: the happy path is
 # already covered by every other check in this file, all of which now read a config.
-CFGD=$(mktemp -d "${TMPDIR:-/tmp}/uting-cfg.XXXXXX")
+CFGD=$(mktemp -d "${TMPDIR:-/tmp}/ting-cfg.XXXXXX")
 CFG="$CFGD/config"
 
 # Precedence, proved on ONE observable in three runs. `--engine` names a missing engine, so
@@ -1465,11 +1550,79 @@ CFG="$CFGD/config"
 printf 'UT_DEFAULT_ENGINE=cfgwins\n' > "$CFG"
 eng() { UT_CONFIG="$CFG" "$@" 2>&1 | sed -n "s/.*unknown engine '\([^']*\)'.*/\1/p"; }
 report "config file sets the default engine" "cfgwins" \
-    "$(eng shell/ut-play -- https://x/y)"
+    "$(eng shell/t-play -- https://x/y)"
 report "environment beats the config file" "envwins" \
-    "$(UT_DEFAULT_ENGINE=envwins eng shell/ut-play -- https://x/y)"
+    "$(UT_DEFAULT_ENGINE=envwins eng shell/t-play -- https://x/y)"
+report "TING_DEFAULT_ENGINE environment works" "envwins" \
+    "$(TING_DEFAULT_ENGINE=envwins eng shell/t-play -- https://x/y)"
 report "the flag beats both" "flagwins" \
-    "$(UT_DEFAULT_ENGINE=envwins eng shell/ut-play --engine flagwins -- https://x/y)"
+    "$(UT_DEFAULT_ENGINE=envwins eng shell/t-play --engine flagwins -- https://x/y)"
+
+# ── THE TWO SPELLINGS. Every knob answers to a TING_ name and to the pre-rename UT_ one, and
+# "both work" is the easy half — the half that a mirroring loop gets wrong without anything
+# else noticing is the case where BOTH are set at once. There is only one right answer to
+# that (the new name is the one the suite documents, so it is the one that wins), and until
+# this check existed the loop shipped with the opposite one: it filled in whichever side was
+# missing and left UT_ standing when neither was.
+report "TING_ beats UT_ when both are set" "tingwins" \
+    "$(TING_DEFAULT_ENGINE=tingwins UT_DEFAULT_ENGINE=utwins eng shell/t-play -- https://x/y)"
+printf 'TING_DEFAULT_ENGINE=tingcfg\n' > "$CFG"
+report "a TING_ key in the config file is read" "tingcfg" \
+    "$(eng shell/t-play -- https://x/y)"
+report "…and the environment still beats it" "envwins" \
+    "$(UT_DEFAULT_ENGINE=envwins eng shell/t-play -- https://x/y)"
+
+# TING_CONFIG is not in that loop — it is the name that says WHICH FILE the loop then reads,
+# so it is resolved before it, by hand, in all ten entry points. Same rule, proved separately.
+CFG_TING="$CFGD/relocated"
+printf 'UT_DEFAULT_ENGINE=relocated\n' > "$CFG_TING"
+engv() { "$@" 2>&1 | sed -n "s/.*unknown engine '\([^']*\)'.*/\1/p"; }
+report "TING_CONFIG relocates the file" "relocated" \
+    "$(TING_CONFIG="$CFG_TING" engv shell/t-play -- https://x/y)"
+report "TING_CONFIG beats UT_CONFIG" "relocated" \
+    "$(TING_CONFIG="$CFG_TING" UT_CONFIG="$CFG" engv shell/t-play -- https://x/y)"
+printf 'UT_DEFAULT_ENGINE=cfgwins\n' > "$CFG"
+
+# ── THE PRE-RENAME PATHS, which are the actual promise. A user who ran the suite under its
+# old name has a config at .../uting/config and a store at .../uting, and neither moved when
+# the commands did. Nothing in the suite would go red if that chain were dropped — every
+# other check in this file points the knobs somewhere disposable — which is exactly why the
+# discriminating input has to be built here: an XDG root that holds ONLY the old spelling.
+XDGD=$(mktemp -d "${TMPDIR:-/tmp}/ting-xdg.XXXXXX")
+mkdir -p "$XDGD/uting"
+printf 'UT_DEFAULT_ENGINE=legacycfg\n' > "$XDGD/uting/config"
+report "a pre-rename config is still read" "legacycfg" \
+    "$(env -u UT_CONFIG -u TING_CONFIG "XDG_CONFIG_HOME=$XDGD" \
+        shell/t-play -- https://x/y 2>&1 | sed -n "s/.*unknown engine '\([^']*\)'.*/\1/p")"
+mkdir -p "$XDGD/ting"
+printf 'UT_DEFAULT_ENGINE=newcfg\n' > "$XDGD/ting/config"
+report "…and the new path wins when both exist" "newcfg" \
+    "$(env -u UT_CONFIG -u TING_CONFIG "XDG_CONFIG_HOME=$XDGD" \
+        shell/t-play -- https://x/y 2>&1 | sed -n "s/.*unknown engine '\([^']*\)'.*/\1/p")"
+
+# The store side of the same promise, and the same shape of discriminator: a state root that
+# holds only the old spelling, with a playlist really written into it by the real command.
+XSTATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-xstate.XXXXXX")
+mkdir -p "$XSTATE/uting"
+printf '%s' "$ENV_JSON" |
+    env -u UT_STATE_DIR -u TING_STATE_DIR "XDG_STATE_HOME=$XSTATE" \
+        shell/t-playlist --add legacystore >/dev/null 2>&1
+report "a pre-rename store is still written" 0 \
+    "$([ -f "$XSTATE/uting/playlists/legacystore.json" ] && echo 0 || echo 1)"
+report "…and read back from there" 1 \
+    "$(env -u UT_STATE_DIR -u TING_STATE_DIR "XDG_STATE_HOME=$XSTATE" \
+        shell/t-playlist --ls -j | jq '.playlists|length')"
+
+# TING_STATE_DIR, with the UT_ name pointed at a DIFFERENT directory in the same command —
+# so the check cannot pass by both names happening to mean the same place.
+TSD=$(mktemp -d "${TMPDIR:-/tmp}/ting-tsd.XXXXXX")
+TSD_UT=$(mktemp -d "${TMPDIR:-/tmp}/ting-utsd.XXXXXX")
+printf '%s' "$ENV_JSON" |
+    TING_STATE_DIR="$TSD" UT_STATE_DIR="$TSD_UT" shell/t-playlist --add tingstate >/dev/null 2>&1
+report "TING_STATE_DIR is where the store writes" 0 \
+    "$([ -f "$TSD/playlists/tingstate.json" ] && echo 0 || echo 1)"
+report "…and the UT_ name set beside it did not get it" 1 \
+    "$([ -f "$TSD_UT/playlists/tingstate.json" ] && echo 0 || echo 1)"
 
 # THE SECURITY BOUNDARY, and the reason the file is read as data instead of sourced. A config
 # that could be sourced would run the command substitution below and set PATH from a file the
@@ -1478,7 +1631,7 @@ report "the flag beats both" "flagwins" \
 printf 'PATH=/nonexistent\nLD_PRELOAD=/evil.so\nlowercase_key=x\nUT_INJECT=$(touch %s/PWNED)\n' \
     "$CFGD" > "$CFG"
 report "a config key outside UT_/YT_/BILI_ is inert" "0" \
-    "$(UT_CONFIG="$CFG" rc shell/uting --version)"
+    "$(UT_CONFIG="$CFG" rc shell/ting --version)"
 report "command substitution is never executed" "absent" \
     "$([ -e "$CFGD/PWNED" ] && echo present || echo absent)"
 
@@ -1486,14 +1639,14 @@ report "command substitution is never executed" "absent" \
 # is refused INSIDE an allowed namespace — which is the case a prefix allowlist alone misses.
 printf 'YT_IPC_SOCK=%s/hijack.sock\n' "$CFGD" > "$CFG"
 report "the player still answers with YT_IPC_SOCK set" "0" \
-    "$(UT_CONFIG="$CFG" rc shell/ut-play --stop --all -j)"
+    "$(UT_CONFIG="$CFG" rc shell/t-play --stop --all -j)"
 report "the file did not create the hijack socket" "absent" \
     "$([ -e "$CFGD/hijack.sock" ] && echo present || echo absent)"
 
 # UT_VERSION is the constant from VERSION; a config file cannot overwrite it.
 printf 'UT_VERSION=fake\n' > "$CFG"
 report "UT_VERSION in config is refused" "$UT_VER" \
-    "$(UT_CONFIG="$CFG" shell/uting --version | awk '{print $NF}')"
+    "$(UT_CONFIG="$CFG" shell/ting --version | awk '{print $NF}')"
 
 # A TYPO MUST BE LOUD. An emptied cycle would otherwise abort on the first keypress (an empty
 # array expansion under set -u aborts on bash 3.2) and an unknown member would put a mode the
@@ -1510,7 +1663,7 @@ for spec in UT_MODE_CYCLE=audio,bogus UT_SORT_CYCLE=relevance,bogus \
     UT_THEME_CYCLE=nord,bogus UT_THEME_CYCLE=custom,bogus UT_QUALITY_CYCLE=auto,bogus \
     UT_LOOP_CYCLE=off,bogus; do
     printf '%s\n' "$spec" > "$CFG"
-    report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+    report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/ting q)"
 done
 printf 'UT_MAX_SEARCH_RESULTS=-5\n' > "$CFG"
 # Over EVERY discovered engine, not just bili: the ceiling is cross-engine, so a check
@@ -1525,11 +1678,11 @@ done
 # run — the user narrows the cycle and gets told their flag is wrong. Reaching the TTY refusal
 # is the pass: it is the gate immediately after the one under test.
 printf 'UT_MODE_CYCLE=video\nUT_SORT_CYCLE=duration\n' > "$CFG"
-report "a narrowed cycle reaches the TTY gate" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+report "a narrowed cycle reaches the TTY gate" "1" "$(UT_CONFIG="$CFG" rc shell/ting q)"
 # Captured and then matched, NOT piped into grep: this file runs under `set -o pipefail`, so
-# `shell/uting q | grep -q` reports uting's exit 1 rather than grep's 0 and a matched pattern
+# `shell/ting q | grep -q` reports ting's exit 1 rather than grep's 0 and a matched pattern
 # reads as no-match. Every check here asserts on a command that exits non-zero by design.
-CFG_OUT=$(UT_CONFIG="$CFG" shell/uting q 2>&1 || true)
+CFG_OUT=$(UT_CONFIG="$CFG" shell/ting q 2>&1 || true)
 case "$CFG_OUT" in
 *"requires a terminal"*) CFG_HIT=yes ;;
 *) CFG_HIT=no ;;
@@ -1539,21 +1692,21 @@ report "…and it is the TTY gate, not a flag error" "yes" "$CFG_HIT"
 # ── THE CUSTOM PALETTE'S ACCENT (UT_ACCENT / UT_ACCENT_LIGHT) ───────────────────────────
 # Asserted on WHICH GATE ANSWERED, never on a bare exit 1: `custom` is a legal theme name, so
 # a build with no accent gate at all reaches the TTY refusal and exits 1 too. A check reading
-# only the code could not fail. uting_gate's `accent` arm is what separates the two.
+# only the code could not fail. ting_gate's `accent` arm is what separates the two.
 #
 # Every one of these runs offline — the flag/config gates all answer before the TTY refusal,
 # which is the order the pair of checks above this one pins.
 for _spec in zzz 40 99 0xd65d0 0xd65d0e/40 0xD65D0E/9; do
     printf 'YT_THEME=custom\nUT_ACCENT=%s\n' "$_spec" > "$CFG"
     report "UT_ACCENT=$_spec dies at the accent gate" accent \
-        "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+        "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 done
 # The three legal spellings pass the door. 0x, not #RRGGBB: a # cannot survive this config
 # format's comment strip at all (ARCH-tui.md「为什么是 0x 而不是 #RRGGBB」), so the syntax
 # a user would reach for first is the one that must not silently read back as empty.
 for _spec in 0xd65d0e 33 97 0xd65d0e/33 0xD65D0E/97; do
     printf 'YT_THEME=custom\nUT_ACCENT=%s\n' "$_spec" > "$CFG"
-    report "UT_ACCENT=$_spec is accepted" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+    report "UT_ACCENT=$_spec is accepted" tty "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 done
 # THE WRITE-BACK TRAP. The t key writes YT_THEME=custom into the user's own config, so a
 # config can name custom long after the UT_ACCENT that justified it was cleared. Refusing to
@@ -1561,13 +1714,13 @@ done
 # to minimal. The pair matters: a build that dies on an unset accent still passes the row
 # above it, because that row always sets one.
 printf 'YT_THEME=custom\n' > "$CFG"
-report "custom with no accent still starts" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+report "custom with no accent still starts" tty "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 printf 'YT_THEME=custom\nUT_ACCENT=\n' > "$CFG"
-report "…and an explicitly empty one too" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+report "…and an explicitly empty one too" tty "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 # The light rung carries the same ruler and names ITSELF in the message — a shared validator
 # that reported the wrong key would send the user editing the wrong line.
 printf 'UT_ACCENT_LIGHT=nope\n' > "$CFG"
-CFG_OUT=$(UT_CONFIG="$CFG" shell/uting q </dev/null 2>&1 || true)
+CFG_OUT=$(UT_CONFIG="$CFG" shell/ting q </dev/null 2>&1 || true)
 case "$CFG_OUT" in
 *"UT_ACCENT_LIGHT must be"*) CFG_HIT=yes ;;
 *) CFG_HIT=no ;;
@@ -1578,26 +1731,26 @@ report "UT_ACCENT_LIGHT is refused under its own name" "yes" "$CFG_HIT"
 # through to the printf that builds an SGR — half an escape sequence, in the user's terminal.
 printf 'YT_THEME=minimal\nUT_ACCENT=zzz\n' > "$CFG"
 report "a bad accent is caught under a non-custom theme" accent \
-    "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+    "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 # A cycle narrowed to custom alone must still start, like every other narrowed cycle above.
 printf 'UT_THEME_CYCLE=custom\nUT_ACCENT=0xd65d0e/33\n' > "$CFG"
-report "a cycle of just custom reaches the TTY gate" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
-report "--theme custom is accepted" tty "$(uting_gate shell/uting --theme custom q)"
+report "a cycle of just custom reaches the TTY gate" tty "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
+report "--theme custom is accepted" tty "$(ting_gate shell/ting --theme custom q)"
 # ARCH-tui.md「调用面」's custom line, run verbatim rather than printed.
 report "…with an accent on it, as the doc prints it" tty \
-    "$(uting_gate UT_ACCENT=0xd65d0e/33 shell/uting --theme custom "lofi hip hop")"
+    "$(ting_gate UT_ACCENT=0xd65d0e/33 shell/ting --theme custom "lofi hip hop")"
 # --theme takes ONE name. The membership test is an exact compare over the name list, not a
 # substring of it: "gruvbox onedark" IS a substring of that list and a substring gate would
 # pass it, then fall off the end of set_theme's case with no accent set at all.
-report "--theme rejects two names at once" mode "$(uting_gate shell/uting --theme "gruvbox onedark" q)"
+report "--theme rejects two names at once" mode "$(ting_gate shell/ting --theme "gruvbox onedark" q)"
 
 # PROSE AND THE DOOR MAY NOT DIVERGE. The theme names used to be spelled four times; they are
 # one constant now, but usage() stays literal English and can still drift from it. Both sides
 # here are things the COMMAND said — the gate's own refusal message and its own --help — so
 # this compares two live surfaces rather than grepping the source for the constant.
-THEME_GATE_SET=$(shell/uting --theme __not_a_theme__ </dev/null 2>&1 |
+THEME_GATE_SET=$(shell/ting --theme __not_a_theme__ </dev/null 2>&1 |
     sed -n 's/.*must be one of: //p' | tr -d ' ' | tr ',' '\n' | sort | tr '\n' ' ')
-THEME_HELP=$(shell/uting -h 2>&1 || true)
+THEME_HELP=$(shell/ting -h 2>&1 || true)
 THEME_USAGE_FLAG=$(printf '%s\n' "$THEME_HELP" | tr '\n' ' ' |
     sed -e 's/.*Palette: //' -e 's/\. Every theme.*//' -e 's/(default)//' |
     tr '|' '\n' | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' ')
@@ -1624,9 +1777,9 @@ report "…and that set really holds names" "yes" "$THEME_SET_OK"
 # shape of a half-installed checkout.
 CFG_BROKE="$CFGD/broke"
 mkdir -p "$CFG_BROKE/shell"
-cp shell/ut-play "$CFG_BROKE/shell/" && echo 0.0.0 > "$CFG_BROKE/VERSION"
-report "no shipped defaults exits 2" "2" "$(rc "$CFG_BROKE/shell/ut-play" --version)"
-CFG_OUT=$("$CFG_BROKE/shell/ut-play" --version 2>&1 || true)
+cp shell/t-play "$CFG_BROKE/shell/" && echo 0.0.0 > "$CFG_BROKE/VERSION"
+report "no shipped defaults exits 2" "2" "$(rc "$CFG_BROKE/shell/t-play" --version)"
+CFG_OUT=$("$CFG_BROKE/shell/t-play" --version 2>&1 || true)
 case "$CFG_OUT" in
 *"cannot read the shipped defaults"*) CFG_HIT=yes ;;
 *) CFG_HIT=no ;;
@@ -1635,7 +1788,7 @@ report "…naming the file, not an unbound variable" "yes" "$CFG_HIT"
 rm -rf "$CFGD"
 
 # ── A PASTE IS TEXT, NOT KEYS ───────────────────────────────────────────────────────────
-# Hermetic because the STARTUP prompt is up before any search: uting asks for a query with
+# Hermetic because the STARTUP prompt is up before any search: ting asks for a query with
 # nothing fetched, so the whole claim is provable with no packet sent.
 #
 # The payload carries a NEWLINE, and that is what makes the check discriminating rather than
@@ -1678,7 +1831,7 @@ else
     # A state dir of this check's own, for the reason every other section has one: the pane
     # inherits the tmux SERVER's environment, not this shell's, so the value is passed into
     # the command line rather than exported — the same reason the TUI section spells it out.
-    PS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-paste.XXXXXX")
+    PS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-paste.XXXXXX")
     # UT_CONFIG rides along for the same reason and one more: the three greps below name an
     # ENGLISH chrome string, and this pane's language comes from whichever config it reads.
     # The export at the top of this file reaches a pane only when THIS run happens to start
@@ -1691,7 +1844,7 @@ else
     # way the TUI section spells its knobs out, so the pane's language is an input.
     tmux kill-session -t "$PS_TS" 2>/dev/null
     tmux new-session -d -s "$PS_TS" -x 80 -y 20 \
-        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/uting'; echo __GONE__; sleep 5" 2>/dev/null
+        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting'; echo __GONE__; sleep 5" 2>/dev/null
     pasted=0
     i=0
     while [ $i -lt 100 ]; do
@@ -1734,7 +1887,7 @@ if [ "$OFFLINE" = 1 ]; then
 fi
 
 export UT_STATE_DIR
-UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-live-store.XXXXXX")
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ting-live-store.XXXXXX")
 
 # ---- fetch once, assert many, and fetch them ALL AT ONCE ------------------------------
 # A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
@@ -1815,7 +1968,7 @@ spawn yt-trans     shell/yt-resolve   --transcript -j -- "$CAPTIONED"
 spawn yt-transJ    shell/yt-resolve   --transcript -J -- "$CAPTIONED"
 spawn yt-nocap     shell/yt-resolve   --transcript -j -- "$BARE"
 spawn yt-argv      shell/yt-search    -j -n 1 -- --status
-spawn yt-dead      shell/ut-play      -j -- AAAAAAAAAAA
+spawn yt-dead      shell/t-play      -j -- AAAAAAAAAAA
 spawn bili-resolve shell/bili-resolve -j -- "$BILI_ID"
 spawn bili-info    shell/bili-resolve --info -j -- "$BILI_ID"
 spawn bili-zh      shell/bili-search  -j -n 20 -M 600 -- 周杰伦
@@ -1824,7 +1977,7 @@ spawn bili-offset  shell/bili-resolve -j -- "https://www.bilibili.com/video/$BIL
 spawn bili-parts   shell/bili-resolve --parts -j -- "$BILI_PARTS_ID"
 spawn bili-part1   shell/bili-resolve --parts -j -- "$BILI_ID"
 spawn bili-nopart  shell/bili-resolve --parts -j -- av999999999999
-spawn bili-route   shell/ut-play      --engine bili -j -- BV1111111111
+spawn bili-route   shell/t-play      --engine bili -j -- BV1111111111
 spawn ne-vip       env NE_INCLUDE_VIP=1 shell/ne-search -j -n 20 -- 周杰伦
 spawn ne-trans     shell/ne-resolve --transcript -j -- "$NE_LYRIC"
 spawn ne-notrans   shell/ne-resolve --transcript -j -- "$NE_SILENT"
@@ -1977,7 +2130,7 @@ echo "── --items: a container is not a row ───────────
 # ONE ENVELOPE OVER THREE SITES, and the shape is the claim: whatever a container is called
 # there, what comes back is `{id, url, title, count, total, items[]}` and every element is an
 # item record — an engine to route to, a playable url of its own, a title and a duration. The
-# offline half already proved such a list feeds ut-playlist and ut-play with no field renamed;
+# offline half already proved such a list feeds t-playlist and t-play with no field renamed;
 # this half is what proves the engines still EMIT it.
 #
 # `count == total` is asserted where the container fits under the ceiling, because that is the
@@ -2050,7 +2203,7 @@ report "…and says unavailable" 0 \
 echo "── --items: the video side, and the cursor ────────────────────────"
 # THE SAME ENVELOPE OVER THE SITES' OTHER LISTS. The keys are the audio containers' keys plus
 # the two the cursor added, and the item records are the same records — which is the claim:
-# a favourites list and a collection reach ut-playlist through the same pipe an audio menu does,
+# a favourites list and a collection reach t-playlist through the same pipe an audio menu does,
 # with the site's own video ids in them.
 _vid_ok=0
 for _slot in bili-fav bili-season yt-channel; do
@@ -2116,17 +2269,17 @@ report "has_more and next_cursor answer together" 7 "$_cursor_shape"
 
 BILI_ITEMS_OUT=$(out bili-items)
 report "an item list adds to a playlist, unmapped" 0 \
-    "$(jq_in '.status=="ok" and .added>=1 and .count>=1' "$BILI_ITEMS_OUT" shell/ut-playlist --add items -j)"
+    "$(jq_in '.status=="ok" and .added>=1 and .count>=1' "$BILI_ITEMS_OUT" shell/t-playlist --add items -j)"
 report "…and every stored row is a call"  0 \
     "$(jq_ok '(.items|length)>=1 and all(.items[];
                  .engine=="bili"
                  and (.url|startswith("https://www.bilibili.com/audio/au"))
                  and (.id|type)=="string"
                  and (.title|type)=="string" and (.title|length)>0
-                 and (.duration|type)=="number")' shell/ut-playlist --show items -j)"
-report "an item list enqueues"            4 "$(rc_in "$BILI_ITEMS_OUT" shell/ut-play --enqueue - -j)"
+                 and (.duration|type)=="number")' shell/t-playlist --show items -j)"
+report "an item list enqueues"            4 "$(rc_in "$BILI_ITEMS_OUT" shell/t-play --enqueue - -j)"
 report "…parsed, not refused"             0 \
-    "$(jq_in '.status=="not_playing"' "$BILI_ITEMS_OUT" shell/ut-play --enqueue - -j)"
+    "$(jq_in '.status=="not_playing"' "$BILI_ITEMS_OUT" shell/t-play --enqueue - -j)"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
 # The second engine's envelopes. The SEARCH is the one the live half already made — a key
@@ -2158,7 +2311,7 @@ report "search result keys agree" \
 #     is why they are injected before the lean projection rather than inside it: an engine
 #     that adds them to the projection alone hands the caller who asked for MORE data (-J) an
 #     envelope missing two required fields, and every -j check in this file stays green.
-#   · A row whose `url` is null is not a row: `ut-play` has nothing to call. bili-search
+#   · A row whose `url` is null is not a row: `t-play` has nothing to call. bili-search
 #     shipped exactly that — search_type=video mixes in `ketang` (paid-course) records that
 #     carry no `bvid`, 3 of 20 on "钢琴", and an EMPTY bvid is TRUTHY in jq, so the `.id !=
 #     null` gate passed them through with `id: ""` and `url: null`.
@@ -2299,7 +2452,7 @@ report "resolve envelopes agree" \
 for n in $ENGINES; do
     SR=$(out "off601-$n")
     report "$n-resolve reads a t= offset" 0 "$(jqv '.start_seconds == 601' "$SR")"
-    # The url answers WHICH MEDIA, never where to start — ut-playlist --add stores exactly
+    # The url answers WHICH MEDIA, never where to start — t-playlist --add stores exactly
     # this string, so an offset riding along in it would make a saved track replay from
     # 10:01 for ever. Not a property inherited from the extractor: bili's webpage_url keeps
     # the whole query, because ?p=N lives in it, so for that engine this is a real strip.
@@ -2438,16 +2591,16 @@ report "bili --parts envelope"       0 \
                     and .url == ($b + "?p=" + (.n|tostring))))' "$BILI_P")"
 BILI_PARTS_ITEMS=$(printf '%s' "$BILI_P" | jq -c '{items: .parts}')
 report "a part list adds to a playlist" 0 \
-    "$(jq_in '.status=="ok" and .added>=2 and .count>=2' "$BILI_PARTS_ITEMS" shell/ut-playlist --add parts -j)"
+    "$(jq_in '.status=="ok" and .added>=2 and .count>=2' "$BILI_PARTS_ITEMS" shell/t-playlist --add parts -j)"
 report "…and every stored row is a call"  0 \
     "$(jq_ok '(.items|length)>=2 and all(.items[];
                  .engine=="bili"
                  and (.url|contains("?p="))
                  and (.title|type)=="string" and (.title|length)>0
-                 and (.duration|type)=="number")' shell/ut-playlist --show parts -j)"
-report "a part list enqueues"             4 "$(rc_in "$BILI_PARTS_ITEMS" shell/ut-play --enqueue - -j)"
+                 and (.duration|type)=="number")' shell/t-playlist --show parts -j)"
+report "a part list enqueues"             4 "$(rc_in "$BILI_PARTS_ITEMS" shell/t-play --enqueue - -j)"
 report "…parsed, not refused"             0 \
-    "$(jq_in '.status=="not_playing"' "$BILI_PARTS_ITEMS" shell/ut-play --enqueue - -j)"
+    "$(jq_in '.status=="not_playing"' "$BILI_PARTS_ITEMS" shell/t-play --enqueue - -j)"
 # A single-part video is a list of ONE and is NOT an error — the contract says so, and the
 # plausible wrong implementation (treat "no parts to choose between" as a failure) would pass
 # every other --parts check in this file. BILI_ID is that handle, which is why it is separate
@@ -2469,7 +2622,7 @@ report "…and it is still a tool failure" 2 "$(src bili-nopart)"
 
 # The player routes by NAME, and the name is the command prefix — the whole reason the
 # lookup is a string concatenation instead of a registry.
-report "ut-play routes to the bili engine" 0 \
+report "t-play routes to the bili engine" 0 \
     "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$(out bili-route)")"
 
 echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
@@ -2503,7 +2656,7 @@ echo "── the TUI boots, paints, survives a resize, and leaves on q ───
 # real tty, paints a list, stays up across two resizes, and exits 0 on `q`.
 #
 # It earns its place because every other check in this file is BLIND to the TUI: they all
-# reach it through a non-tty, where it correctly refuses to run. A `uting` that aborts on
+# reach it through a non-tty, where it correctly refuses to run. A `ting` that aborts on
 # boot or wedges on exit would leave this whole suite green.
 #
 # tmux is the tty. Wait on the ready marker, never on a sleep — a captured spinner frame is
@@ -2543,22 +2696,22 @@ else
     TS="ctest-tui-$$"
     tmux kill-session -t "$TS" 2>/dev/null
     # The session outlives the TUI on purpose: what the tty looks like AFTER `q` is a claim
-    # of its own, and the pane is the only place to read it from once uting has gone.
+    # of its own, and the pane is the only place to read it from once ting has gone.
     # TMPDIR is passed explicitly: a tmux SERVER that was already running carries the
     # environment of whoever started it, so the export at the top of this file does not reach
-    # the pane, and uting's --status polls would create a players/ dir in the user's real
+    # the pane, and ting's --status polls would create a players/ dir in the user's real
     # state dir. Nothing destructive happens there — every --stop and every check below runs
     # in this shell, where TMPDIR is redirected — but "this file does not touch your state"
     # should be true without a footnote.
     # A state dir of the pane's own.
-    TUI_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-tuistore.XXXXXX")
+    TUI_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-tuistore.XXXXXX")
     # Seed the stores from real command envelopes ($YT_R and $YT_S) — real command output,
     # never synthetic JSON.
-    printf '%s' "$YT_R" | UT_STATE_DIR="$TUI_STATE" shell/ut-history --record - -j >/dev/null 2>&1
-    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
+    printf '%s' "$YT_R" | UT_STATE_DIR="$TUI_STATE" shell/t-history --record - -j >/dev/null 2>&1
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/t-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
         { echo "contract.sh: the log did not seed — suite error, not a failure" >&2; exit 1; }
-    printf '%s' "$YT_S" | UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --add seeded-list -j >/dev/null 2>&1
-    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')" -ge 1 ] ||
+    printf '%s' "$YT_S" | UT_STATE_DIR="$TUI_STATE" shell/t-playlist --add seeded-list -j >/dev/null 2>&1
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/t-playlist --ls -j 2>/dev/null | jq -r '.count // 0')" -ge 1 ] ||
         { echo "contract.sh: the playlist did not seed — suite error, not a failure" >&2; exit 1; }
     # A config file of the pane's own. No staged behavior keys: UT_ROW_INDEX and UT_LIST_MODE
     # start unset and are driven by real keystrokes.
@@ -2568,7 +2721,7 @@ else
     printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG_REAL"
     ln -s "$TUI_CFG_REAL" "$TUI_CFG"
     # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
-    # the environment beats the file at every startup, so a uting that wrote this key would
+    # the environment beats the file at every startup, so a ting that wrote this key would
     # record view_count and then discard it on the next run. The value it would write
     # (view_count) differs from the pinned one (relevance), so the check cannot pass by
     # accident — which is exactly what a file that agreed with the environment would do.
@@ -2603,7 +2756,7 @@ else
     #     Interrupted system call` — again fatal under set -e.
     # Every one of them shows up here as this block's own boot / key / quit assertions going
     # red, which is why the value of forcing `on` is not that it draws but that it runs.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/uting 'lofi hip hop'"
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/ting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
@@ -2996,8 +3149,8 @@ else
     # it, because the check above needs rows and this one needs none: the two claims disagree
     # about the store's state, not about the pane. Deterministic either way — no query decides
     # whether this door is closed, which is what the `i` walk below cannot say for itself.
-    UT_STATE_DIR="$TUI_STATE" shell/ut-history --clear -j >/dev/null 2>&1
-    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 0 ] ||
+    UT_STATE_DIR="$TUI_STATE" shell/t-history --clear -j >/dev/null 2>&1
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/t-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 0 ] ||
         { echo "contract.sh: the log did not clear — suite error, not a failure" >&2; exit 1; }
     tmux send-keys -t "$TS" h
     said=$(poll_until 10 pane_has 'nothing listened to yet')
@@ -3078,7 +3231,7 @@ else
     tmux send-keys -t "$TS" y
     del_backed=$(poll_until 10 pane_back "playlist='" "query='")
     report "D deletes the playlist and returns to search" 1 "$del_backed"
-    del_stored=$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')
+    del_stored=$(UT_STATE_DIR="$TUI_STATE" shell/t-playlist --ls -j 2>/dev/null | jq -r '.count // 0')
     report "…and the playlist file is deleted from store" 0 "$del_stored"
 
     # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
@@ -3246,7 +3399,7 @@ else
     left=$(poll_until 10 pane_has 'RC=0')
     report "quits on q with 0" 1 "$left"
     # A red here is TWO reds: the FLAGS line the next check reads is printed by the same
-    # command line, after uting returns, so a TUI that did not leave takes the tty check down
+    # command line, after ting returns, so a TUI that did not leave takes the tty check down
     # with it. And the pane is the only witness there will ever be. `q` cannot be SLOW — the
     # dispatch arm prints and exits, and with no player the nav read blocks with no timeout —
     # so the byte was eaten by a reader that is not the menu loop (the `n` prompt,
@@ -3270,12 +3423,12 @@ else
     # result list. The trap reaps it now whatever happens, which is why this is a check rather
     # than a silent stop: the reap makes the leak harmless, and only this line makes it VISIBLE.
     report "the TUI left no player behind" 0 \
-        "$(shell/ut-play --status -j 2>/dev/null | jq '.players | length')"
+        "$(shell/t-play --status -j 2>/dev/null | jq '.players | length')"
     tmux kill-session -t "$TS" 2>/dev/null
     rm -rf "$TUI_STATE"
 
     # ── Startup adoption: the player this screen did NOT launch ─────────────────────────
-    # The bug this section pins was audible. With `ut-play -d` already playing, uting started
+    # The bug this section pins was audible. With `t-play -d` already playing, ting started
     # with an empty banner (the state block initialises to "nothing is attached", and nothing
     # ever asked otherwise), every key that needs a target fell through its own
     # `[[ -n "$CURRENT_PLAY_ID" ]]` guard as a silent no-op, and Enter launched a SECOND mpv
@@ -3284,8 +3437,8 @@ else
     #
     # THREE panes, and it cannot be fewer: adoption is decided ONCE per process, at startup,
     # so each answer needs a startup of its own. Every player below is a real detached player
-    # and every answer is read back from `ut-play --status` in THIS shell, not from the frame.
-    ADOPT_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-adopt.XXXXXX")
+    # and every answer is read back from `t-play --status` in THIS shell, not from the frame.
+    ADOPT_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-adopt.XXXXXX")
     # An EMPTY config, and empty is the point: it stages nothing, it is only somewhere for the
     # pane's preference write-back to land that is not the developer's real file — the same
     # isolation UT_STATE_DIR gives the stores. YT_LANG=en beside it because three checks below
@@ -3306,15 +3459,15 @@ else
     adopt_boot() {
         tmux kill-session -t "$ADOPT_TS" 2>/dev/null
         tmux new-session -d -s "$ADOPT_TS" -x 100 -y 30 \
-            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$ADOPT_STATE' UT_CONFIG='$ADOPT_CFG' YT_LANG=en shell/uting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$ADOPT_STATE' UT_CONFIG='$ADOPT_CFG' YT_LANG=en shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
         # The header's own count word, the same first-frame marker the section above waits on:
         # the spinner line that precedes it says `searching "…"` and never `results`.
         poll_until 40 pane_has 'results'
     }
-    adopt_n()       { shell/ut-play --status -j 2>/dev/null | jq '.players | length'; }
-    adopt_id()      { shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].id // ""'; }
-    adopt_paused()  { [ "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = true ]; }
-    adopt_playing() { [ "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = false ]; }
+    adopt_n()       { shell/t-play --status -j 2>/dev/null | jq '.players | length'; }
+    adopt_id()      { shell/t-play --status -j 2>/dev/null | jq -r '.players[0].id // ""'; }
+    adopt_paused()  { [ "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = true ]; }
+    adopt_playing() { [ "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].paused')" = false ]; }
     adopt_swapped() { local i; i=$(adopt_id); [ -n "$i" ] && [ "$i" != "$A_ID" ]; }
     adopt_none()    { [ "$(adopt_n)" = 0 ]; }
     # PLAYING, not merely started. A detached player exists as a record the moment it forks,
@@ -3322,10 +3475,10 @@ else
     # the banner is legitimately blank (it fills itself on the first tick, once mpv answers
     # with a media-title). Polled, never slept: the wait is a yt-dlp call, so its length is
     # the network's to decide.
-    adopt_ready()   { [ -n "$(shell/ut-play --status -j 2>/dev/null | jq -r '.players[0].title // ""')" ]; }
+    adopt_ready()   { [ -n "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].title // ""')" ]; }
 
     # ---- one background player: adopted, controllable, and replaced on Enter ----------
-    A_ID=$(shell/ut-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
+    A_ID=$(shell/t-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
     [ -n "$A_ID" ] ||
         { echo "contract.sh: the background player did not start — suite error, not a failure" >&2; exit 1; }
     report "the background player is playing before the screen opens" 1 "$(poll_until 60 adopt_ready)"
@@ -3336,7 +3489,7 @@ else
     # only worth its line if the TRACK reached it.
     report "a running player is on the banner of the FIRST frame" 1 "$(poll_until 10 pane_has 'Playing: .+')"
     # The banner alone could be drawn from a record read once. This is the half that cannot:
-    # Space goes out as `ut-play --pause --id`, and the answer is read back here from the
+    # Space goes out as `t-play --pause --id`, and the answer is read back here from the
     # player's own state — so it proves the pane adopted the ID AND the socket of the process
     # that is actually decoding.
     tmux send-keys -t "$ADOPT_TS" Space
@@ -3360,11 +3513,11 @@ else
     tmux kill-session -t "$ADOPT_TS" 2>/dev/null
 
     # ---- two: ambiguous, so the screen adopts neither and says so ----------------------
-    # `ut-play` answers `ambiguous` to a bare command with two live players (resolve_target).
+    # `t-play` answers `ambiguous` to a bare command with two live players (resolve_target).
     # The screen guesses no harder than the core does, and it must not quietly stop either one
     # on the way out — the same claim as above for a player it never took.
-    A_ID=$(shell/ut-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
-    B_ID=$(shell/ut-play -d -j --engine yt -- "$CAPTIONED" 2>/dev/null | jq -r '.id // ""')
+    A_ID=$(shell/t-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
+    B_ID=$(shell/t-play -d -j --engine yt -- "$CAPTIONED" 2>/dev/null | jq -r '.id // ""')
     [ -n "$A_ID" ] && [ -n "$B_ID" ] ||
         { echo "contract.sh: background players did not start — suite error, not a failure" >&2; exit 1; }
     report "two players are live for the ambiguous case" 2 "$(adopt_n)"
@@ -3376,10 +3529,116 @@ else
     tmux send-keys -t "$ADOPT_TS" q
     report "the ambiguous pane quits too" 1 "$(poll_until 10 pane_has 'RC=0')"
     report "…and stopped neither player" 2 "$(adopt_n)"
-    shell/ut-play --stop --all -j >/dev/null 2>&1
+    shell/t-play --stop --all -j >/dev/null 2>&1
     report "q leaves players it did not adopt running" 1 "$(poll_until 10 adopt_none)"
     tmux kill-session -t "$ADOPT_TS" 2>/dev/null
     rm -rf "$ADOPT_STATE"
+
+    # ── The queue view (key: u), the one row source that WRITES ────────────────────────
+    # Here rather than in playback.sh because the claim is a MAPPING and only a real terminal
+    # can drive it: from the cursor, through the row record, to the index `t-play` is asked
+    # to act on. playback.sh proves the verbs themselves against a real player; what it cannot
+    # reach is whether the TUI names the row the user is looking at.
+    #
+    # And it is the one worth a tmux round trip, because it is the only key in this file that
+    # can destroy something a user cannot get back: a queue dies with its player, so `x` on
+    # the wrong row is a track gone from everywhere. Asserted against the PLAYER'S OWN QUEUE
+    # rather than against the frame — what the screen drew is not evidence about what was
+    # removed, and the queue file is where the answer actually is.
+    QV_CFG="$UT_TEST_TMP/queueview-config"
+    : >"$QV_CFG"
+    QV_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-qvstore.XXXXXX")
+    # A playlist to stand on for the refusal check at the end, written by the REAL store from
+    # the REAL search envelope this suite already fetched — the same way the TUI section above
+    # gets one. Nothing here is staged: t-playlist produces the file it is later asked to read.
+    printf '%s' "$YT_S" | UT_STATE_DIR="$QV_STATE" shell/t-playlist --add qv-list -j >/dev/null 2>&1
+    TS="ctest-queue-$$"              # the helpers above read $TS; earlier sessions are gone
+    tmux kill-session -t "$TS" 2>/dev/null
+    # TMPDIR is the suite's, as the adoption block explains: the players directory lives under
+    # it, and sharing one is how this shell can read the queue the pane's player is consuming.
+    tmux new-session -d -s "$TS" -x 100 -y 30 \
+        "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$QV_STATE' UT_CONFIG='$QV_CFG' YT_LANG=en shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+    qv_len()  { shell/t-play --queue-show -j 2>/dev/null | jq -r '.len // 0'; }
+    qv_urls() { shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[].url]'; }
+    qv_is()   { [ "$(qv_len)" = "$1" ]; }
+    up=$(poll_until 40 pane_has "query='")
+    if [ "$up" != 1 ]; then
+        report "the queue pane came up" 1 "$up"
+    else
+        # A queue built the way a user builds one: play a row, then queue two more. Every
+        # wait below polls the QUEUE ITSELF — the length the player reports — rather than a
+        # frame or a clock, so a slow resolve costs time and never a red.
+        tmux send-keys -t "$TS" Enter
+        report "Enter started a player" 1 "$(poll_until 60 qv_is 1)"
+        tmux send-keys -t "$TS" Down
+        tmux send-keys -t "$TS" +
+        report "+ queues a second track" 1 "$(poll_until 20 qv_is 2)"
+        tmux send-keys -t "$TS" Down
+        tmux send-keys -t "$TS" +
+        report "+ queues a third" 1 "$(poll_until 20 qv_is 3)"
+        # `u` opens it, and the header field is the proof: the source name IS what the first
+        # line prints (`queue='…'`, the same shape as `playlist='…'`), so a view that opened
+        # under the wrong LIST_SOURCE says so there and nowhere else.
+        tmux send-keys -t "$TS" u
+        report "u opens the queue as the row source" 1 "$(poll_until 15 pane_has "queue='")"
+        # The status line's own count, not a row number: numbering is off until `#` toggles it,
+        # and this says more anyway. A search row source counts "results" and only a store
+        # counts "items", so `3 items` is both halves of the claim at once — the rows on screen
+        # are the queue's, and there are as many of them as the player says it holds.
+        report "…and the rows on screen are the queue's" 1 "$(poll_until 10 pane_has '[^0-9]3 items')"
+        # THE MAPPING. The cursor opens on the playing track (index 0); two Downs put it on
+        # index 2, and `x` must remove THAT one. Asserted by naming the url beforehand and
+        # looking for its absence afterwards — a length check alone would pass if the wrong
+        # track went.
+        qv_doomed=$(shell/t-play --queue-show -j 2>/dev/null | jq -r '.items[2].url')
+        qv_spared=$(shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[0].url,.items[1].url]')
+        tmux send-keys -t "$TS" Down
+        tmux send-keys -t "$TS" Down
+        tmux send-keys -t "$TS" x
+        report "x removes a waiting track" 1 "$(poll_until 20 qv_is 2)"
+        report "…and it removed the one under the cursor" "$qv_spared" "$(qv_urls)"
+        report "…which is not the one it was told to remove" 0 \
+            "$(qv_urls | grep -c -F "$qv_doomed")"
+        # x on the PLAYING row is refused, and says so instead of doing nothing visible. The
+        # length not moving is the other half: a refusal that had already written would look
+        # identical from the notice alone.
+        qv_before=$(qv_urls)
+        tmux send-keys -t "$TS" Up
+        tmux send-keys -t "$TS" Up
+        tmux send-keys -t "$TS" x
+        report "x on the playing track says why" 1 "$(poll_until 10 pane_has 'playing')"
+        report "…and removed nothing" "$qv_before" "$(qv_urls)"
+        # The way back, which is the whole of the row-source contract: one key in, the same
+        # key out, and the search that was stashed still there. `stored_rows` not knowing
+        # about this source is exactly how `u` becomes a door that only opens.
+        tmux send-keys -t "$TS" u
+        report "u goes back to the search" 1 "$(poll_until 10 pane_has "query='lofi")"
+        # And from a STORE row source it REFUSES. There is one stash slot, so a queue opened
+        # on top of a playlist would leave the search in it and send `u` back to the search
+        # with the playlist gone — a list vanishing with nothing said about it. The second
+        # assertion is the one that matters: the playlist is still on screen afterwards.
+        tmux send-keys -t "$TS" b
+        if [ "$(poll_until 10 pane_has '1\. qv-list')" = 1 ]; then
+            tmux send-keys -t "$TS" 1
+            tmux send-keys -t "$TS" Enter
+            opened=$(poll_until 10 pane_has "playlist='qv-list'")
+            report "a playlist is on screen to press u from" 1 "$opened"
+            if [ "$opened" = 1 ]; then
+                tmux send-keys -t "$TS" u
+                report "u from a playlist says to go back first" 1 \
+                    "$(poll_until 10 pane_has 'back to the results')"
+                report "…and the playlist is still there" 1 \
+                    "$(poll_until 5 pane_has "playlist='qv-list'")"
+            fi
+        else
+            report "the queue section's playlist was listed" 1 0
+        fi
+        tmux send-keys -t "$TS" q
+        poll_until 10 pane_has 'RC=' >/dev/null
+    fi
+    tmux kill-session -t "$TS" 2>/dev/null
+    shell/t-play --stop --all -j >/dev/null 2>&1
+    rm -rf "$QV_STATE"
 
     # ── The parts view (key: c), on whichever installed engine HAS --parts ──────────────
     # This row source had no coverage at all. The session above drives yt, where `c` is inert
@@ -3388,7 +3647,7 @@ else
     # terminal. It went unnoticed because the key LOOKS covered.
     #
     # The engine is discovered by CAPABILITY, never named: _ro_verb_has is the probe the
-    # read-only verb cases above already use, and it asks the same question uting's own
+    # read-only verb cases above already use, and it asks the same question ting's own
     # refresh_engine_parts asks. So a fourth engine with --parts is covered the day it lands,
     # and a checkout without a --parts engine skips with a reason instead of going red.
     PARTS_ENG=""
@@ -3403,11 +3662,11 @@ else
         # the row cursor readable or not depending on which checks ran before this one.
         PTS_CFG="$UT_TEST_TMP/parts-config"
         : >"$PTS_CFG"
-        PTS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-partsstore.XXXXXX")
+        PTS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-partsstore.XXXXXX")
         TS="ctest-parts-$$"          # the helpers above read $TS; the first session is gone
         tmux kill-session -t "$TS" 2>/dev/null
         tmux new-session -d -s "$TS" -x 100 -y 30 \
-            "cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$PTS_STATE' UT_CONFIG='$PTS_CFG' YT_LANG=en shell/uting --engine $PARTS_ENG -n 10 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+            "cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$PTS_STATE' UT_CONFIG='$PTS_CFG' YT_LANG=en shell/ting --engine $PARTS_ENG -n 10 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
         up=$(poll_until 30 pane_has "query='")
         if [ "$up" != 1 ]; then
             report "the parts pane came up" 1 "$up"
@@ -3420,22 +3679,49 @@ else
             # The same walk shape the `i` block uses, and for the same reason: which of
             # today's rows is multi-part is the site's business, not this file's. Cheaper per
             # lap than that one — `--parts` is a single HTTP request, not an extraction — so
-            # the bound is six rows. Measured 2026-09-03 on this query: the first ten rows
-            # came back 17, 6, 99, 1, 1, 3 parts, so the walk normally pays one lap.
+            # the bound is the WHOLE page it fetched, ten rows. Six was the bound until
+            # 2026-09-13, when the day's ranking put the only multi-part rows at 7 and 9 and
+            # the walk went red one row short of the door it was testing — a bound smaller
+            # than the page is a bet on the ordering, and the ordering is the site's to
+            # change (measured 2026-09-03 the same query answered 17, 6, 99, 1, 1, 3 on its
+            # first six, so the bet looked free right up until it was not). At ten, the only
+            # thing that can still fail is "no row on this page has parts", which is a
+            # different claim and a visible one — the pane is dumped when it happens.
             parts_settled() { pane_has "parts='" || pane_has 'only one part'; }
-            popened=0; ponly=0; prow=1; pwalked=1
+            # `pallanswered` stays 1 only while EVERY lap came back with one of the two
+            # answers. It is what separates "the page has no multi-part row" from "a lap sat
+            # there saying nothing", and only the first of those is allowed to skip below.
+            popened=0; pallanswered=1; prow=1; pwalked=1
             while :; do
                 tmux send-keys -t "$TS" c
-                poll_until 12 parts_settled >/dev/null
+                [ "$(poll_until 12 parts_settled)" = 1 ] || pallanswered=0
                 pane_has "parts='" && { popened=1; break; }
-                ponly=1
-                [ $prow -ge 6 ] && break
+                [ $prow -ge 10 ] && break
                 tmux send-keys -t "$TS" Down
                 prow=$((prow + 1))
                 pwalked=$(poll_until 5 pane_has "^[>▶▎] +$prow\.")
                 [ "$pwalked" = 1 ] || break
             done
-            report "c opens a multi-part row as the row source" 1 "$popened"
+            # A SKIP, not a red, when every row on the page refused — and the distinction is
+            # not politeness, it is which claim failed. `c` on a single-part row answering
+            # "only one part" IS the door working: the key reached the engine, a real
+            # `--parts` round trip came back, and the view declined for the one reason it is
+            # allowed to. What is missing then is a multi-part video in bilibili's ranking
+            # for this query, which this file does not get a vote on — and it moves: the same
+            # query answered 17, 6, 99, 1, 1, 3 across its first six rows on 2026-09-03, and
+            # on 2026-09-13 returned pages whose whole ten were single-part, twice, with the
+            # ordering different on every call. A check that reds on that is reporting the
+            # site's catalogue as a defect in the TUI. So the red is kept for the two things
+            # that ARE this suite's business — the walk stalling (reported just below) and a
+            # lap that settled on neither answer, which is the door being broken rather than
+            # closed — and the pane is dumped either way, so a skip is never silent.
+            if [ "$popened" = 1 ]; then
+                report "c opens a multi-part row as the row source" 1 "$popened"
+            elif [ "$pallanswered" = 1 ]; then
+                echo "  skip  (c answered on all $prow rows; none of today's is multi-part)"
+            else
+                report "c opens a multi-part row as the row source" 1 "$popened"
+            fi
             if [ "$popened" != 1 ]; then
                 echo "  ---- pane where no row of $prow opened its parts ----" >&2
                 tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
@@ -3475,7 +3761,7 @@ else
         tmux send-keys -t "$TS" q 2>/dev/null
         poll_until 5 pane_has 'RC=0' >/dev/null
         tmux kill-session -t "$TS" 2>/dev/null
-        UT_STATE_DIR="$PTS_STATE" shell/ut-play --stop --all >/dev/null 2>&1
+        UT_STATE_DIR="$PTS_STATE" shell/t-play --stop --all >/dev/null 2>&1
         rm -rf "$PTS_STATE"
     fi
 fi

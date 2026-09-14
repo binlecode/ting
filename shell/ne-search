@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ne-search — the NetEase Cloud Music SEARCH ENGINE: query -> result envelope. Agent-facing.
 #
-# One half of the netease engine pair (`ne-search` + `ne-resolve`); the player (`ut-play`) is
+# One half of the netease engine pair (`ne-search` + `ne-resolve`); the player (`t-play`) is
 # source-agnostic and knows neither. This file owns everything that is NetEase-specific about
 # searching: the weapi request envelope, the AES wrapping it needs, the result shaping, and
 # the one signal this site publishes that neither shipping engine could ever compute. It has
@@ -42,7 +42,7 @@ done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 
 # THE version of the whole suite, declared once — in a data file, not in code. See the same
-# block in yt-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
+# block in yt-search / yt-resolve / t-play. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
     UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
@@ -51,12 +51,24 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in t-play for why, and
 # ARCH-cli-contract.md「配置面」 for the keys.
-UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+TING_CONFIG="${TING_CONFIG:-${UT_CONFIG:-}}"
+if [[ -z "$TING_CONFIG" ]]; then
+    if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ting/config" ]]; then
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+    else
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+    fi
+fi
+UT_CONFIG="$TING_CONFIG"
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+    eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
+    eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
+done
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
-    local file="$1" line key val
+    local file="$1" line key val _ting_k _ut_k
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -67,17 +79,27 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(TING|UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        TING_CONFIG | TING_DEFAULTS | TING_ENGINE_DIR | TING_VERSION | UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
             val="${val%?}"
         fi
         [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
-        eval "[[ -n \"\${$key+x}\" ]]" && continue
-        eval "$key=\$val"
+        if [[ "$key" == TING_* ]]; then
+            _ut_k="UT_${key#TING_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ut_k+x}\" ]] || $_ut_k=\$val"
+        elif [[ "$key" == UT_* ]]; then
+            _ting_k="TING_${key#UT_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ting_k+x}\" ]] || $_ting_k=\$val"
+        else
+            eval "[[ -n \"\${$key+x}\" ]]" && continue
+            eval "$key=\$val"
+        fi
     done < "$file"
 }
 # FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: a
@@ -93,7 +115,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
-# executables carry. Name == prefix is what lets `ut-play --engine ne` find `ne-resolve`
+# executables carry. Name == prefix is what lets `t-play --engine ne` find `ne-resolve`
 # by string concatenation, with no name->command registry. docs/ARCHITECTURE.md「命令拓扑」.
 ENGINE_NAME="ne"
 
@@ -183,9 +205,9 @@ OUTPUT_MODE="list"
 QUERY=""
 FILTERED_JSON=""
 
-# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# Glyph fallback shares ONE switch with ting (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
-# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as uting does.
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as ting does.
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -366,7 +388,7 @@ classify_http_error() {
 # would be out of scope there and abort under `set -u`.
 #
 # The engine does not write into the player's state dir: `players/` has exactly one owner
-# (ut-play). 0700 rather than a bare /tmp path because a response body is content.
+# (t-play). 0700 rather than a bare /tmp path because a response body is content.
 SCRATCH_DIR=""
 cleanup_scratch() {
     [[ -n "$SCRATCH_DIR" ]] && rm -rf "$SCRATCH_DIR" 2>/dev/null
@@ -505,7 +527,7 @@ fetch_page() {
 # nothing — a track really called "R&B Soul" arrives with a bare `&`. Unescaping entities in
 # text that carries none can only corrupt it.
 #
-# `select(.url != null)` is the row's own premise: a result is a CALL (`ut-play --engine ne --
+# `select(.url != null)` is the row's own premise: a result is a CALL (`t-play --engine ne --
 # <url>`) or it is not a row. ARCH-cli-contract.md「数据契约」.
 JQ_SHAPE='
 [ .[]
@@ -685,23 +707,24 @@ of THIS FILE only — ne-resolve, and the rest of the suite, run without it.
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
-  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/ting/config (KEY=value, one
+  per line, # comments; the pre-rename .../uting/config is read when there is no ting
+  one); TING_CONFIG relocates it, and UT_CONFIG still does. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   NE_UA           User-Agent sent with the search request (a browser UA)
   NE_INCLUDE_VIP  1 = also return rows that are not fully playable (default: 0)
 
-To play a result, pass its song id to: ut-play --engine ne
+To play a result, pass its song id to: t-play --engine ne
 EOF
 }
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. ARCH-cli-contract.md「门模型」
+# t-play so the caller learns the right tool instead of a bare error. ARCH-cli-contract.md「门模型」
 has_format=0
 query=()
 reject_url() {
-    echo "ne-search: '$1' looks like a URL — use 'ut-play --engine ne $1' to play it" >&2
+    echo "ne-search: '$1' looks like a URL — use 't-play --engine ne $1' to play it" >&2
     exit 1
 }
 while (($#)); do
@@ -763,7 +786,7 @@ while (($#)); do
         exit 1
         ;;
     -f | -d | --detach | --status | --stop | --set-volume | --id | --all)
-        echo "ne-search: $1 is a playback flag — use ut-play for playback" >&2
+        echo "ne-search: $1 is a playback flag — use t-play for playback" >&2
         exit 1
         ;;
     --info | --transcript | --subtitles | --sub-lang | --sub-langs)

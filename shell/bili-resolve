@@ -4,7 +4,7 @@
 # same extractor. Agent-facing.
 #
 # The other half of the bilibili engine pair (`bili-search` + `bili-resolve`); the player
-# (`ut-play`) is source-agnostic and knows neither. Everything Bilibili-specific about
+# (`t-play`) is source-agnostic and knows neither. Everything Bilibili-specific about
 # turning a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
 # format-per-mode table, and the handle shapes this site uses. It has NO playback,
 # lifecycle, or mpv logic and never starts a process that outlives it.
@@ -40,7 +40,7 @@ done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 
 # THE version of the whole suite, declared once — in a data file, not in code. See the same
-# block in bili-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
+# block in bili-search / yt-resolve / t-play. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
     UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
@@ -49,12 +49,24 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in t-play for why, and
 # ARCH-cli-contract.md「配置面」 for the keys.
-UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+TING_CONFIG="${TING_CONFIG:-${UT_CONFIG:-}}"
+if [[ -z "$TING_CONFIG" ]]; then
+    if [[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/ting/config" ]]; then
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/ting/config"
+    else
+        TING_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+    fi
+fi
+UT_CONFIG="$TING_CONFIG"
+for _v in STATE_DIR ENGINE_DIR HISTORY THEME ACCENT VOLUME LANG IMAGE KEYS RESOURCE RESOURCE_TICKS BRAND ASCII SYNC PLAY_QUALITY VIZ_STYLE DEAD_KEEP DEFAULT_ENGINE MODE_CYCLE SORT_CYCLE THEME_CYCLE QUALITY_CYCLE LOOP_CYCLE; do
+    eval "[[ -n \"\${TING_$_v+x}\" ]] && UT_$_v=\"\$TING_$_v\" || true"
+    eval "[[ -n \"\${UT_$_v+x}\" && -z \"\${TING_$_v+x}\" ]] && TING_$_v=\"\$UT_$_v\" || true"
+done
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
-    local file="$1" line key val
+    local file="$1" line key val _ting_k _ut_k
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
@@ -65,17 +77,27 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(TING|UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        TING_CONFIG | TING_DEFAULTS | TING_ENGINE_DIR | TING_VERSION | UT_CONFIG | UT_DEFAULTS | UT_ENGINE_DIR | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
             val="${val%?}"
         fi
         [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
-        eval "[[ -n \"\${$key+x}\" ]]" && continue
-        eval "$key=\$val"
+        if [[ "$key" == TING_* ]]; then
+            _ut_k="UT_${key#TING_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ut_k+x}\" ]] || $_ut_k=\$val"
+        elif [[ "$key" == UT_* ]]; then
+            _ting_k="TING_${key#UT_}"
+            eval "[[ -n \"\${$key+x}\" ]] || $key=\$val"
+            eval "[[ -n \"\${$_ting_k+x}\" ]] || $_ting_k=\$val"
+        else
+            eval "[[ -n \"\${$key+x}\" ]]" && continue
+            eval "$key=\$val"
+        fi
     done < "$file"
 }
 # FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
@@ -285,7 +307,7 @@ CURSOR=""            # the --cursor token as the caller typed it, "" when absent
 CURSOR_OFFSET=0      # the item offset it decodes to; 0 is the first batch
 FMT=""               # the yt-dlp format string the mode resolves to
 
-# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
+# Glyph fallback shares ONE switch with ting (YT_ASCII, legacy alias YT_TUI_ASCII).
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -436,7 +458,7 @@ classify_yt_dlp_error() {
 # because -h / -V must answer without touching the filesystem, and process-level rather
 # than a function `local` because the EXIT trap runs after the function has returned.
 # 0700 rather than a bare /tmp path because the captured yt-dlp stderr can name a cookie
-# database. `players/` has exactly one owner (ut-play) and it is not this file.
+# database. `players/` has exactly one owner (t-play) and it is not this file.
 SCRATCH_DIR=""
 ERR_FILE=""
 cleanup_scratch() {
@@ -455,7 +477,7 @@ ensure_scratch() {
 
 # The yt-dlp format string a playback mode resolves to. This table is the reason format
 # selection belongs to the engine and not the player: `bv*+ba/b` is a yt-dlp expression,
-# and the player must never learn to read one. ut-play sends a MODE and gets back bytes.
+# and the player must never learn to read one. t-play sends a MODE and gets back bytes.
 format_for_mode() {
     case "$1" in
     video) echo "$BILI_VIDEO_FORMAT" ;;
@@ -756,7 +778,7 @@ normalize_target() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: t-play --engine NAME)"
         ;;
     bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
         t="https://$t"
@@ -831,7 +853,7 @@ normalize_container() {
     http://* | https://*)
         host=$(url_host "$t")
         is_own_host "$host" ||
-            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
+            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: t-play --engine NAME)"
         ;;
     esac
 
@@ -1247,7 +1269,7 @@ parts_fail() {
 }
 
 # EVERY PART IS AN ITEM RECORD. `{engine, url, title, duration, …}` is exactly what
-# ut-playlist stores and what ut-play --queue consumes, so `--parts -j | jq '{items:.parts}'`
+# t-playlist stores and what t-play --queue consumes, so `--parts -j | jq '{items:.parts}'`
 # pipes into either of them with no field renamed — a part list IS a playlist the caller has
 # not saved yet. That is the whole reason the elements carry `engine` and a full `url`
 # rather than a bare part number: a record here is a CALL, never a reference.
@@ -1368,7 +1390,7 @@ resolve_parts() {
         return 0
     fi
 
-    # Prose, in the vocabulary --info and ut-playlist --show already speak: the title, a
+    # Prose, in the vocabulary --info and t-playlist --show already speak: the title, a
     # dashed summary line, then one line per part. A single-part video is not a special
     # case and not an error — it prints one row and says so in the count.
     local title count total_fmt
@@ -1396,7 +1418,7 @@ resolve_parts() {
 # `kind` on the row model. ARCH-engine.md「容器（--items）」.
 #
 # EVERY ITEM IS AN ITEM RECORD, the same claim --parts makes about its parts: `{engine, id, url,
-# title, duration}` is what ut-playlist stores and what ut-play --queue consumes, and the key is
+# title, duration}` is what t-playlist stores and what t-play --queue consumes, and the key is
 # `items` because that is the name both of them already read. So `--items -j` pipes into either
 # with nothing renamed and neither of them changed a line to accept it. Each record carries its
 # own `engine` and a complete playable url, because a record here is a CALL, not a reference.
@@ -1719,7 +1741,7 @@ resolve_items() {
         return 0
     fi
 
-    # Prose, in the vocabulary --parts and ut-playlist --show already speak: the title, a dashed
+    # Prose, in the vocabulary --parts and t-playlist --show already speak: the title, a dashed
     # summary line, then one line per track. An EMPTY container prints its title and a count of
     # 0 — that is an answer, the same way a single-part video is an answer to --parts.
     local title count total_txt
@@ -1802,23 +1824,23 @@ the legacy av id. Knowing those shapes is this engine's job, not the player's.
 
 Options:
   -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
-           (default: audio). The MODE -> yt-dlp format table lives here, not in ut-play.
+           (default: audio). The MODE -> yt-dlp format table lives here, not in t-play.
   -S SORT  yt-dlp format-sort override (--format-sort)
   --quality TIER  Quality tier: auto | low | medium | high (default: auto). The
-           (mode, tier) -> format-sort table lives here, not in ut-play; -S overrides it
+           (mode, tier) -> format-sort table lives here, not in t-play; -S overrides it
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, description) — nothing is resolved
   --parts  List the parts (?p=N) of a multi-part video — one HTTP request, no yt-dlp
            (a second one only when the preferred endpoint refuses; see `title` below).
-           Every element is an item record, so the list pipes into ut-playlist --add and
-           ut-play --queue unmapped. A single-part video lists one part, not an error
+           Every element is an item record, so the list pipes into t-playlist --add and
+           t-play --queue unmapped. A single-part video lists one part, not an error
   --items  List what is in a container — HTTP only, no yt-dlp. Three of them on this site:
            an audio menu (am<id>, /audio/am<id>), a favourites list (ml<id>,
            /medialist/detail/ml<id>, or space…/<uid>/favlist?fid=…) and a collection
            (space…/<uid>/lists/<sid>?type=season, …/channel/collectiondetail?sid=…).
-           Every element is an item record, so the list pipes into ut-playlist --add and
-           ut-play --queue unmapped. Up to 500 rows per call (480 for a favourites list,
+           Every element is an item record, so the list pipes into t-playlist --add and
+           t-play --queue unmapped. Up to 500 rows per call (480 for a favourites list,
            which pages in 40s) — has_more/next_cursor say whether there are more and how
            to ask. count below total means the container is longer than one batch, or held
            rows this engine could not play: a dead upload or an OGV episode in a favourites
@@ -1848,7 +1870,7 @@ Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,
 Parts JSON (--parts -j): {status,engine,id,title,url,count,total_duration,
                           total_duration_fmt,parts:[{n,engine,url,title,duration,
                                                      duration_fmt}]}
-  parts[] elements ARE item records:  --parts -j | jq '{items:.parts}' | ut-playlist --add …
+  parts[] elements ARE item records:  --parts -j | jq '{items:.parts}' | t-playlist --add …
   Top-level `title` is null when the fallback endpoint answered — it does not carry the
   collection title. Every part's own title, number, duration and url are there either way,
   and an av handle keeps its av spelling in `id`/`url` instead of being canonicalised to BV.
@@ -1887,8 +1909,9 @@ Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagat
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
-  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/ting/config (KEY=value, one
+  per line, # comments; the pre-rename .../uting/config is read when there is no ting
+  one); TING_CONFIG relocates it, and UT_CONFIG still does. Chain: flag > environment > your
   config > the shipped defaults. See ARCH-cli-contract.md「配置面」.
   BILI_COOKIE_BROWSER      Browser profile cookies are read from (default: chrome;
                            "none" for anonymous). On this site login buys audio QUALITY —
@@ -1901,7 +1924,7 @@ Environment:
                            the ONLY verb here that sends a request of its own making —
                            every other one goes through yt-dlp, which carries its own.
 
-To search: bili-search <query>   ·   To play: ut-play --engine bili <BV id>
+To search: bili-search <query>   ·   To play: t-play --engine bili <BV id>
 EOF
 }
 
@@ -1979,7 +2002,7 @@ while (($#)); do
     -f | --format-mode)
         [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
+        # Canonical modes only — the alias table (ba/bv/…) is t-play's, which normalizes
         # before it calls an engine (ARCH-cli-contract.md「命令规格」).
         validate_enum "$2" audio video fast ascii viz ||
             die "-f must be one of: audio, video, fast, ascii, viz"
@@ -1995,7 +2018,7 @@ while (($#)); do
     --quality)
         [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        # Canonical tiers only — the alias table, if one ever grows one, is ut-play's
+        # Canonical tiers only — the alias table, if one ever grows one, is t-play's
         # (the same rule as -f: the engine seam carries canonical spellings).
         validate_enum "$2" auto low medium high ||
             die "--quality must be one of: auto, low, medium, high"
@@ -2005,7 +2028,7 @@ while (($#)); do
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
     # a caller holding the wrong verb is told which one it wants (ARCH-cli-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
-        echo "bili-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        echo "bili-resolve: $1 is a playback flag — use t-play for playback" >&2
         exit 1
         ;;
     -n | -m | -M | -s)
