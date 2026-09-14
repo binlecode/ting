@@ -384,6 +384,9 @@ Lessons these paid for, every one of which produced a wrong result first:
 **Everything under `docs/` is written in Chinese**; this README and `CLAUDE.md` are the English
 surface.
 
+- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) — the complete user manual (Chinese): full interactive
+  TUI keys, multi-row views, CLI agent pipelines, detached playback lifecycle, configuration,
+  and troubleshooting.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: what this suite is positioned to
   be and what it deliberately is not, topology, seams, the control-flow diagrams, every
   non-obvious decision, and the risk register — the known ways this can go wrong and what

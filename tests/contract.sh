@@ -979,6 +979,11 @@ report "…with --start 90 --quality low" yes "$(viz_reaches_engine yt shell/t-p
 # survive being pointed at the other engine. The name in the message is the assertion: a
 # --engine that was parsed and then dropped would come back naming `yt`.
 report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/t-play --engine bili -f viz -- "$VIZ_URL")"
+# URL auto-sniffing when --engine is omitted:
+report "…auto-routes bili URL to bili"   yes "$(viz_reaches_engine bili shell/t-play -f viz -- "https://www.bilibili.com/video/BV0000000000")"
+report "…auto-routes netease URL to ne"  yes "$(viz_reaches_engine ne shell/t-play -f viz -- "https://music.163.com/song?id=000000")"
+report "…auto-routes youtube URL to yt"  yes "$(viz_reaches_engine yt shell/t-play -f viz -- "https://www.youtube.com/watch?v=00000000000")"
+report "…explicit --engine overrides"    yes "$(viz_reaches_engine yt shell/t-play --engine yt -f viz -- "https://www.bilibili.com/video/BV0000000000")"
 
 # THE TERMINAL-RENDERING MODES CANNOT DETACH, and the refusal is a usage error, not a
 # tool failure — an agent reading 2+ would retry a combination that can never work. Stated
@@ -2726,7 +2731,7 @@ else
     #     Interrupted system call` — again fatal under set -e.
     # Every one of them shows up here as this block's own boot / key / quit assertions going
     # red, which is why the value of forcing `on` is not that it draws but that it runs.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/ting 'lofi hip hop'"
+    TUI_CMD="cd '$PWD' && env -u NO_COLOR YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/ting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"

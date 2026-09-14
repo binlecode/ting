@@ -2045,6 +2045,7 @@ set_ui_lang() {
         S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
         S_QUITTING="正在退出"; S_PLAY_FAILED="播放失败"; S_SEARCH_ACT="搜索"
+        S_URL_ACT="链接"; S_CONTAINER_ACT="合集"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
         S_NO_MATCH="(无匹配"
@@ -2097,6 +2098,7 @@ set_ui_lang() {
         S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
         S_QUITTING="Quitting"; S_PLAY_FAILED="Play failed"; S_SEARCH_ACT="Search"
+        S_URL_ACT="URL"; S_CONTAINER_ACT="Container"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
         S_NO_MATCH="(no matches"
@@ -4305,6 +4307,7 @@ SEARCH_ERR=""
 # per-FETCH fact, not a per-row one (the envelope declares it once), so it needs no room in
 # the row format.
 CURRENT_ENGINE=""
+json=""
 fetch_json() {
     local out cnt errfile rc=0
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-search-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-search-err.$$"
@@ -6499,25 +6502,28 @@ playlist_only() {
 # a toggle needs no second key to learn: the one that opened it closes it.
 stash_search() {
     stored_rows && return 0
-    SEARCH_STASH_JSON="$json"
-    SEARCH_STASH_ROWS="$ALL_ROWS"
-    SEARCH_STASH_LABEL="$QUERY_LABEL"
-    SEARCH_STASH_ENGINES="$PLAYLIST_ENGINES"
-    SEARCH_STASH_SEL="$selected"
-    SEARCH_STASH_PAGE="$page_index"
+    SEARCH_STASH_JSON="${json:-}"
+    SEARCH_STASH_ROWS="${ALL_ROWS:-}"
+    SEARCH_STASH_LABEL="${QUERY_LABEL:-}"
+    SEARCH_STASH_ENGINES="${PLAYLIST_ENGINES:-}"
+    SEARCH_STASH_SEL="${selected:-0}"
+    SEARCH_STASH_PAGE="${page_index:-1}"
 }
 
 back_to_search() {
     stored_rows || return 0
-    json="$SEARCH_STASH_JSON"
-    ALL_ROWS="$SEARCH_STASH_ROWS"
-    QUERY_LABEL="$SEARCH_STASH_LABEL"
-    PLAYLIST_ENGINES="$SEARCH_STASH_ENGINES"
+    json="${SEARCH_STASH_JSON:-}"
+    ALL_ROWS="${SEARCH_STASH_ROWS:-}"
+    QUERY_LABEL="${SEARCH_STASH_LABEL:-}"
+    PLAYLIST_ENGINES="${SEARCH_STASH_ENGINES:-}"
     LIST_SOURCE="search"
     FILTER_LABEL=""
     FILTER_MODE=0
-    selected="$SEARCH_STASH_SEL"
-    page_index="$SEARCH_STASH_PAGE"
+    selected="${SEARCH_STASH_SEL:-0}"
+    page_index="${SEARCH_STASH_PAGE:-1}"
+    if [[ -z "$json" ]]; then
+        json='{"count":0,"results":[]}'
+    fi
     load_rows "$ALL_ROWS"
     # Explicit, like the two openers: this runs bare from a case arm, so its status is the
     # TUI's life. load_rows happens to end 0 today; that is not a promise it made.
@@ -7389,6 +7395,182 @@ report_fetch_failure() {
     store_notice "$S_SEARCH_ACT:" "$text"
 }
 
+# ── URL LOADER (direct paste / URL query) ────────────────────────────────────────────────
+# Checks if string looks like an HTTP/HTTPS URL or well-known shortlink
+is_url_target() {
+    case "$1" in
+    http://* | https://* | www.* | youtu.be/* | b23.tv/* | 163cn.tv/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Extracts clean lowercase host from URL or host string
+url_extract_host() {
+    local h=$1
+    h="${h#*://}"
+    h="${h%%/*}"
+    h="${h%%\?*}"
+    h="${h%%#*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Matches host to known engine: yt | bili | ne
+sniff_engine_from_url() {
+    local host
+    host=$(url_extract_host "$1")
+    case "$host" in
+    youtube.com | youtu.be | youtube-nocookie.com | \
+    *.youtube.com | *.youtu.be | *.youtube-nocookie.com)
+        printf 'yt'
+        return 0
+        ;;
+    bilibili.com | b23.tv | \
+    *.bilibili.com | *.b23.tv)
+        printf 'bili'
+        return 0
+        ;;
+    music.163.com | y.music.163.com | 163cn.tv | \
+    *.music.163.com | *.163cn.tv)
+        printf 'ne'
+        return 0
+        ;;
+    esac
+    return 1
+}
+
+# Distinguishes container vs track URLs based on pattern
+sniff_target_kind() {
+    local eng=$1 u=$2
+    case "$eng" in
+    yt)
+        case "$u" in
+        *"/watch"* | *"youtu.be/"*) printf 'track'; return 0 ;;
+        *"/playlist"* | *"list=PL"* | *"list=OLAK5uy_"* | *"list=UU"* | *"list=FL"*)
+            printf 'container'; return 0 ;;
+        *"youtube.com/@"* | *"youtube.com/channel/"* | *"youtube.com/c/"* | *"youtube.com/user/"*)
+            printf 'container'; return 0 ;;
+        esac
+        ;;
+    bili)
+        case "$u" in
+        *"/audio/am"* | *"am"[0-9]* | *"/medialist/"* | *"ml"[0-9]* | *"type=season"* | *"collectiondetail"*)
+            printf 'container'; return 0 ;;
+        esac
+        ;;
+    ne)
+        case "$u" in
+        *"/album"* | *"/playlist"*)
+            printf 'container'; return 0 ;;
+        esac
+        ;;
+    esac
+    printf 'track'
+    return 0
+}
+
+load_container_url() {
+    local eng=$1 bin=$2 target_url=$3 out errfile rc=0
+    errfile=$(mktemp "${TMPDIR:-/tmp}/ting-url-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-url-err.$$"
+    spin_start
+    printf '\n%s%s %s...%s' "$C_BOLD" "$GL_CARET" "$S_CONTAINER_ACT" "$C_RESET"
+    out=$("$bin" --items -j -- "$target_url" 2>"$errfile") || rc=$?
+    spin_stop
+    local err_msg; err_msg=$(<"$errfile"); rm -f "$errfile"
+    if ((rc != 0)); then
+        if [[ "$err_msg" == *"not a"* || "$err_msg" == *"drop --items"* || "$err_msg" == *"video id"* || "$err_msg" == *"BV id"* ]]; then
+            load_track_url "$eng" "$bin" "$target_url" 1
+            return $?
+        fi
+        store_notice "$S_CONTAINER_ACT:" "${err_msg:-failed to expand container}"
+        return 1
+    fi
+    local cnt
+    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
+    if [[ "$cnt" == "0" ]]; then
+        store_notice "$S_CONTAINER_ACT:" "$S_PL_EMPTY"
+        return 1
+    fi
+
+    stash_search
+    json="$out"
+    LIST_SOURCE="playlist"
+    local title
+    title=$(printf '%s' "$out" | jq -r '.title // empty' 2>/dev/null) || title=""
+    [[ -n "$title" ]] || title="Container"
+    PLAYLIST_NAME="$title"
+    PLAYLIST_ENGINES="$eng"
+    QUERY_LABEL="$title"
+    build_playlist_rows
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
+    return 0
+}
+
+load_track_url() {
+    local eng=$1 bin=$2 target_url=$3 no_fallback=${4:-0} out errfile rc=0
+    errfile=$(mktemp "${TMPDIR:-/tmp}/ting-url-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-url-err.$$"
+    spin_start
+    printf '\n%s%s %s...%s' "$C_BOLD" "$GL_CARET" "$S_URL_ACT" "$C_RESET"
+    out=$("$bin" --info -j -- "$target_url" 2>"$errfile") || rc=$?
+    spin_stop
+    local err_msg; err_msg=$(<"$errfile"); rm -f "$errfile"
+    if ((rc != 0)); then
+        if ((! no_fallback)) && [[ "$err_msg" == *"container"* || "$err_msg" == *"--items"* || "$err_msg" == *"not a song URL"* ]]; then
+            load_container_url "$eng" "$bin" "$target_url"
+            return $?
+        fi
+        store_notice "$S_URL_ACT:" "${err_msg:-failed to resolve URL}"
+        return 1
+    fi
+
+    local synth_json
+    synth_json=$(printf '%s' "$out" | jq -c '{
+        status: "ok",
+        engine: .engine,
+        query: .url,
+        count: 1,
+        results: [.]
+    }' 2>/dev/null) || synth_json=""
+    if [[ -z "$synth_json" ]]; then
+        store_notice "$S_URL_ACT:" "failed to parse metadata"
+        return 1
+    fi
+
+    json="$synth_json"
+    CURRENT_ENGINE="$eng"
+    QUERY_LABEL="$target_url"
+    apply_search_results
+    return 0
+}
+
+load_url() {
+    local target_url=$1 eng kind bin
+    target_url="${target_url#"${target_url%%[![:space:]]*}"}"
+    target_url="${target_url%"${target_url##*[![:space:]]}"}"
+    eng=$(sniff_engine_from_url "$target_url") || eng=""
+    if [[ -z "$eng" ]]; then
+        store_notice "$S_URL_ACT:" "unsupported media source ($target_url)"
+        return 1
+    fi
+    bin=$(engine_resolve_bin "$eng") || bin=""
+    if [[ -z "$bin" ]]; then
+        store_notice "$S_URL_ACT:" "engine '$eng' is not installed"
+        return 1
+    fi
+
+    kind=$(sniff_target_kind "$eng" "$target_url")
+    if [[ "$kind" == "container" ]]; then
+        load_container_url "$eng" "$bin" "$target_url"
+    else
+        load_track_url "$eng" "$bin" "$target_url"
+    fi
+}
+
 # ── SEARCH action (key: n) ──────────────────────────────────────────────────────────────
 new_search() {
     local q prev="$QUERY_LABEL" rc=0
@@ -7396,6 +7578,12 @@ new_search() {
     read_query_input "${1:-}" || return 0
     q="$QUERY_INPUT"
     [[ "$q" == *[![:space:]]* ]] || return 0
+    q="${q#"${q%%[![:space:]]*}"}"
+    q="${q%"${q##*[![:space:]]}"}"
+    if is_url_target "$q"; then
+        load_url "$q" || true
+        return 0
+    fi
     QUERY_LABEL="$q"
     printf '%s%s' "$S_SEARCHING" "$GL_ELL"
     fetch_json || rc=$?
@@ -8255,40 +8443,52 @@ if ((${#query[@]} == 0)); then
 fi
 QUERY_LABEL="${query[*]}"
 
-# The first fetch is a network round trip and nothing has been drawn yet, so without this the
-# session opens on a blank terminal for a couple of seconds and reads as hung. Same wording as
-# the `n` prompt's line, plus the query — a query that came from argv was never echoed back, and
-# this is the only thing on screen until the list paints over it.
-printf '%s "%s"%s' "$S_SEARCHING" "$QUERY_LABEL" "$GL_ELL"
-
-rc=0
-fetch_json || rc=$?
-if ((rc != 0)); then
-    # A first search that matched nothing is not a failed session. This used to `die`, so one
-    # mistyped character threw away the whole menu loop — and with it the `n` that fixes the
-    # typo, the `e` that asks another source the same question, and the `b`/`h` that need no
-    # network at all. It now takes the shape every other empty row source takes
-    # (ARCH-tui.md「一条提示是帧的内容，不是一次停顿」): a notice, and a list with no rows.
-    # rc 2 ONLY. An engine that actually broke still dies, because then there is nothing on
-    # screen to steer and SEARCH_ERR is the only thing worth saying.
-    if ((rc == 2)); then
-        # fetch_json sets neither of these until it has an envelope, and this is the ONE path
-        # that reaches the menu loop without it ever having had one — so they are completed
-        # here rather than left at their startup values.
-        # An ENVELOPE, not an empty ALL_ROWS: `json` is the document focused_payload cuts a
-        # row out of and back_to_search stashes, so a source on screen that is not a jq
-        # document would be a second shape for both of them to survive.
+_trimmed_startup="${QUERY_LABEL#"${QUERY_LABEL%%[![:space:]]*}"}"
+_trimmed_startup="${_trimmed_startup%"${_trimmed_startup##*[![:space:]]}"}"
+if is_url_target "$_trimmed_startup"; then
+    QUERY_LABEL="$_trimmed_startup"
+    if ! load_url "$QUERY_LABEL"; then
         json='{"count":0,"results":[]}'
-        # Not a copy of fetch_json's fallback. With no rows nothing reads CURRENT_ENGINE —
-        # until `b` opens a stored item carrying no engine tag of its own, where play_selected
-        # falls back to it; empty there is the one thing that hands t-play `--engine ""`.
         CURRENT_ENGINE="$ENGINE"
-        report_fetch_failure 2 "$QUERY_LABEL"
-    else
-        die "${SEARCH_ERR:-search failed}"
+        build_all_rows
+        load_rows "$ALL_ROWS"
     fi
+else
+    # The first fetch is a network round trip and nothing has been drawn yet, so without this the
+    # session opens on a blank terminal for a couple of seconds and reads as hung. Same wording as
+    # the `n` prompt's line, plus the query — a query that came from argv was never echoed back, and
+    # this is the only thing on screen until the list paints over it.
+    printf '%s "%s"%s' "$S_SEARCHING" "$QUERY_LABEL" "$GL_ELL"
+
+    rc=0
+    fetch_json || rc=$?
+    if ((rc != 0)); then
+        # A first search that matched nothing is not a failed session. This used to `die`, so one
+        # mistyped character threw away the whole menu loop — and with it the `n` that fixes the
+        # typo, the `e` that asks another source the same question, and the `b`/`h` that need no
+        # network at all. It now takes the shape every other empty row source takes
+        # (ARCH-tui.md「一条提示是帧的内容，不是一次停顿」): a notice, and a list with no rows.
+        # rc 2 ONLY. An engine that actually broke still dies, because then there is nothing on
+        # screen to steer and SEARCH_ERR is the only thing worth saying.
+        if ((rc == 2)); then
+            # fetch_json sets neither of these until it has an envelope, and this is the ONE path
+            # that reaches the menu loop without it ever having had one — so they are completed
+            # here rather than left at their startup values.
+            # An ENVELOPE, not an empty ALL_ROWS: `json` is the document focused_payload cuts a
+            # row out of and back_to_search stashes, so a source on screen that is not a jq
+            # document would be a second shape for both of them to survive.
+            json='{"count":0,"results":[]}'
+            # Not a copy of fetch_json's fallback. With no rows nothing reads CURRENT_ENGINE —
+            # until `b` opens a stored item carrying no engine tag of its own, where play_selected
+            # falls back to it; empty there is the one thing that hands t-play `--engine ""`.
+            CURRENT_ENGINE="$ENGINE"
+            report_fetch_failure 2 "$QUERY_LABEL"
+        else
+            die "${SEARCH_ERR:-search failed}"
+        fi
+    fi
+    apply_search_results
 fi
-apply_search_results
 # After the rows exist, because the adopted track may be one of them (the liveness lookup in
 # there), and before the first frame, because an empty banner over a playing track is the
 # whole bug. It is also the last thing that may fork before the tty changes hands.
@@ -8412,11 +8612,17 @@ while true; do
     [0-9])
         if ((${#JUMP_COUNT} < 6)); then JUMP_COUNT="$JUMP_COUNT$READ_NAV_KEY"; fi ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
-    # A paste is a QUERY, and it opens the same prompt `n` does with the text already in it.
-    # Beside `n` rather than in the universal block above for the reason the digits are: the
-    # filter runs its own reader, reaches neither block, and takes its paste as query text
-    # there — so a paste means "search" only where `n` itself means it.
-    PASTE) new_search "$PASTE_TEXT" ;;
+    # A paste is a URL or QUERY. If a URL is pasted directly in the list, resolve
+    # and present it immediately; otherwise open the prompt with the text in it.
+    PASTE)
+        _trimmed_paste="${PASTE_TEXT#"${PASTE_TEXT%%[![:space:]]*}"}"
+        _trimmed_paste="${_trimmed_paste%"${_trimmed_paste##*[![:space:]]}"}"
+        if is_url_target "$_trimmed_paste"; then
+            load_url "$_trimmed_paste" || true
+        else
+            new_search "$PASTE_TEXT"
+        fi
+        ;;
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
     v | V) cycle_mode ;;      # rotate playback mode

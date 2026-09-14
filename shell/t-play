@@ -552,6 +552,50 @@ if [[ -z "${UT_ENGINE_DIR:-}" ]]; then
 fi
 TING_ENGINE_DIR="$UT_ENGINE_DIR"
 
+# Checks if string looks like an HTTP/HTTPS URL or well-known shortlink
+is_url_target() {
+    case "$1" in
+    http://* | https://* | www.* | youtu.be/* | b23.tv/* | 163cn.tv/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Extracts clean lowercase host from URL or host string
+url_extract_host() {
+    local h=$1
+    h="${h#*://}"
+    h="${h%%/*}"
+    h="${h%%\?*}"
+    h="${h%%#*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Matches host to known engine: yt | bili | ne
+sniff_engine_from_url() {
+    local host
+    host=$(url_extract_host "$1")
+    case "$host" in
+    youtube.com | youtu.be | youtube-nocookie.com | \
+    *.youtube.com | *.youtu.be | *.youtube-nocookie.com)
+        printf 'yt'
+        return 0
+        ;;
+    bilibili.com | b23.tv | \
+    *.bilibili.com | *.b23.tv)
+        printf 'bili'
+        return 0
+        ;;
+    music.163.com | y.music.163.com | 163cn.tv | \
+    *.music.163.com | *.163cn.tv)
+        printf 'ne'
+        return 0
+        ;;
+    esac
+    return 1
+}
+
 engine_resolve_bin() {
     if [[ -n "$ENGINE_RESOLVE" ]]; then
         return 0
@@ -2942,6 +2986,7 @@ OUTPUT_MODE="list"
 # Playback lifecycle / structured-output state.
 DETACH=0
 ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
+ENGINE_SPECIFIED=0
 ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek |
                      # seek-to | enqueue | next | set-loop | queue-show | queue-rm |
                      # queue-mv | queue-jump | queue-clear
@@ -3028,10 +3073,12 @@ while (($#)); do
     --engine)
         [[ $# -ge 2 ]] || die "--engine requires a value"
         ENGINE="$2"
+        ENGINE_SPECIFIED=1
         shift 2
         ;;
     --engine=*)
         ENGINE="${1#*=}"
+        ENGINE_SPECIFIED=1
         shift
         ;;
     --volume)
@@ -3428,6 +3475,13 @@ fi
 IS_HANDLE=0
 if [[ -n "$QUERY" && "$QUERY" != *[[:space:]]* ]]; then
     IS_HANDLE=1
+    if ((! ENGINE_SPECIFIED)) && is_url_target "$QUERY"; then
+        _sniffed=$(sniff_engine_from_url "$QUERY") || _sniffed=""
+        if [[ -n "$_sniffed" ]]; then
+            ENGINE="$_sniffed"
+            ENGINE_RESOLVE=""
+        fi
+    fi
 fi
 
 # Every remaining ACTION (status / stop / set-volume) addresses a running PLAYER, not a

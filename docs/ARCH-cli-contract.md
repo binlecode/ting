@@ -184,11 +184,13 @@ detached 播放器）、生命周期与控制动词附带未被消费的 positio
   因为一份只记录未被打断的曲目的日志，是一份系统性偏斜的记录。尽力而为：`UT_HISTORY=0` 关掉它，
   `t-history` 不在就静默，它的任何失败都不得让一条曲目付出代价。
   一条从未开始、也不是失败的曲目（一次 stop 正好落在两条曲目之间的缝里）不是一次收听，不得一行。
-- **引擎选择：** `--engine NAME`，默认取 `UT_DEFAULT_ENGINE`（默认 `yt`）。
-  这个名字就是命令前缀；一个不认识的名字退出 1 并点名它（ARCHITECTURE.md「命令拓扑」）。
-  **v1 不做 URL 嗅探** —— `ting` 永远知道引擎，因为搜索是它做的；
-  而一个 agent 播放一个裸 URL 时会说出它是哪个引擎。嗅探（引擎声明自己的 URL 模式）推迟到
-  第三个引擎让一份注册表变得值得为止。
+- **引擎选择与 URL 自动嗅探：**
+  - **优先级链**：显式命令行标志 `--engine NAME` > URL Host 自动嗅探 > 环境变量（`TING_DEFAULT_ENGINE` / `UT_DEFAULT_ENGINE`） > 用户配置 > 出厂默认值（`yt`）。
+  - **自动嗅探规则**：当调用方未显式传递 `--engine` 时，`t-play` 识别输入句柄是否符合 URL 结构（`http://* | https://* | www.* | youtu.be/* | b23.tv/* | 163cn.tv/*`），并在纯 bash 3.2 参数扩展下提取小写 hostname 进行模式映射：
+    - `*.youtube.com | youtube.com | *.youtu.be | youtu.be | *.youtube-nocookie.com` $\rightarrow$ `yt`
+    - `*.bilibili.com | bilibili.com | *.b23.tv | b23.tv` $\rightarrow$ `bili`
+    - `*.music.163.com | music.163.com | y.music.163.com | *.163cn.tv | 163cn.tv` $\rightarrow$ `ne`
+  - **未知 Host 与错误契约**：未被任何内置引擎认领的 Host（例如测试桩 `https://x/y`、不支持的外部站点）**绝不凭空捏造引擎名**，而是保持回退至 `$DEFAULT_ENGINE`；若该默认引擎对应命令不存在则由 `engine_resolve_bin` 退出 1（`unknown engine '...'`），若存在则送入该引擎并在其 host 白名单门控处确定性退出 1。这确保了在不增加全局注册表的前提下消除人工指定 `--engine` 的摩擦，同时维持原有四级退出码契约。
 - **点名正确动词的门臂**（那个被删掉的 wrapper 的拒绝语变成了这些）：
   `-n`/`-m`/`-M`/`-s` → "那是一个搜索标志 —— 用 `<engine>-search`"；`-J` → "那是一个引擎标志
   —— 试试 `<engine>-resolve --info -J`"；`--info`/`--transcript`/`--sub-lang` → "那是一个引擎
