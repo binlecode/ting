@@ -1614,7 +1614,17 @@ init_image() {
             IMAGE_ON=0
             return 0
         fi
-        if image_probe; then IMAGE_ON=1; else IMAGE_ON=0; return 0; fi
+        case "${TERM:-}" in
+        *kitty* | *ghostty*) IMAGE_ON=1 ;;
+        *)
+            case "${TERM_PROGRAM:-}" in
+            ghostty | Ghostty | wezterm | WezTerm | kitty | Kitty) IMAGE_ON=1 ;;
+            *)
+                if image_probe; then IMAGE_ON=1; else IMAGE_ON=0; return 0; fi
+                ;;
+            esac
+            ;;
+        esac
         ;;
     esac
     # Only once we are going to draw — an unanswered XTWINOPS query costs the same second the
@@ -1629,13 +1639,11 @@ init_image() {
 IMAGE_BOX_COLS=24
 IMAGE_BOX_ROWS=7
 # The two floors, and both are stated in what they PROTECT rather than in a terminal size:
-# 50 columns of detail text, and 10 rows of list. Ten is UT_PAGE_ROWS's shipped value, which
-# is this file's existing answer to "enough list to browse"; fifty is what the block needs
-# for a wrapped description to read as prose rather than as a column. Under either floor
+# 50 columns of detail text, and 4 rows of list. Under either floor
 # there is no cover at all — never a smaller one, because a second size means a second
 # transcode target and a second layout to keep in step with the budget.
 IMAGE_MIN_TEXT_COLS=50
-IMAGE_MIN_ROWS=10
+IMAGE_MIN_ROWS=4
 # ONE image is ever on screen, so its id is a constant. That is what lets the delete name
 # this image (`d=i,i=`) instead of taking the `d` default, which is EVERY placement on the
 # screen — inside a multiplexer, other applications' pictures included.
@@ -1866,22 +1874,30 @@ image_emit() {
     col=$((right_col - IMAGE_COLS + 1))
     ((col < 1)) && col=1
     printf '\033[%dG' "$col" || ok=0
-    while IFS= read -r line; do
+    local prev=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
         ((ok)) || break
-        if ((first)); then
-            printf '\033_Ga=T,f=100,i=%s,r=%s,q=2,C=1,m=1;%s\033\\' "$IMAGE_ID" "$IMAGE_BOX_ROWS" "$line" || ok=0
-            first=0
-        else
-            printf '\033_Gm=1;%s\033\\' "$line" || ok=0
+        if [[ -n "$prev" ]]; then
+            if ((first)); then
+                printf '\033_Ga=T,f=100,i=%s,r=%s,q=2,C=1,m=1;%s\033\\' "$IMAGE_ID" "$IMAGE_BOX_ROWS" "$prev" || ok=0
+                first=0
+            else
+                printf '\033_Gm=1;%s\033\\' "$prev" || ok=0
+            fi
         fi
+        prev="$line"
     done < <(base64 < "$IMAGE_PNG" 2>/dev/null | fold -w 4096)
-    if ((first)); then
+    if [[ -z "$prev" ]]; then
         # base64 produced nothing: a truncated or unreadable cache file. Nothing was sent.
         printf '\033[1G' || true
         return 0
     fi
     if ((ok)); then
-        printf '\033_Gm=0;\033\\' || ok=0
+        if ((first)); then
+            printf '\033_Ga=T,f=100,i=%s,r=%s,q=2,C=1,m=0;%s\033\\' "$IMAGE_ID" "$IMAGE_BOX_ROWS" "$prev" || ok=0
+        else
+            printf '\033_Gm=0;%s\033\\' "$prev" || ok=0
+        fi
     fi
     printf '\033[1G' || true
     if ((ok)); then
@@ -7577,13 +7593,16 @@ load_track_url() {
     fi
 
     local synth_json
-    synth_json=$(printf '%s' "$out" | jq -c '{
-        status: "ok",
-        engine: .engine,
-        query: .url,
-        count: 1,
-        results: [.]
-    }' 2>/dev/null) || synth_json=""
+    synth_json=$(printf '%s' "$out" | jq -c '
+        . as $o
+        | ($o.thumbnail // (if $o.engine == "yt" and $o.id != null then "https://i.ytimg.com/vi/" + $o.id + "/hqdefault.jpg" else null end)) as $tb
+        | {
+            status: "ok",
+            engine: .engine,
+            query: .url,
+            count: 1,
+            results: [ . + (if $tb != null then {thumbnail: $tb} else {} end) ]
+        }' 2>/dev/null) || synth_json=""
     if [[ -z "$synth_json" ]]; then
         store_notice "$S_URL_ACT:" "failed to parse metadata"
         return 1
