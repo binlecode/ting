@@ -145,8 +145,9 @@ UT_RESOURCE_TICKS=3                 # seconds between resource samples: the read
                                     # shared 1 s clock
 UT_KEYS=core                        # how much of the keymap the hint block prints:
                                     # core = this view's own job, one line; full = every
-                                    # key it has. The ? key toggles it live and writes it
-                                    # back here. Not a cycle — two tiers, one door
+                                    # key it has; hidden = drops the block entirely.
+                                    # The ? key cycles it live (core → full → hidden)
+                                    # and writes it back here.
 UT_LIST_MODE=scroll                 # scroll|page: how the rows are windowed. scroll is a
                                     # continuous window that follows the cursor, and the two
                                     # ends of the LIST grow and shrink the row count; page is

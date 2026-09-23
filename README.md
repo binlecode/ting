@@ -255,11 +255,12 @@ stopped moving, and the two were unhitched deliberately when the packaging decis
 number `Nj` takes) · `Tab` list mode ·
 `[`/`]` seek · `r` loop mode · `s` stop · `l` language · `t` theme · `q` quit
 
-**The hint block has two tiers and `?` is the door.** `core` — the shipped default — prints
+**The hint block has three tiers and `?` cycles them.** `core` — the shipped default — prints
 this view's own job (move, act on the row, get back out, quit, and `?` itself) and fits one
-line at 80 columns; `full` prints every key above. It hides HINTS, never keys: everything in
-`full` is still pressable under `core`. The tier is a preference like the other ten, written
-back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a zh input method's
+line at 80 columns; `full` prints every key above; `hidden` suppresses the hint block entirely
+for maximum content rows. It hides HINTS, never keys: everything in `full` is still pressable
+under `core` and `hidden`. The tier is a preference like the other ten, written back to your own
+config as `UT_KEYS=core|full|hidden`, and `？` is bound with it — a zh input method's
 shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
 you are typing.
 

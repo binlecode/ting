@@ -140,6 +140,11 @@
 
 ### 🔴 第一梯队：TUI Design · Look and Feel · 交互美化专项（最高优先级）
 
+- **【最高优先级 · TUI 交互 / 心流恢复】歌单单曲操作软撤销（Soft Undo）与无阻塞移出。**
+  **收益**：高。消灭歌单视图下 `d` 的 `(y/N)` 阻塞等待与终端滚屏打印，将操作击键成本从 2 次减半至 1 次；建立单槽 Undo 缓冲并绑定 `z` 键原地撤销，恢复极致心流。
+  **成本**：低至中。TUI 增加单槽标量缓冲与 `store_notice` 单帧回显；同时依横切规范增强 Agent 契约面：底层 `t-playlist --add` 扩展可选 `--index N` 闭环原地插入能力。
+  **实施草案**：详见 [`docs/PLAN-soft-undo.md`](PLAN-soft-undo.md)。
+
 - **【最高优先级 · TUI Design / 视觉排版】付费权限徽章（`access`）要不要上屏，以及上在哪一行。**
   **收益**：高。优化单行视觉设计与信息密度。`ne` 的信封已经免费带着 `fee → access`（`full` / `preview` / `paywalled`），一枚设计精炼的 `30s 试听` / `VIP` 徽章能让用户在按 Enter 之前一眼预判单曲可用性。
   **成本**：中。`load_rows` 现在建的是 `R_TITLE/R_DUR/R_VIEWS/R_CHAN/R_LIVE/R_ENGINE/R_RAIL`，多一个 `R_ACCESS` 是跨引擎的数据模型改动，不是一处渲染改动。

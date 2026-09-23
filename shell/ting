@@ -656,8 +656,9 @@ Keys (List View):
   +        append the focused row to the running player's queue (nothing playing: says so)
   >        skip to the next queued track
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
-  ?        show more / fewer keys (also ？). The hint block has two tiers:
-           `core` is this view's own job, `full` is every key above. UT_KEYS pins it
+  ?        show more / fewer keys (also ？). The hint block has three tiers:
+           `core` is this view's own job, `full` is every key above, and `hidden`
+           drops the hint block entirely for maximum content rows. UT_KEYS pins it
   q        quit (stops a player this session started; a player that was already
            running when ting opened is adopted on the banner and left running)
 
@@ -1021,8 +1022,8 @@ esac
 # core the moment anyone pressed the key, which is a file disagreeing with itself for one press.
 case "$KEYS_TIER" in
 "") KEYS_TIER="core" ;;
-core | full) ;;
-*) die "UT_KEYS must be one of: core, full" ;;
+core | full | hidden) ;;
+*) die "UT_KEYS must be one of: core, full, hidden" ;;
 esac
 # The resource readout's two knobs ride the same door. Config-only, no flag: whether the
 # chrome shows the player's cpu/ram is set-once tuning, not a per-request choice.
@@ -2168,17 +2169,19 @@ cycle_ui_lang() {
 # Which tier the key-hint blocks print. A function rather than a second variable mirroring
 # KEYS_TIER: the tier is ONE fact, and every block wants it as a status, not as a string to
 # compare. Called once per conditional cell, so it must stay fork-free — it is.
-keys_full() { [[ "$KEYS_TIER" == "full" ]]; }
+keys_full()   { [[ "$KEYS_TIER" == "full" ]]; }
+keys_hidden() { [[ "$KEYS_TIER" == "hidden" ]]; }
 
-# Rotate the key-hint tier in place (key: ?). Two tiers, not three: `core` is one line of
-# this view's own job — move, act on the row, get back out, quit — and `full` adds the
-# engine / store / tuning / playback family. A third "hidden" state was refused
-# (ARCH-tui.md): it saves the one line core already costs and gives up every hint on
-# the screen, and
-# the short-terminal fallback already drops the block automatically, which is the reflow's
-# job rather than a tier the user has to choose.
+# Rotate the key-hint tier in place (key: ?). Three tiers: `core` is one line of
+# this view's own job — move, act on the row, get back out, quit; `full` adds the
+# engine / store / tuning / playback family; `hidden` completely suppresses the
+# hint block, freeing all vertical space for list rows.
 cycle_keys() {
-    if [[ "$KEYS_TIER" == "full" ]]; then KEYS_TIER="core"; else KEYS_TIER="full"; fi
+    case "$KEYS_TIER" in
+    core) KEYS_TIER="full" ;;
+    full) KEYS_TIER="hidden" ;;
+    hidden|*) KEYS_TIER="core" ;;
+    esac
     mark_pref UT_KEYS
 }
 
@@ -4966,7 +4969,11 @@ display_list_menu() {
     # rebound — an empty key is better than a key spent on whatever was nearest — and it
     # leaves this block by the rule every other key here follows: a key that cannot act must
     # not spend a cell of a measured block.
-    local nav_items=("$GL_AV	$S_SELECT")
+    local nav_items=()
+    local nav_h=0
+    local nav_ok=0
+    if ! keys_hidden; then
+        nav_items+=("$GL_AV	$S_SELECT")
     # ←/→ only in the mode that has pages. In scroll mode they are a silent no-op, and the
     # rule this block has followed since `o` and the store keys — a key that cannot act must
     # not spend a cell of a measured block — does not stop applying because the thing that
@@ -5107,7 +5114,8 @@ display_list_menu() {
     print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
     HINT_SEP=""
     HINT_MEASURE=0
-    local nav_h=$HINT_LINES
+    nav_h=$HINT_LINES
+    fi
     # LAYOUT_NAV_KEEP is what has to survive below the block. The +1 is a SECOND fact — the
     # PAGINATION row — charged whenever the list can paginate at all: this gate only bites on
     # a short terminal, and on a short terminal more than one entry always means more than
@@ -5130,8 +5138,7 @@ display_list_menu() {
     # height decided after the budget is a height the budget did not know about.
     local bar_h=0
     if [[ -n "$CURRENT_PLAY_ID" ]] && ((CURRENT_PLAY_IS_LIVE == 0)); then bar_h=1; fi
-    local nav_ok=0
-    if ((LINES_N - chrome_h - 1 - bar_h - nav_h >= nav_need)); then nav_ok=1; fi
+    if ! keys_hidden && ((LINES_N - chrome_h - 1 - bar_h - nav_h >= nav_need)); then nav_ok=1; fi
 
     # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
@@ -5185,7 +5192,7 @@ display_list_menu() {
         local b_res=""
         [[ -n "$RES_CPU" ]] && b_res=" $GL_SEP $GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
         local b_hint=""
-        if ((!nav_ok)); then
+        if ((!nav_ok)) && ! keys_hidden; then
             b_hint="  [Space $S_PAUSE | s $S_STOP | -/= $S_VOL]"
         fi
         # Assignment form, not ((head_w += DISP_W)): an arithmetic command evaluating to 0

@@ -860,7 +860,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
   可配置就开始拒绝引擎接受的值、并逼着 `ting` 的默认与引擎的不一致 —— 正是那个 bug。
   质量档的出厂 cycle 是值域的**子集**（没有 low）：降质是特意的选择，不是转过去就该落上的
   一格。空 cycle 或未知成员在启动时退 1：空数组在 3.2 的 `set -u` 下会在第一次按键时中止。
-  `UT_KEYS` 不是 cycle —— 两档一道门，顺序不是问题，所以没有 `_CYCLE` 伴生键。
+  `UT_KEYS` 不是 cycle —— 三档（`core` | `full` | `hidden`）一道门，按 `?` 键三态循环轮换，所以没有 `_CYCLE` 伴生键。
 - **三个都是 20 或 10 的数，是三件事。** `UT_SEARCH_RESULTS` 是引擎一次返回的**总数**，
   `UT_FETCH_BATCH` 是 `→`/`←` 每按一次动多少行的**步长**（也是第一次抓取的回落值），
   `UT_PAGE_ROWS` 是每屏一页多少行（一个请求，会被窗口高度往下 reflow）；`bili-search` 内部的

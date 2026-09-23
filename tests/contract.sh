@@ -2867,8 +2867,15 @@ else
     wrote=$(poll_until 10 cfg_has '^UT_KEYS=full$')
     report "? writes the tier to your config" 1 "$wrote"
     tmux send-keys -t "$TS" '?'
-    closed=$(poll_until 10 pane_lacks '[-]/= volume')
-    report "? closes it again" 1 "$closed"
+    hidden=$(poll_until 10 pane_lacks '[-]/= volume')
+    report "? switches to hidden tier" 1 "$hidden"
+    report "…and drops the key block entirely" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -cE '\? keys')"
+    wrote=$(poll_until 10 cfg_has '^UT_KEYS=hidden$')
+    report "…and writes hidden to your config" 1 "$wrote"
+    tmux send-keys -t "$TS" '?'
+    restored=$(poll_until 10 pane_has '\? keys')
+    report "? cycles back to core tier" 1 "$restored"
     wrote=$(poll_until 10 cfg_has '^UT_KEYS=core$')
     report "…and the file follows it back" 1 "$wrote"
     # Row numbers start off by default. Press # to turn them on via real keypress.
