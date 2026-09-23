@@ -4,8 +4,8 @@
 #
 # What it covers: the search envelope's shape, every documented rejection (a flag on the
 # wrong verb, a bare query where a URL belongs, two actions at once, a selector with no
-# action), the read-only --transcript verb both ways, the idle lifecycle, the tombstone
-# record for a player that died unasked, --version, the non-TTY refusal, the failure
+# action), the read-only --transcript verb both ways, the idle lifecycle, the shape of the
+# tombstone record (its behavior is playback.sh's), --version, the non-TTY refusal, the failure
 # taxonomy — 1 is usage, 2 is a tool that failed, and the two engines' envelopes agreeing
 # key for key — and the documented PIPELINES between commands, run rather than printed
 # (ARCH-cli-contract.md「调用面」; the one that launches a player is playback.sh's).
@@ -19,23 +19,17 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-09-03 and broken down because a number at the door is what a reader
-# decides on: ~83-99s in full (three runs at this size: 83s, 99s, 86s), of which `--offline`
-# is the first ~30s: 276 checks, no packet sent (that half re-measured 2026-09-10; the full
-# figures above are still 09-03's). The live half is roughly 21 engine round
-# trips plus TWO walks — `i` over the chapter rows and `c` over the parts rows — and the
-# spread is mostly theirs: each stops at the first row that opens, so today's result ordering
-# decides whether it pays one lap or six. The `c` walk is the cheaper of the two (one HTTP
-# request per lap against an extraction).
-#
-# THE TOTAL IS A RANGE, 403-406, and that is not sloppiness: four checks report only when a
-# walk gives them something to report (a chapterless row for the kept-fields claim, an opened
-# view for either toggle, a parts view to read a total off), and the alternative to skipping
-# them is a check that cannot fail on the days the site is generous. A skip line names each
-# one, and 0 failed is the number that means passing. That 28 is dominated by one deliberate
-# 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
-# the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
-# after (shell/t-playlist:lock_playlist).
+# Cost, measured 2026-09-23 on the author's machine: ~150s in full (571 checks), of which
+# `--offline` is the first 41-46s with no packet sent. The live half is dominated by real
+# engine round trips (2-8s each) and the tmux TUI panes, which each wait for a real search and
+# a real first frame. The total count moves by a few between runs, and that is not sloppiness:
+# a handful of checks report only when today's results give them something to report (a
+# chapterless row, a view that opens, a parts view to read a total off), and the alternative
+# to skipping them is a check that cannot fail on the days the site is generous. A skip line
+# names each one, and 0 failed is the number that means passing. The biggest single item in
+# the offline half is one deliberate 5.5s lock spin — a FRESH held lock has to be waited out,
+# that being what the spin is for; the stale-lock steal beside it costs 0.1s because
+# staleness is tested before the spin, not after (shell/t-playlist:lock_playlist).
 #
 # Per-SECTION figures are deliberately absent: this file's output is block-buffered the moment
 # it is piped or redirected, so timestamping its section headers dates the flush, not the work.
@@ -54,7 +48,7 @@
 #
 # Usage:  tests/contract.sh            all checks
 #         tests/contract.sh --offline  the hermetic half only — every gate, both stores, the
-#                                      lifecycle and the death record, and no packet sent
+#                                      idle lifecycle, and no packet sent
 # Exit:   0 = every check held, 1 = at least one regression
 
 set -uo pipefail
@@ -91,7 +85,6 @@ done
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ting-contract.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/ting-$(id -u)"
-[[ -d "$STATE_DIR" ]] || STATE_DIR="${TMPDIR:-/tmp}/ting-$(id -u)"
 
 # ---- the config file, pointed somewhere disposable ----------------------------------
 # The same argument as TMPDIR above, one layer out. Every command in the suite now reads
@@ -279,9 +272,8 @@ err_has() {
 # the idle lifecycle, the two halves of the user-level store, --version, and the host allowlist.
 # It used to sit AFTER ~15 live engine round trips, so the most common regression of all —
 # a gate or an envelope broken by the edit you are about to commit — cost 80 seconds to see.
-# Measured 2026-08-26: the gates are red at 1s, the idle lifecycle at 1s, and the whole
-# offline half is done in ~14s with no network call made. 5.5s of that is the playlist store's
-# deliberate spin against a live holder, so a gate regression is still seen in about two seconds.
+# The gates are still red within the first seconds; the half as a whole is the figure in the
+# header, with no network call made.
 #
 # It is also a HALF you can run on its own, which is the point of --offline: the boundary was
 # already load-bearing, and a boundary nobody can stop at is a boundary only the author uses.
@@ -386,6 +378,7 @@ report "bad JSON is 1"           1 "$(rc_in 'not json' shell/t-play --enqueue -)
 report "an empty queue is 1"     1 "$(rc_in '[]' shell/t-play --enqueue -)"
 report "a url with a space is 1" 1 "$(rc_in '[{"engine":"yt","url":"a b"}]' shell/t-play --enqueue -)"
 report "an empty url is 1"       1 "$(rc_in '[{"engine":"yt","url":""}]' shell/t-play --enqueue -)"
+report "a record with no url is 1" 1 "$(rc_in '[{"engine":"bili"}]' shell/t-play --enqueue - -j)"
 report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' shell/t-play --enqueue -)"
 # The three shapes the verb takes, each proved by the SAME rejection: a payload that parses
 # reaches the player check (4), one that does not is usage (1). A search envelope is accepted
@@ -465,19 +458,11 @@ report "--set-loop rejects a handle" 1 "$(rc shell/t-play --set-loop one -- URL)
 report "--loop with --pause is 1"    1 "$(rc shell/t-play --loop one --pause -j)"
 report "--loop with --status is 1"   1 "$(rc shell/t-play --loop one --status -j)"
 
-# A detached player that dies on its own is the one lifecycle path the caller does not
-# drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
-# like too (docs/ARCH-player.md「状态机」). These checks own the boundary that keeps the tombstone
-# list an error record rather than the listening history ARCHITECTURE.md「定位与设计目标」 rules out — a normal
-# finish must leave nothing, a log with no epitaph must not be read as a death, and the list
-# must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
-# the only thing this suite is allowed to author: it is data the real reaper really reads, not
-# a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
-# pid is gone IS a dead player, which is the whole condition under test. The code (reap,
+# The tombstone list itself — a player that died unasked, a normal finish leaving nothing,
+# the cap — is proved where a real player really dies: playback.sh. What an idle machine can
+# say about it is the SHAPE, which every --status caller reads: the key is always there.
 echo "── the death record: contract fields present ───────────────────────"
 report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/t-play --status -j)"
-report "--status still exits 0"    0 "$(rc shell/t-play --status -j)"
-report "--status still one line"   1 "$(shell/t-play --status -j | wc -l | tr -d ' ')"
 
 echo "── the playlist store: durable state, one file, one lock ──────────"
 # UT_STATE_DIR is exported, and that is the whole reason the knob exists: without it every
@@ -723,8 +708,6 @@ mkdir -p "$LINKDIR"
 for c in $ENTRY_POINTS; do ln -sf "$PWD/$c" "$LINKDIR/$(basename "$c")"; done
 report "…and it is VERSION, via a symlink" "$UT_VER" \
     "$(for c in "$LINKDIR"/*; do "$c" --version | awk '{print $NF}'; done | sort -u | tr -d '\n')"
-report "ting refuses a non-TTY" 1 "$(shell/ting </dev/null >/dev/null 2>&1; echo $?)"
-report "ting refuses a non-TTY" 1 "$(shell/ting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo "── gates: verbs, engine names and the host allowlist (no network) ─"
 # The last of the hermetic checks, and the ones most likely to be broken by the edit you are
@@ -991,10 +974,14 @@ report "UT_DEAD_KEEP: a negative value exits 1" "1" \
 # have. Pinning also costs nothing to make honest: the gate reads the variable, it does not
 # require the locale to be installed, so this works on a host that has no en_US at all. The
 # locale gate gets its own check further down, where refusing IS the claim.
+# The dead proxy rides along for the auto-route checks: their handles are real hosts of a real
+# shape (BV…, song?id=…, watch?v=…), so the claiming engine would otherwise go on to a live
+# extraction — three network calls in --offline, reading the developer's own browser cookies,
+# for a message ("could not resolve") that any resolve failure prints the same.
 viz_reaches_engine() { # <engine> <env assignments and argv…> — yes if it got as far as <engine>
     local want=$1
     shift
-    case "$(env LC_ALL=en_US.UTF-8 "$@" 2>&1 </dev/null || true)" in
+    case "$(env LC_ALL=en_US.UTF-8 http_proxy=$NOPROXY https_proxy=$NOPROXY "$@" 2>&1 </dev/null || true)" in
     *"$want-resolve could not resolve"*) echo yes ;;
     *) echo no ;;
     esac
@@ -1086,6 +1073,7 @@ ting_gate() { # <env assignments and argv…> — which gate answered
     case "$(env "$@" </dev/null 2>&1 || true)" in
     *"requires a terminal"*) echo tty ;;
     *"must be one of"*) echo mode ;;
+    *"unknown value"* | *"must name at least one value"*) echo cycle ;;
     *"UT_ACCENT"*) echo accent ;;
     *"unknown flag"*) echo unknown-flag ;;
     *) echo other ;;
@@ -1514,17 +1502,9 @@ for h in 'https://music.163.com/artist?id=6452' \
 done
 report "ne refuses a non-song handle" 4 "$_ner"
 
-echo "── a part list is a playlist nobody saved yet ─────────────────────"
-# THE CLAIM --parts EXISTS TO MAKE GOOD ON: every element of a part list IS an item record,
-# so the list feeds the durable store and the player's queue with NO field renamed. The
-# SUBJECTS here are t-playlist and t-play; the part list is their INPUT.
-#
-# It is a FIXTURE — data a real command really reads — and it is a real capture, not a
-# hand-written shape: `bili-resolve --parts -j -- av170001` on 2026-08-29, ten parts, kept
-# whole. Hermetic because the pipeline is what is under test and re-fetching the same ten
-report "…and a record with no url is 1"   1 \
-    "$(rc_in '[{"engine":"bili"}]' shell/t-play --enqueue - -j)"
-
+echo "── --parts: the offline gate ──────────────────────────────────────"
+# The part-list pipeline itself (a part list feeding the store and the queue with no field
+# renamed) runs live, on a real part list, in the half below.
 # --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
 # verb over. Under the dead proxy this verb reaches its transport and fails with 2; a version
 # that had grown a yt-dlp call on this path (to fetch the title, say) would die at the
@@ -1642,18 +1622,21 @@ report "…and the UT_ name set beside it did not get it" 1 \
 # the file cannot name anything outside the suite's own namespaces.
 printf 'PATH=/nonexistent\nLD_PRELOAD=/evil.so\nlowercase_key=x\nUT_INJECT=$(touch %s/PWNED)\n' \
     "$CFGD" > "$CFG"
-report "a config key outside UT_/YT_/BILI_ is inert" "0" \
-    "$(UT_CONFIG="$CFG" rc shell/ting --version)"
+# Asserted through a command that NEEDS its PATH after the file is read: `t-play --status -j`
+# runs jq, so a PATH=/nonexistent that got through would fail it. `ting --version` could not
+# — it answers from a builtin printf, and was green whether the key was inert or not.
+report "a config key outside TING_/UT_/YT_/BILI_/NE_ is inert" "0" \
+    "$(UT_CONFIG="$CFG" rc shell/t-play --status -j)"
 report "command substitution is never executed" "absent" \
     "$([ -e "$CFGD/PWNED" ] && echo present || echo absent)"
 
 # The player's own four. A file-level YT_IPC_SOCK would aim every player at one socket, so it
 # is refused INSIDE an allowed namespace — which is the case a prefix allowlist alone misses.
+# Only survival is asserted here: the socket is chosen on an mpv launch, and nothing in the
+# offline half launches one, so an "the hijack socket was not created" check could not fail.
 printf 'YT_IPC_SOCK=%s/hijack.sock\n' "$CFGD" > "$CFG"
 report "the player still answers with YT_IPC_SOCK set" "0" \
     "$(UT_CONFIG="$CFG" rc shell/t-play --stop --all -j)"
-report "the file did not create the hijack socket" "absent" \
-    "$([ -e "$CFGD/hijack.sock" ] && echo present || echo absent)"
 
 # UT_VERSION is the constant from VERSION; a config file cannot overwrite it.
 printf 'UT_VERSION=fake\n' > "$CFG"
@@ -1675,7 +1658,9 @@ for spec in UT_MODE_CYCLE=audio,bogus UT_SORT_CYCLE=relevance,bogus \
     UT_THEME_CYCLE=nord,bogus UT_THEME_CYCLE=custom,bogus UT_QUALITY_CYCLE=auto,bogus \
     UT_LOOP_CYCLE=off,bogus; do
     printf '%s\n' "$spec" > "$CFG"
-    report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/ting q)"
+    # WHICH gate, not exit 1: the TTY refusal right after this one exits 1 too, so a bare exit
+    # code was green with the member check deleted.
+    report "${spec%%=*}: an unknown member is refused" cycle "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 done
 printf 'UT_MAX_SEARCH_RESULTS=-5\n' > "$CFG"
 # Over EVERY discovered engine, not just bili: the ceiling is cross-engine, so a check
@@ -1690,16 +1675,7 @@ done
 # run — the user narrows the cycle and gets told their flag is wrong. Reaching the TTY refusal
 # is the pass: it is the gate immediately after the one under test.
 printf 'UT_MODE_CYCLE=video\nUT_SORT_CYCLE=duration\n' > "$CFG"
-report "a narrowed cycle reaches the TTY gate" "1" "$(UT_CONFIG="$CFG" rc shell/ting q)"
-# Captured and then matched, NOT piped into grep: this file runs under `set -o pipefail`, so
-# `shell/ting q | grep -q` reports ting's exit 1 rather than grep's 0 and a matched pattern
-# reads as no-match. Every check here asserts on a command that exits non-zero by design.
-CFG_OUT=$(UT_CONFIG="$CFG" shell/ting q 2>&1 || true)
-case "$CFG_OUT" in
-*"requires a terminal"*) CFG_HIT=yes ;;
-*) CFG_HIT=no ;;
-esac
-report "…and it is the TTY gate, not a flag error" "yes" "$CFG_HIT"
+report "a narrowed cycle reaches the TTY gate, not a flag error" tty "$(ting_gate UT_CONFIG="$CFG" shell/ting q)"
 
 # ── THE CUSTOM PALETTE'S ACCENT (UT_ACCENT / UT_ACCENT_LIGHT) ───────────────────────────
 # Asserted on WHICH GATE ANSWERED, never on a bare exit 1: `custom` is a legal theme name, so
@@ -1856,7 +1832,7 @@ else
     # way the TUI section spells its knobs out, so the pane's language is an input.
     tmux kill-session -t "$PS_TS" 2>/dev/null
     tmux new-session -d -s "$PS_TS" -x 80 -y 20 \
-        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting'; echo __GONE__; sleep 5" 2>/dev/null
+        "UT_STATE_DIR='$PS_STATE' TING_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' TING_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting'; echo __GONE__; sleep 5" 2>/dev/null
     pasted=0
     i=0
     while [ $i -lt 100 ]; do
@@ -1873,9 +1849,9 @@ else
         tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -q 'Search.*jazz #ch' && { kept=1; break; }
         sleep 0.05; i=$((i + 1))
     done
+    # One match proves both halves: `Search.*jazz #ch` is the prompt's own line still holding
+    # the text, which a submitted query would have replaced with a list.
     report "a pasted newline joins the query instead of submitting it" 1 "$kept"
-    report "…and the prompt is still open, not gone to a search" 1 \
-        "$(tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -c 'Search' | awk '{print ($1 > 0) ? 1 : 0}')"
     # Esc with the pasted text still on the line — the same cancel a user makes, and a harder
     # input than an empty prompt.
     tmux send-keys -t "$PS_TS" Escape 2>/dev/null
@@ -1890,40 +1866,81 @@ echo
 echo "── a cookie store that cannot be read ─────────────────────────────"
 # The failure a user hit on 2026-09-22: their terminal app was not allowed to read Chrome's
 # data folder, yt-dlp's directory walk reported "could not find chrome cookies database",
-# every search failed as `unknown`, and the TUI said only "search failed". Reproduced here
-# with nothing seeded: a HOME holding an EMPTY Chrome folder is a profile that exists and
-# a cookie store that does not, which is exactly what the blocked read looks like to both
-# yt-search's existence check and yt-dlp's walk. The dead proxy keeps it offline, and it
-# is also what makes the search check discriminating: without the anonymous retry the
-# search stops at the cookie error (`cookies`, before this fix `unknown`); WITH it the
+# every search failed as `unknown`, and the TUI said only "search failed". Reproduced with
+# nothing seeded that a command reads as data: a HOME holding an EMPTY Chrome folder is a
+# profile that exists and a store that does not — what the blocked read looks like to both
+# the engines' existence check and yt-dlp's walk — and a real cookie file with its mode
+# taken away is the Unix-permission twin. macOS privacy protection itself cannot be switched
+# on for a scratch folder, so the `blocked` branch is the one state no check here reaches.
+#
+# The dead proxy keeps it offline AND is what makes the fallback checks discriminating:
+# without the anonymous retry a verb stops at the cookie error (`cookies`); WITH it the
 # retry reaches the transport and fails `network`.
-CK_HOME="$UT_TEST_TMP/cookie-home"
-mkdir -p "$CK_HOME/Library/Application Support/Google/Chrome" "$CK_HOME/.config/google-chrome"
-ck_reason() { HOME="$CK_HOME" http_proxy=$NOPROXY https_proxy=$NOPROXY "$@" 2>/dev/null | jq -r '.reason // "none"' 2>/dev/null; }
-report "an unreadable cookie store is its own reason" cookies \
-    "$(YT_COOKIE_BROWSER=chrome ck_reason shell/yt-resolve --info -j -- "https://www.youtube.com/watch?v=$MEDIA_ID")"
-report "…and search asks again without it" network \
-    "$(YT_COOKIE_BROWSER=chrome ck_reason shell/yt-search -j -n 3 -- lofi)"
-# The TUI's half: under -j the engine's reason is on STDOUT and stderr is empty, so a failed
-# first search printed a bare "search failed". It must name the reason.
+CK_BASE="$UT_TEST_TMP/cookie-homes"
+CK_CHROME="Library/Application Support/Google/Chrome"
+[ "$(uname -s)" = Darwin ] || CK_CHROME=".config/google-chrome"
+mkdir -p "$CK_BASE/missing/$CK_CHROME" "$CK_BASE/denied/$CK_CHROME/Default" "$CK_BASE/readable/$CK_CHROME/Default"
+printf x >"$CK_BASE/denied/$CK_CHROME/Default/Cookies"; chmod 000 "$CK_BASE/denied/$CK_CHROME/Default/Cookies"
+printf x >"$CK_BASE/readable/$CK_CHROME/Default/Cookies"
+YT_WATCH="https://www.youtube.com/watch?v=$MEDIA_ID"
+# `ck <home> <cmd…>`: the envelope's reason on stdout, the engine's stderr into CK_ERR. All
+# three cookie knobs are set, so each engine reads chrome from the scratch HOME whichever it is.
+CK_ERR="$UT_TEST_TMP/cookie.err"
+ck() { local h=$1; shift
+       HOME="$CK_BASE/$h" YT_COOKIE_BROWSER=chrome BILI_COOKIE_BROWSER=chrome NE_COOKIE_BROWSER=chrome \
+           http_proxy=$NOPROXY https_proxy=$NOPROXY "$@" 2>"$CK_ERR" | jq -r '.reason // "none"' 2>/dev/null; }
+ck_said() { grep -c "$1" "$CK_ERR" 2>/dev/null | awk '{print ($1 > 0) ? 1 : 0}'; }
+report "search retries without an unreadable store" network "$(ck missing shell/yt-search -j -n 3 -- lofi)"
+report "…and says the store is missing, and the fix" 1 "$(ck_said 'no chrome cookies: chrome has no cookie database - sign in')"
+report "--info retries without it too" network "$(ck missing shell/yt-resolve --info -j -- "$YT_WATCH")"
+# The permission twin reaches the classifier as a raw OS error on the cookie file, not as
+# "could not find" — so it is driven through the OTHER wrapped call site, and the pair covers
+# both call sites and both wordings with one launch each.
+report "--transcript retries on a cookie file it may not open" network \
+    "$(ck denied shell/yt-resolve --transcript -j -- "$YT_WATCH")"
+report "…and names the error and the file" 1 "$(ck_said 'no chrome cookies: Permission denied reading ')"
+# The probe, the diagnosis and the wrapper are COPIED into every engine that reads cookies
+# (site knowledge stays per engine), so each copy is driven, not only yt's: its own --info,
+# its own knob, its own prefix on the sentence.
+for n in bili ne; do
+    case $n in
+    bili) CK_URL="https://www.bilibili.com/video/BV1mL411E7Fb" ;;
+    ne) CK_URL="https://music.163.com/song?id=1824020871" ;;
+    esac
+    report "$n-resolve --info retries without the store" network "$(ck missing "shell/$n-resolve" --info -j -- "$CK_URL")"
+    report "…and $n-resolve says why" 1 "$(ck_said "^$n-resolve: no chrome cookies: ")"
+done
+# --auth: the decision was always `cookie` whenever the folder existed; the new field is
+# whether the store can be read, in both directions so an always-false field fails too —
+# over every engine that has --auth.
+ck_auth() { HOME="$CK_BASE/$1" YT_COOKIE_BROWSER=chrome BILI_COOKIE_BROWSER=chrome NE_COOKIE_BROWSER=chrome \
+                "shell/$2-resolve" --auth -j 2>/dev/null | jq -r '.cookie_readable'; }
+for n in $ENGINES; do
+    report "$n --auth: a missing store is not readable" false "$(ck_auth missing "$n")"
+    report "$n --auth: a file it may not open is not readable" false "$(ck_auth denied "$n")"
+    report "$n --auth: a readable store is" true "$(ck_auth readable "$n")"
+done
+# The TUI's half: under -j the reason is on stdout and the advice on stderr, and a failed
+# first search printed neither. It must lead with the reason and carry the advice.
 if tmux_ok; then
     CK_TS="ctest-cookie-$$"
     CK_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-cookie.XXXXXX")
     tmux kill-session -t "$CK_TS" 2>/dev/null
-    tmux new-session -d -s "$CK_TS" -x 80 -y 20 \
-        "http_proxy='$NOPROXY' https_proxy='$NOPROXY' UT_STATE_DIR='$CK_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' TING_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting' lofi; echo __GONE__; sleep 5" 2>/dev/null
+    tmux new-session -d -s "$CK_TS" -x 200 -y 20 \
+        "HOME='$CK_BASE/missing' YT_COOKIE_BROWSER=chrome http_proxy='$NOPROXY' https_proxy='$NOPROXY' UT_STATE_DIR='$CK_STATE' TING_STATE_DIR='$CK_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' TING_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting' lofi; echo __GONE__; sleep 5" 2>/dev/null
     said=0
     i=0
     while [ $i -lt 200 ]; do
-        tmux capture-pane -t "$CK_TS" -p -J 2>/dev/null | grep -qE 'search failed \(network\)' && { said=1; break; }
+        tmux capture-pane -t "$CK_TS" -p -J 2>/dev/null | grep -qE 'search failed \(network\): no chrome cookies: ' && { said=1; break; }
         sleep 0.05; i=$((i + 1))
     done
-    report "a failed first search names its reason" 1 "$said"
+    report "a failed first search gives the reason, then the fix" 1 "$said"
     tmux kill-session -t "$CK_TS" 2>/dev/null
     rm -rf "$CK_STATE"
 else
     echo "  skip  (needs tmux for a real tty)"
 fi
+chmod 600 "$CK_BASE/denied/$CK_CHROME/Default/Cookies" 2>/dev/null
 
 if [ "$OFFLINE" = 1 ]; then
     echo
@@ -1939,6 +1956,22 @@ fi
 
 export UT_STATE_DIR
 UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ting-live-store.XXXXXX")
+
+# ---- the quiet half of the cookie fallback, which needs the site ------------------------
+# The offline block proves a blocked store fails loudly. The case the user actually sat in
+# is the other one: the anonymous retry SUCCEEDS, results arrive, and nothing says they came
+# without the login — while the status line said "signed in". Both halves are read off one
+# live frame: the status segment and the notice under the title. The pane is STARTED here and
+# READ after the fetch batch below, so its live search runs alongside the batch instead of
+# ahead of it.
+CQ_TS="ctest-cookieq-$$"
+CQ_UP=0
+if tmux_ok; then
+    CQ_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-cookieq.XXXXXX")
+    tmux kill-session -t "$CQ_TS" 2>/dev/null
+    tmux new-session -d -s "$CQ_TS" -x 200 -y 24 \
+        "HOME='$CK_BASE/missing' YT_COOKIE_BROWSER=chrome UT_STATE_DIR='$CQ_STATE' TING_STATE_DIR='$CQ_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' TING_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting' lofi; echo __GONE__; sleep 30" 2>/dev/null && CQ_UP=1
+fi
 
 # ---- fetch once, assert many, and fetch them ALL AT ONCE ------------------------------
 # A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
@@ -2067,6 +2100,28 @@ for n in $ENGINES; do
     spawn "off0-$n"   shell/"$n"-resolve -j -- "${SU}${SEP}t=0"
 done
 wait   # …and now everything, both waves
+
+echo
+echo "── an unreadable cookie store, when the search still works ────────"
+if ((CQ_UP)); then
+    cq_frame=""
+    i=0
+    while [ $i -lt 400 ]; do
+        cq_frame=$(tmux capture-pane -t "$CQ_TS" -p -J 2>/dev/null)
+        printf '%s\n' "$cq_frame" | grep -qE '[0-9]+ results|__GONE__' && break
+        sleep 0.05; i=$((i + 1))
+    done
+    report "results still arrive without the store" 1 \
+        "$(printf '%s\n' "$cq_frame" | grep -cE '[0-9]+ results' | awk '{print ($1 > 0) ? 1 : 0}')"
+    report "…the status line does not say signed in" 1 \
+        "$(printf '%s\n' "$cq_frame" | grep -c 'anonymous (cookies unreadable)' | awk '{print ($1 > 0) ? 1 : 0}')"
+    report "…and a notice says why" 1 \
+        "$(printf '%s\n' "$cq_frame" | grep -c 'Search: no chrome cookies: ' | awk '{print ($1 > 0) ? 1 : 0}')"
+    tmux kill-session -t "$CQ_TS" 2>/dev/null
+    rm -rf "$CQ_STATE"
+else
+    echo "  skip  (needs tmux for a real tty)"
+fi
 
 echo "── the config file, on a real fetch ───────────────────────────────"
 # THE TWO CLAIMS THAT ONLY A REAL FETCH CAN SETTLE. Everything about the config file in the
@@ -2807,7 +2862,11 @@ else
     #     Interrupted system call` — again fatal under set -e.
     # Every one of them shows up here as this block's own boot / key / quit assertions going
     # red, which is why the value of forcing `on` is not that it draws but that it runs.
-    TUI_CMD="cd '$PWD' && env -u NO_COLOR YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/ting 'lofi hip hop'"
+    # BOTH names of every redirection, in every pane of this file. The loader reads TING_ before
+    # UT_, and a pane gets the tmux SERVER's environment, not this shell's — so the `unset` at
+    # the top cannot reach it, and a server started from a shell that exported TING_CONFIG or
+    # TING_STATE_DIR would have walked this pane's R and D y onto the user's own playlists.
+    TUI_CMD="cd '$PWD' && env -u NO_COLOR YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' TING_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' TING_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/ting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
@@ -2851,12 +2910,6 @@ else
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
-    # A store is a room with a door, not a one-way trip — and the door is the key that opened
-    # it (ARCH-tui.md). `h` REPLACES the rows with the log (`history='` on the title
-    # line, where a search says `query='`) and `h` again puts the search back; until it did, the
-    # only exits from that room were retyping a query and quitting. Both halves are asserted:
-    # an `h` that quietly did nothing would leave the search on screen and make the return
-    # leg pass for free.
     tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
 
     # `pane_results` behind the same poller: the row count is a NUMBER on the header line, so
@@ -2866,27 +2919,27 @@ else
     results_is() { [ "$(pane_results)" = "$1" ]; }
     results_nonzero() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" != 0 ]; }
 
-    # ---- the key-hint tier (?), the retired p alias, and the j/k pair -----------------
-    # All three ride the pane that is already up, and all three read the ONE hint block —
+    # ---- the key-hint tier (?) and the j/k pair ----------------------------------------
+    # Both ride the pane that is already up, and both read the ONE hint block —
     # the only place in the app where a key is written down, so a tier that did not filter
     # and a tier that filtered everything are both visible from here.
     #
     # `-/= volume` is the marker because the full tier is the only thing that prints it, and
     # it is written `[-]/=` so the pattern does not start with a dash: pane_has passes it
     # straight to grep, which would read a leading `-` as an option and not a pattern.
-    # nothing else on a pane with no player prints it at all. One grep says which tier is up.
+    # One grep says which tier is up.
     report "the core block leaves the playback keys out" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '[-]/= volume')"
-    # `p` was an undocumented view-toggle alias until P10 and is now nothing at all — as is
-    # Tab, since the view it toggled to went (the collapse). It is asserted through the key
-    # AFTER it, the way the `c` check further down rides on `h`: a `p` that still did anything
-    # would have to leave the list, and the poll below would never see the list's own block.
-    tmux send-keys -t "$TS" p
+    # No `p` in front of this any more. It used to be sent first to prove the retired view
+    # toggle was "nothing at all", but since the clipboard paste landed `p` IS something: it
+    # reads the machine's clipboard, so with text on it the key opened the new-search prompt,
+    # the `?` below was typed into that prompt, and every check after it went red — on
+    # whichever machine had copied something last (measured 2026-09-23: 24 FAILs from one
+    # copied phrase, on this commit and on 0.12.2 alike). Driving `p` for real would mean
+    # writing the user's clipboard, which a suite that leaves your state alone may not do.
     tmux send-keys -t "$TS" '?'
     opened=$(poll_until 10 pane_has '[-]/= volume')
     report "? opens the full tier" 1 "$opened"
-    report "…and p is not a view toggle any more" 0 \
-        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'NOW PLAYING')"
     # EVERY key that can act is printed by the full tier, and `t` is the one that was not:
     # it sat in usage() and the README while appearing in neither tier, so the block — the
     # one place a user reads what a key is for — was the only surface that did not know it
@@ -3124,11 +3177,6 @@ else
     # including the floor; what scroll mode adds is only which key reaches them. That is
     # coverage this file does not have, and saying so beats a check that walks the list and
     # then asserts something the arrows already pinned.
-    #
-    # And the row it retired is really gone: ● / ○ were the dots, and nothing else on this
-    # screen draws either of them.
-    report "the pagination dots are gone" 0 \
-        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '○')"
 
     # ---- the preference write-back and the two count edges ----------------------------
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
@@ -3140,13 +3188,9 @@ else
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is
     # not a workaround for a race; it is the claim: a preference must reach the disk without
     # anyone quitting the app.
-    # The count is a SEGMENT now — `40 results`, not `results=40` — so the pattern moved
-    # with it. The unit word is what keeps this from matching any other number on the line,
+    # The count is read by pane_results (defined above) as a SEGMENT — `40 results`, not
+    # `results=40`. The unit word is what keeps it from matching any other number on the line,
     # and YT_LANG=en (pinned in TUI_CMD) is what makes naming that word safe here.
-    pane_results() {
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null |
-            grep -oE '[0-9]+ results' | head -1 | cut -d' ' -f1
-    }
     tmux send-keys -t "$TS" v
     wrote=$(poll_until 10 cfg_has '^UT_PLAY_MODE=video')
     report "v writes the mode to your config" 1 "$wrote"
@@ -3228,11 +3272,17 @@ else
     # fail.
     #
     # A poll for an ABSENCE passes on its first look, so this one spends its whole budget:
-    # two seconds of that label never arriving. What it watches for is a FLAG refusal, not a
-    # fetch — when it lands, it lands in milliseconds.
+    # one second of that label never arriving (poll_until counts whole seconds). What it
+    # watches for is a FLAG refusal, not a fetch — when it lands, it lands in milliseconds.
     tmux send-keys -t "$TS" c
-    said=$(poll_until 2 pane_has 'Parts:')
+    said=$(poll_until 1 pane_has 'Parts:')
     report "c is inert on an engine with no --parts" 0 "$said"
+    # A store is a room with a door, not a one-way trip — and the door is the key that opened
+    # it (ARCH-tui.md). `h` REPLACES the rows with the log (`history='` on the title
+    # line, where a search says `query='`) and `h` again puts the search back; until it did, the
+    # only exits from that room were retyping a query and quitting. Both halves are asserted:
+    # an `h` that quietly did nothing would leave the search on screen and make the return
+    # leg pass for free.
     tmux send-keys -t "$TS" h
     opened=$(poll_until 10 pane_has "history='")
     report "h opens the log as the row source" 1 "$opened"
@@ -3250,8 +3300,8 @@ else
     backed=$(poll_until 10 pane_back "history='" "query='")
     report "h again leaves it for search" 1 "$backed"
 
-    # A NOTICE IS NOT AN EXIT. Every row source answers "did not open" with a notice and a
-    # press-any-key — an empty log, a one-part video, a video with no chapters — and each of
+    # A NOTICE IS NOT AN EXIT. Every row source answers "did not open" with a notice — a frame
+    # line the next key clears — for an empty log, a one-part video, a video with no chapters, and each of
     # them hands a 1 back to the menu loop's case arm. An arm without the `|| true` guard
     # turns that 1 into set -e, so the TUI dies ON THE KEY that was supposed to dismiss the
     # notice. It shipped that way for `h`, `c` and `i`.
@@ -3348,18 +3398,14 @@ else
 
     # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
     # the middle one is the point: a view that opened carrying only what the LIST already
-    # shows (title, duration, id) would be the degenerate frame P5 rejected, and it would sail
+    # shows (title, duration, id) would be the degenerate frame the view exists to beat, and it would sail
     # through an "it opened" check. So the witness is a field the list CANNOT hold — the
     # upload date the fetch went and got, on the status line.
     #
     # It WALKS the rows rather than naming one, because the door is conditional on live data:
     # `i` opens only where the item has chapters, and which of today's results does is not
     # something this file gets to decide. A row without them answers with the notice instead,
-    # which is dismissed and the walk continues. EIGHT rows is the bet and the walk stops at
-    # the first hit, so the bound is not the usual cost: measured 2026-09-03, chapters sat on
-    # rows 3, 7 and 8 of the first eight, which is what made FOUR rows a coin flip on the
-    # day's ordering rather than a bet on the door. A lap is a real `--info` round trip
-    # (~3.1s measured), so the bound is ~25s and today's run pays ~10.
+    # which is dismissed and the walk continues (how far it walks: below, beside chap_settled).
     #
     # EVERY KEY WAITS FOR THE THING THAT MAKES IT MEAN SOMETHING. The walk used to send
     # `Space Down i` as one burst; the keys were read in order (that was never the bug) but
@@ -3514,8 +3560,8 @@ else
     # command line, after ting returns, so a TUI that did not leave takes the tty check down
     # with it. And the pane is the only witness there will ever be. `q` cannot be SLOW — the
     # dispatch arm prints and exits, and with no player the nav read blocks with no timeout —
-    # so the byte was eaten by a reader that is not the menu loop (the `n` prompt,
-    # confirm_key's y/N, the loading spinner's own `read -t 1`), and which one it was is
+    # so the byte was eaten by a reader that is not the menu loop (the `n` prompt or
+    # confirm_key's y/N — the fetch spinner is a background loop that reads nothing), and which one it was is
     # legible in the frame and nowhere else. Measured once, 2026-08-25, and unreproducible
     # since. The list is one reader shorter than it was: a notice no longer owns one.
     if [ "$left" != 1 ]; then
@@ -3547,7 +3593,7 @@ else
     # over the first — two tracks in the speakers at once, and the older player unreachable
     # from the screen for the rest of the session.
     #
-    # THREE panes, and it cannot be fewer: adoption is decided ONCE per process, at startup,
+    # TWO panes, and it cannot be fewer: adoption is decided ONCE per process, at startup,
     # so each answer needs a startup of its own. Every player below is a real detached player
     # and every answer is read back from `t-play --status` in THIS shell, not from the frame.
     ADOPT_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-adopt.XXXXXX")
@@ -3571,7 +3617,7 @@ else
     adopt_boot() {
         tmux kill-session -t "$ADOPT_TS" 2>/dev/null
         tmux new-session -d -s "$ADOPT_TS" -x 100 -y 30 \
-            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$ADOPT_STATE' UT_CONFIG='$ADOPT_CFG' YT_LANG=en shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$ADOPT_STATE' TING_STATE_DIR='$ADOPT_STATE' UT_CONFIG='$ADOPT_CFG' TING_CONFIG='$ADOPT_CFG' YT_LANG=en shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
         # The header's own count word, the same first-frame marker the section above waits on:
         # the spinner line that precedes it says `searching "…"` and never `results`.
         poll_until 40 pane_has 'results'
@@ -3588,6 +3634,14 @@ else
     # with a media-title). Polled, never slept: the wait is a yt-dlp call, so its length is
     # the network's to decide.
     adopt_ready()   { [ -n "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].title // ""')" ]; }
+
+    # The queue view's playlist (the refusal check below), written by the REAL store from the
+    # REAL search envelope this suite already fetched. Nothing here is staged: t-playlist
+    # produces the file it is later asked to read.
+    printf '%s' "$YT_S" | UT_STATE_DIR="$ADOPT_STATE" TING_STATE_DIR="$ADOPT_STATE" shell/t-playlist --add qv-list -j >/dev/null 2>&1
+    qv_len()  { shell/t-play --queue-show -j 2>/dev/null | jq -r '.len // 0'; }
+    qv_urls() { shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[].url]'; }
+    qv_is()   { [ "$(qv_len)" = "$1" ]; }
 
     # ---- one background player: adopted, controllable, and replaced on Enter ----------
     A_ID=$(shell/t-play -d -j --engine yt -- "$BARE" 2>/dev/null | jq -r '.id // ""')
@@ -3618,6 +3672,86 @@ else
     # dropped Enter would get wrong (still the adopted one, nothing launched).
     report "Enter replaces the adopted player" 1 "$(poll_until 30 adopt_swapped)"
     report "…and does not stack a second mpv behind it" 1 "$(adopt_n)"
+
+    # ── The queue view (key: u), the one row source that WRITES ────────────────────────
+    # Here rather than in playback.sh because the claim is a MAPPING and only a real terminal
+    # can drive it: from the cursor, through the row record, to the index `t-play` is asked
+    # to act on. playback.sh proves the verbs themselves against a real player; what it cannot
+    # reach is whether the TUI names the row the user is looking at.
+    #
+    # And it is the one worth a tmux round trip, because it is the only key in this file that
+    # can destroy something a user cannot get back: a queue dies with its player, so `x` on
+    # the wrong row is a track gone from everywhere. Asserted against the PLAYER'S OWN QUEUE
+    # rather than against the frame — what the screen drew is not evidence about what was
+    # removed, and the queue file is where the answer actually is.
+    #
+    # It rides THIS pane rather than booting its own: after Enter the screen holds exactly what
+    # the section used to spend a cold start, a cold search and a resolve to reach — a player
+    # launched from the list, with a queue of one.
+    report "the list-launched player's queue is one track" 1 "$(poll_until 20 qv_is 1)"
+    tmux send-keys -t "$TS" Down
+    tmux send-keys -t "$TS" +
+    report "+ queues a second track" 1 "$(poll_until 20 qv_is 2)"
+    tmux send-keys -t "$TS" Down
+    tmux send-keys -t "$TS" +
+    report "+ queues a third" 1 "$(poll_until 20 qv_is 3)"
+    # `u` opens it, and the header field is the proof: the source name IS what the first
+    # line prints (`queue='…'`, the same shape as `playlist='…'`), so a view that opened
+    # under the wrong LIST_SOURCE says so there and nowhere else.
+    tmux send-keys -t "$TS" u
+    report "u opens the queue as the row source" 1 "$(poll_until 15 pane_has "queue='")"
+    # The status line's own count, not a row number: numbering is off until `#` toggles it,
+    # and this says more anyway. A search row source counts "results" and only a store
+    # counts "items", so `3 items` is both halves of the claim at once — the rows on screen
+    # are the queue's, and there are as many of them as the player says it holds.
+    report "…and the rows on screen are the queue's" 1 "$(poll_until 10 pane_has '[^0-9]3 items')"
+    # THE MAPPING. The cursor opens on the playing track (index 0); two Downs put it on
+    # index 2, and `x` must remove THAT one. Asserted by naming the url beforehand and
+    # looking for its absence afterwards — a length check alone would pass if the wrong
+    # track went.
+    qv_doomed=$(shell/t-play --queue-show -j 2>/dev/null | jq -r '.items[2].url')
+    qv_spared=$(shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[0].url,.items[1].url]')
+    tmux send-keys -t "$TS" Down
+    tmux send-keys -t "$TS" Down
+    tmux send-keys -t "$TS" x
+    report "x removes a waiting track" 1 "$(poll_until 20 qv_is 2)"
+    report "…and it removed the one under the cursor" "$qv_spared" "$(qv_urls)"
+    report "…which is not the one it was told to remove" 0 \
+        "$(qv_urls | grep -c -F "$qv_doomed")"
+    # x on the PLAYING row is refused, and says so instead of doing nothing visible. The
+    # length not moving is the other half: a refusal that had already written would look
+    # identical from the notice alone.
+    qv_before=$(qv_urls)
+    tmux send-keys -t "$TS" Up
+    tmux send-keys -t "$TS" Up
+    tmux send-keys -t "$TS" x
+    report "x on the playing track says why" 1 "$(poll_until 10 pane_has 'this one is playing')"
+    report "…and removed nothing" "$qv_before" "$(qv_urls)"
+    # The way back, which is the whole of the row-source contract: one key in, the same
+    # key out, and the search that was stashed still there. `stored_rows` not knowing
+    # about this source is exactly how `u` becomes a door that only opens.
+    tmux send-keys -t "$TS" u
+    report "u goes back to the search" 1 "$(poll_until 10 pane_has "query='lofi")"
+    # And from a STORE row source it REFUSES. There is one stash slot, so a queue opened
+    # on top of a playlist would leave the search in it and send `u` back to the search
+    # with the playlist gone — a list vanishing with nothing said about it. The second
+    # assertion is the one that matters: the playlist is still on screen afterwards.
+    tmux send-keys -t "$TS" b
+    if [ "$(poll_until 10 pane_has '1\. qv-list')" = 1 ]; then
+        tmux send-keys -t "$TS" 1
+        tmux send-keys -t "$TS" Enter
+        opened=$(poll_until 10 pane_has "playlist='qv-list'")
+        report "a playlist is on screen to press u from" 1 "$opened"
+        if [ "$opened" = 1 ]; then
+            tmux send-keys -t "$TS" u
+            report "u from a playlist says to go back first" 1 \
+                "$(poll_until 10 pane_has 'back to the results')"
+            report "…and the playlist is still there" 1 \
+                "$(poll_until 5 pane_has "playlist='qv-list'")"
+        fi
+    else
+        report "the queue section's playlist was listed" 1 0
+    fi
     tmux send-keys -t "$ADOPT_TS" q
     report "the Enter pane quits" 1 "$(poll_until 10 pane_has 'RC=0')"
     # This player was launched from the list, so it leaves with the screen.
@@ -3646,112 +3780,6 @@ else
     tmux kill-session -t "$ADOPT_TS" 2>/dev/null
     rm -rf "$ADOPT_STATE"
 
-    # ── The queue view (key: u), the one row source that WRITES ────────────────────────
-    # Here rather than in playback.sh because the claim is a MAPPING and only a real terminal
-    # can drive it: from the cursor, through the row record, to the index `t-play` is asked
-    # to act on. playback.sh proves the verbs themselves against a real player; what it cannot
-    # reach is whether the TUI names the row the user is looking at.
-    #
-    # And it is the one worth a tmux round trip, because it is the only key in this file that
-    # can destroy something a user cannot get back: a queue dies with its player, so `x` on
-    # the wrong row is a track gone from everywhere. Asserted against the PLAYER'S OWN QUEUE
-    # rather than against the frame — what the screen drew is not evidence about what was
-    # removed, and the queue file is where the answer actually is.
-    QV_CFG="$UT_TEST_TMP/queueview-config"
-    : >"$QV_CFG"
-    QV_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-qvstore.XXXXXX")
-    # A playlist to stand on for the refusal check at the end, written by the REAL store from
-    # the REAL search envelope this suite already fetched — the same way the TUI section above
-    # gets one. Nothing here is staged: t-playlist produces the file it is later asked to read.
-    printf '%s' "$YT_S" | UT_STATE_DIR="$QV_STATE" shell/t-playlist --add qv-list -j >/dev/null 2>&1
-    TS="ctest-queue-$$"              # the helpers above read $TS; earlier sessions are gone
-    tmux kill-session -t "$TS" 2>/dev/null
-    # TMPDIR is the suite's, as the adoption block explains: the players directory lives under
-    # it, and sharing one is how this shell can read the queue the pane's player is consuming.
-    tmux new-session -d -s "$TS" -x 100 -y 30 \
-        "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$QV_STATE' UT_CONFIG='$QV_CFG' YT_LANG=en shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
-    qv_len()  { shell/t-play --queue-show -j 2>/dev/null | jq -r '.len // 0'; }
-    qv_urls() { shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[].url]'; }
-    qv_is()   { [ "$(qv_len)" = "$1" ]; }
-    up=$(poll_until 40 pane_has "query='")
-    if [ "$up" != 1 ]; then
-        report "the queue pane came up" 1 "$up"
-    else
-        # A queue built the way a user builds one: play a row, then queue two more. Every
-        # wait below polls the QUEUE ITSELF — the length the player reports — rather than a
-        # frame or a clock, so a slow resolve costs time and never a red.
-        tmux send-keys -t "$TS" Enter
-        report "Enter started a player" 1 "$(poll_until 60 qv_is 1)"
-        tmux send-keys -t "$TS" Down
-        tmux send-keys -t "$TS" +
-        report "+ queues a second track" 1 "$(poll_until 20 qv_is 2)"
-        tmux send-keys -t "$TS" Down
-        tmux send-keys -t "$TS" +
-        report "+ queues a third" 1 "$(poll_until 20 qv_is 3)"
-        # `u` opens it, and the header field is the proof: the source name IS what the first
-        # line prints (`queue='…'`, the same shape as `playlist='…'`), so a view that opened
-        # under the wrong LIST_SOURCE says so there and nowhere else.
-        tmux send-keys -t "$TS" u
-        report "u opens the queue as the row source" 1 "$(poll_until 15 pane_has "queue='")"
-        # The status line's own count, not a row number: numbering is off until `#` toggles it,
-        # and this says more anyway. A search row source counts "results" and only a store
-        # counts "items", so `3 items` is both halves of the claim at once — the rows on screen
-        # are the queue's, and there are as many of them as the player says it holds.
-        report "…and the rows on screen are the queue's" 1 "$(poll_until 10 pane_has '[^0-9]3 items')"
-        # THE MAPPING. The cursor opens on the playing track (index 0); two Downs put it on
-        # index 2, and `x` must remove THAT one. Asserted by naming the url beforehand and
-        # looking for its absence afterwards — a length check alone would pass if the wrong
-        # track went.
-        qv_doomed=$(shell/t-play --queue-show -j 2>/dev/null | jq -r '.items[2].url')
-        qv_spared=$(shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[0].url,.items[1].url]')
-        tmux send-keys -t "$TS" Down
-        tmux send-keys -t "$TS" Down
-        tmux send-keys -t "$TS" x
-        report "x removes a waiting track" 1 "$(poll_until 20 qv_is 2)"
-        report "…and it removed the one under the cursor" "$qv_spared" "$(qv_urls)"
-        report "…which is not the one it was told to remove" 0 \
-            "$(qv_urls | grep -c -F "$qv_doomed")"
-        # x on the PLAYING row is refused, and says so instead of doing nothing visible. The
-        # length not moving is the other half: a refusal that had already written would look
-        # identical from the notice alone.
-        qv_before=$(qv_urls)
-        tmux send-keys -t "$TS" Up
-        tmux send-keys -t "$TS" Up
-        tmux send-keys -t "$TS" x
-        report "x on the playing track says why" 1 "$(poll_until 10 pane_has 'playing')"
-        report "…and removed nothing" "$qv_before" "$(qv_urls)"
-        # The way back, which is the whole of the row-source contract: one key in, the same
-        # key out, and the search that was stashed still there. `stored_rows` not knowing
-        # about this source is exactly how `u` becomes a door that only opens.
-        tmux send-keys -t "$TS" u
-        report "u goes back to the search" 1 "$(poll_until 10 pane_has "query='lofi")"
-        # And from a STORE row source it REFUSES. There is one stash slot, so a queue opened
-        # on top of a playlist would leave the search in it and send `u` back to the search
-        # with the playlist gone — a list vanishing with nothing said about it. The second
-        # assertion is the one that matters: the playlist is still on screen afterwards.
-        tmux send-keys -t "$TS" b
-        if [ "$(poll_until 10 pane_has '1\. qv-list')" = 1 ]; then
-            tmux send-keys -t "$TS" 1
-            tmux send-keys -t "$TS" Enter
-            opened=$(poll_until 10 pane_has "playlist='qv-list'")
-            report "a playlist is on screen to press u from" 1 "$opened"
-            if [ "$opened" = 1 ]; then
-                tmux send-keys -t "$TS" u
-                report "u from a playlist says to go back first" 1 \
-                    "$(poll_until 10 pane_has 'back to the results')"
-                report "…and the playlist is still there" 1 \
-                    "$(poll_until 5 pane_has "playlist='qv-list'")"
-            fi
-        else
-            report "the queue section's playlist was listed" 1 0
-        fi
-        tmux send-keys -t "$TS" q
-        poll_until 10 pane_has 'RC=' >/dev/null
-    fi
-    tmux kill-session -t "$TS" 2>/dev/null
-    shell/t-play --stop --all -j >/dev/null 2>&1
-    rm -rf "$QV_STATE"
-
     # ── The parts view (key: c), on whichever installed engine HAS --parts ──────────────
     # This row source had no coverage at all. The session above drives yt, where `c` is inert
     # by capability — which is a real claim and is checked up there, but it means open_parts'
@@ -3778,7 +3806,7 @@ else
         TS="ctest-parts-$$"          # the helpers above read $TS; the first session is gone
         tmux kill-session -t "$TS" 2>/dev/null
         tmux new-session -d -s "$TS" -x 100 -y 30 \
-            "cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$PTS_STATE' UT_CONFIG='$PTS_CFG' YT_LANG=en shell/ting --engine $PARTS_ENG -n 10 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+            "cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$PTS_STATE' TING_STATE_DIR='$PTS_STATE' UT_CONFIG='$PTS_CFG' TING_CONFIG='$PTS_CFG' YT_LANG=en shell/ting --engine $PARTS_ENG -n 10 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
         up=$(poll_until 30 pane_has "query='")
         if [ "$up" != 1 ]; then
             report "the parts pane came up" 1 "$up"

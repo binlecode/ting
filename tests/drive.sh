@@ -8,7 +8,7 @@
 #   1. `ting` refuses a non-TTY (exit 1), so it cannot be run from a pipe or a Bash tool
 #      call. tmux is the terminal.
 #   2. The pane size must be set AT SESSION CREATION (-x/-y). LINES/COLUMNS do nothing — the
-#      TUI reads the real ioctl via `stty size </dev/tty` (shell/ting:648), so a harness
+#      TUI reads the real ioctl via `stty size </dev/tty` (term_size in shell/ting), so a harness
 #      that skips TIOCSWINSZ gets a 0x0 terminal and a one-row list whose frames still look
 #      plausible enough to trust.
 #   3. `Enter` starts mpv DETACHED, in its own process group. Killing the tmux session does
@@ -28,9 +28,17 @@
 #   tests/drive.sh -x 62 -y 20                      a narrower geometry
 #   tests/drive.sh -q '周杰伦'                       another query (exercises CJK widths)
 #   tests/drive.sh -k 'i'                           send keys after the list is ready
-#   tests/drive.sh -k 'Enter' -w Playing            send Enter, wait for the banner
+#   tests/drive.sh -k 'Enter' -w Playing            send Enter, wait for the banner (en chrome)
+#   tests/drive.sh -k 'Enter' -w 播放中              the same under a zh chrome
+#   YT_LANG=en tests/drive.sh -k Enter -w Playing   pin the chrome for one run
 #   tests/drive.sh -i                               leave it up and ATTACH (interactive)
 #   YT_ASCII=1 tests/drive.sh                       any YT_* var is passed through
+#
+# -w greps the pane for a string, and the pane speaks whichever chrome language the COPIED
+# config (below) or the locale picks — so a banner marker is per language. The language is not
+# pinned here, and deliberately: this driver exists to photograph what a human sees, and a
+# pinned `en` would make every zh frame it dumps a frame nobody actually gets. An exported
+# YT_LANG is forwarded and beats the config file, so pinning is one word at the call site.
 # Exit: 0 = reached a ready frame and cleaned up; 1 = never got a frame, or orphans remained.
 set -uo pipefail
 cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
@@ -56,13 +64,19 @@ command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (ting need
 # to a DRIVER: the pane holds a real `ting` driving a real `t-play` and a real mpv, so only
 # whose state it lands on changes — and their playlists and history still render, because
 # UT_STATE_DIR is deliberately NOT redirected (a frame captured here should show the store a
-# human sees). What is suppressed is that store's WRITE side, via UT_HISTORY=0 in the pane: a
-# track this script starts and reaps a second later is not a listening, and unlike a player, a
-# log is not something --stop takes back.
+# human sees). What is suppressed is the HISTORY half of that store's write side, via
+# UT_HISTORY=0 in the pane: a track this script starts and reaps a second later is not a
+# listening, and unlike a player, a log is not something --stop takes back.
+#
+# THE PLAYLISTS ARE NOT PROTECTED, and nothing here makes them so. The same real store that
+# renders in the frame is the one ting's playlist keys write to, so `-k` with a/d/D/R — or a
+# human pressing them under `-i` — adds to, deletes from, deletes or renames the user's REAL
+# playlists, exactly as it would outside tmux, and there is no undo for it. That is the price
+# of frames that show the real store; drive a playlist-editing key only against a store you
+# can lose, by exporting UT_STATE_DIR to a scratch dir for that run (it is forwarded).
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ting-drive.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/ting-$(id -u)"
-[[ -d "$STATE_DIR" ]] || STATE_DIR="${TMPDIR:-/tmp}/ting-$(id -u)"
 
 # The config the pane reads is a COPY of the one a human reads, in this run's own temp dir —
 # the same trade as UT_HISTORY=0 above, one level further in. ting WRITES eleven preference keys
@@ -190,7 +204,7 @@ fi
 # move the bias. A frame torn that way does not look torn, which is what makes it expensive:
 # the top is the view you asked for and the bottom is the view you left, so it reads as a
 # renderer that forgot to erase. It is not. `ting` repaints in place — every line erases its
-# own tail and the render ends on \033[J (shell/ting:3832).
+# own tail and the render ends on \033[J (display_list_menu in shell/ting).
 #
 # THE NUMBER THIS IS SIZED AGAINST, measured 2026-08-30 at 100x30 by sampling the pane every
 # 0.1s from the keypress: `i` on a row with 28 chapters spends 2.7s on the fetch (the spinner,
@@ -201,8 +215,8 @@ fi
 # spelled. A first attempt at 0.6s did, and so did a quiescence test with a 0.25s window. The
 # stall itself was 0.88s when this was written and is 0.20s since disp_fits bounded the
 # measurement; the window is not re-tuned down, because what it is sized against is the SLOW
-# machine, not this one. For scale, the list frame the 15-24ms figure in
-# shell/ting:2688 describes is two orders of magnitude away from this one.
+# machine, not this one. For scale, the list frame whose 15-24ms repaint display_list_menu
+# in shell/ting records is two orders of magnitude away from this one.
 #
 # So: unchanged across a 1.5s window, not a 1.5s sleep. On this machine the two would behave
 # the same; they part on a slower one, where the stall grows and a fixed sleep goes back to
@@ -232,6 +246,15 @@ done
 [ $k -ge 16 ] && echo "drive.sh: frame still moving after 4s (a running player's clock does that) — photographing it anyway" >&2
 echo "── ${COLS}x${ROWS}  query=$QUERY${KEYS:+  keys=$KEYS} ──"
 tmux capture-pane -t "$S" -p
-tmux send-keys -t "$S" 'q' 2>/dev/null   # let it reap its own player before the trap fires
-sleep 1
+# Let ting quit on its own — it reaps its own player on the way out — before the trap kills
+# the session. Polled on the pane's command having exited, which is what ting returning is:
+# the session closes then, or — under a tmux server with remain-on-exit on — stays up with a
+# dead pane, so both end the wait. Bounded, because a ting that ignores q must not hang the
+# driver; the trap reaps whatever is left either way.
+tmux send-keys -t "$S" 'q' 2>/dev/null
+k=0
+while [ $k -lt 20 ] && tmux has-session -t "$S" 2>/dev/null &&
+    [ "$(tmux display-message -p -t "$S" '#{pane_dead}' 2>/dev/null)" != "1" ]; do
+    sleep 0.1; k=$((k + 1))
+done
 exit 0

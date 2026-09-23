@@ -15,23 +15,20 @@
 # ARCH-cli-contract.md「调用面」's `t-playlist --show … -j | t-play -d --queue -`, run
 # verbatim — contract.sh proves that envelope reaches the gate, this is where it launches.
 #
-# Cost: **~93s / 59 ok** (2026-09-04; 82s/51 ok on 2026-09-01, before the live read grew the
-# media facts and the count drifted), and it is real work
-# rather than waiting. The breakdown is the older 62s run's (2026-08-26) and still names where
-# the time goes: roughly 30s is seven live engine resolves (t-play:530 records the measured
-# median between tracks at 4.3s) and ~19s is the listening-log section playing a 19-second
-# track out to its own end rather than seeking there — that section cannot seek, because
-# `duration` is null on a live stream and a check must not go green or red on whether the
-# track was streaming that afternoon. Neither half is reducible without a stand-in, and this
-# file has none. The rest is the sites', which is why the total is quoted as a range and the
-# parts are not re-attributed without being re-measured.
+# Cost: no figure is kept here — a total quoted in a header goes stale the first time a check
+# is added, and the run that measures it is the one that should say it. What is stable is
+# WHERE the time goes: live engine resolves (t-play's run_mpv records the measured median
+# between tracks) and the listening-log section playing a 19-second track out to its own end
+# rather than seeking there — that section cannot seek, because `duration` is null on a live
+# stream and a check must not go green or red on whether the track was streaming that
+# afternoon. Neither is reducible without a stand-in, and this
+# file has none. What IS reducible is waiting on one player while another could be starting,
+# so the single-handle players launch back to back and are polled by --id afterwards.
 #
-# EVERY WAIT HERE IS A BOUNDED POLL. There are exactly two fixed sleeps left and neither is a
-# wait — both are SETUP, and both say so where they sit. Three others were `sleep 1`/`sleep 2`
-# guesses at conditions the code can observe (the record empty, pgrep at zero); they became
-# polls on 2026-08-26, which took the run from 68s to 62s. Speed was the smaller half: a fixed
-# guess also goes red when the machine is merely slow, and a red that is not a bug still costs
-# somebody an investigation.
+# EVERY WAIT HERE IS A BOUNDED POLL, on a 0.25s tick. There is exactly one fixed sleep left and
+# it is not a wait — it is SETUP, and it says so where it sits. A fixed guess costs twice: it is
+# too long on a fast machine and red on a merely slow one, and a red that is not a bug still
+# costs somebody an investigation.
 #
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
@@ -56,10 +53,23 @@ cd "$REPO" || exit 1
 # Why, once, for all three files under tests/: contract.sh's header. Here it earns
 # the sharpest form of the same sentence — every --stop --all below would reach the player the
 # user is listening to, and every orphan count would be a count of THEIR mpv.
+#
+# EVERY INHERITED TING_*/UT_* NAME IS DROPPED FIRST, before this file sets any of its own. Each
+# one is a config key the loader reads from the environment ahead of any file, so a developer's
+# exported UT_DEFAULT_ENGINE or UT_HISTORY=0 beats the empty config below and steers every
+# check without appearing anywhere in the run; TING_* is worse, because it outranks the UT_
+# names this file exports and would put its redirection back on the real files. A sweep over
+# the whole namespace rather than a list, because a list is only as complete as the day it was
+# written. The checks that prove a particular name works set it themselves, one command at a
+# time. `compgen -v` rather than parsing `env`: it lists NAMES, so a value with a newline in it
+# cannot forge a line that looks like one.
+for _v in $(compgen -v); do
+    case "$_v" in TING_* | UT_*) unset "$_v" 2>/dev/null ;; esac
+done
+unset _v
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ting-playback.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/ting-$(id -u)"
-[[ -d "$STATE_DIR" ]] || STATE_DIR="${TMPDIR:-/tmp}/ting-$(id -u)"
 
 # And the USER-LEVEL store, for the same reason one line up but a longer-lived consequence:
 # a detached player writes a row to the listening log for every track it finishes, so without
@@ -76,14 +86,9 @@ export UT_STATE_DIR="$UT_TEST_TMP/state"
 # the paragraph, and the failures named sockets and volumes rather than the config that
 # caused them. An EMPTY file, not an unset variable: unset means "read ~/.config/ting/config"
 # and empty means "the shipped defaults, and nothing a person happened to prefer".
-# contract.sh has isolated this from the start; this file had not.
+# contract.sh has isolated this from the start; this file had not. The environment half of the
+# same chain was swept at the top of this block.
 : >"$UT_TEST_TMP/config"
-# TING_* is DROPPED rather than mirrored, and that is the whole isolation story in one line:
-# every export below is a UT_ name, and TING_ now outranks UT_ in the loader — so a developer
-# with TING_CONFIG or TING_STATE_DIR exported would have this file's own redirection silently
-# overruled and would run against their real files. The checks that prove the TING_ names work
-# set them themselves, one command at a time.
-unset TING_CONFIG TING_STATE_DIR
 export UT_CONFIG="$UT_TEST_TMP/config"
 
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
@@ -127,29 +132,14 @@ wait_for_sock() {
 # poller written to walk one level deeper would be the same bounded-poll rule stated twice.
 wait_live() {
     local id=$1 field=$2 v="" i
-    for i in $(seq 1 40); do
+    for i in $(seq 1 160); do
         v=$(shell/t-play --status -j 2>/dev/null \
             | jq -r --arg i "$id" --arg f "$field" \
                 '.players[]|select(.id==$i)|getpath($f|split("."))//empty' 2>/dev/null)
         case "$v" in "" | null | 0) ;; *) printf '%s' "$v"; return 0 ;; esac
-        sleep 1
-    done
-    printf '%s' "$v"
-    return 1
-}
-
-# wait_no_players  — poll --status until the record is empty; 1 on timeout. Same rule as
-# wait_for_sock, and it exists because `--stop` returning is not the player being GONE: the
-# child traps both signals and escalates, so the record clearing is the observable END of
-# that path. This replaced a `sleep 2` at each of two sites — a fixed guess that was
-# simultaneously too long (the teardown takes ~1s) and too short (it goes red on a machine
-# that is merely slow, which is the most expensive red there is: not a bug, still investigated).
-wait_no_players() {
-    local i
-    for i in $(seq 1 80); do
-        [ "$(shell/t-play --status -j 2>/dev/null | jq -c '.players' 2>/dev/null)" = "[]" ] && return 0
         sleep 0.25
     done
+    printf '%s' "$v"
     return 1
 }
 
@@ -371,23 +361,49 @@ report "socketless player: nulls, volume off the record" 0 \
         '.players[]|select(.id==$i)|.paused==null and .position==null and .duration==null and .volume==40' \
         >/dev/null 2>&1; echo $?)"
 
+echo "── three more players, launched back to back ─────────────────────"
+# Each of the next three sections owns one player of its own, and every one of them spends its
+# time on the network — a resolve, then time-to-first-byte. Launched one after another and
+# waited on one after another, those costs ADD; launched together they overlap, and nothing is
+# lost, because every claim below selects its player by --id and a detached launch returns
+# before mpv is up anyway. The waits stay per player, in the section that makes the claim.
+#
+# THE HANDLE FOR THE THIRD ENGINE IS SEARCHED FOR, NOT WRITTEN DOWN, and on that site it is not
+# a style choice. Roughly 43% of the NetEase catalogue is VIP-only, so a pinned song id is a
+# check that goes red the day someone else's licence changes. `ne-search` filters to
+# access:"full" by default, so its first row is by construction a track this account can really
+# play — which makes "take row one" both the cheapest handle and the correct one. `lofi` is the
+# query because it measured 98% playable; the row itself is asserted, so a query that stops
+# returning one is a red with a name on it rather than a mystery below.
+NE_ROW=$(shell/ne-search -j -n 5 -- lofi 2>/dev/null | jq -r '.results[0].url // empty')
+o3=$(shell/t-play -d -j --volume 0 --engine bili -- "$BV" 2>/dev/null)
+o6=""
+[ -n "$NE_ROW" ] && o6=$(shell/t-play -d -j --volume 0 --engine ne -- "$NE_ROW" 2>/dev/null)
+# ONE player for three launch options, because none of them can mask another: the tier and -f
+# choose WHICH stream, --start chooses where in it mpv opens, and --loop only lands in the
+# record until the track ends — which a six-hour stream opened at 600s does not do during this
+# run. A player that comes up at the offset has proved the tier and -f did not break the stream
+# as well; that is why the separate quality player could go.
+o4=$(shell/t-play -d -j --volume 0 --quality low -f audio --start 600 --loop one -- "$U1" 2>/dev/null)
+
 echo "── a second engine: the envelope's http_headers reach mpv ─────────"
-# The only check in the suite that proves the player APPLIES what an engine hands it.
-# contract.sh asserts http_headers is PRESENT in the resolve envelope; nothing asserted that
-# t-play forwards it into mpv. This site is what makes the difference observable: its CDN
-# answers 403 to a bare stream URL and 206 to the same URL carrying the envelope's Referer
+# The only check in the suite whose SITE makes a dropped header block observable. contract.sh
+# asserts http_headers is PRESENT in the resolve envelope; nothing else there asserts that
+# t-play forwards it into mpv. This site is what makes the difference visible: its CDN answers
+# 403 to a bare stream URL and 206 to the same URL carrying the envelope's Referer
 # (docs/ARCHITECTURE.md「调用栈」, measured). So a player that dropped the header block would still
 # play YouTube, and every other check in this file would stay green, while bytes never flowed
-# from here. Position leaving zero IS the proof that they did.
-o3=$(shell/t-play -d -j --volume 0 --engine bili -- "$BV" 2>/dev/null)
+# from here. Position leaving zero IS the proof that they did. The NetEase player below carries
+# headers too, but its CDN has not been shown to refuse a bare URL, so its green is a pipeline
+# claim and not a header one.
 report "bili detach envelope" 0 \
     "$(printf '%s' "$o3" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
 id3=$(printf '%s' "$o3" | jq -r '.id // empty')
 sock3=$(printf '%s' "$o3" | jq -r '.sock // empty')
 # A record is a CALL: {engine, url} is the argv that produced it, so a caller reading --status
 # can re-issue what is playing instead of guessing which engine owns the handle. This player is
-# the discriminating input — the only one in the file launched under --engine, against a suite
-# default of yt — so a field filled from the default, or missing, answers `yt` here.
+# a discriminating input — launched under --engine, against a suite default of yt — so a field
+# filled from the default, or missing, answers `yt` here.
 report "the record names the engine that resolved it" "bili" \
     "$(shell/t-play --status -j | jq -r --arg i "$id3" '.players[] | select(.id == $i) | .engine // "null"')"
 if wait_for_sock "$sock3"; then
@@ -403,24 +419,14 @@ else
 fi
 
 echo "── a third engine: a search row plays, end to end ─────────────────"
-# THE WHOLE PIPELINE ON ONE ENGINE, with nothing pinned: a real `ne-search` answers, its first
-# row's url goes straight to `t-play -d --engine ne`, and the playhead moves. Three envelopes
-# have to agree for that to happen — search's row, resolve's stream_urls/http_headers, and the
-# player's record — and this is the only place all three are the same engine's and all three
-# are real.
-#
-# THE HANDLE IS SEARCHED FOR, NOT WRITTEN DOWN, and on this site that is not a style choice.
-# Roughly 43% of this catalogue is VIP-only, so a pinned song id is a check that goes red the
-# day someone else's licence changes. `ne-search` filters to access:"full" by default, so its
-# first row is by construction a track this account can really play — which makes "take row
-# one" both the cheapest handle and the correct one. `lofi` is the query because it measured
-# 98% playable; the row itself is asserted, so a query that stops returning one is a red with
-# a name on it rather than a mystery below.
-NE_ROW=$(shell/ne-search -j -n 5 -- lofi 2>/dev/null | jq -r '.results[0].url // empty')
+# THE WHOLE PIPELINE ON ONE ENGINE, with nothing pinned: a real `ne-search` answered above, its
+# first row's url went straight to `t-play -d --engine ne`, and the playhead moves. Three
+# envelopes have to agree for that to happen — search's row, resolve's stream_urls/http_headers,
+# and the player's record — and this is the only place all three are the same engine's and all
+# three are real.
 if [ -z "$NE_ROW" ]; then
     bad "ne-search returned no playable row — the third engine's pipeline is untested"
 else
-    o6=$(shell/t-play -d -j --volume 0 --engine ne -- "$NE_ROW" 2>/dev/null)
     report "ne detach envelope" 0 \
         "$(printf '%s' "$o6" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
     id6=$(printf '%s' "$o6" | jq -r '.id // empty')
@@ -438,29 +444,14 @@ else
     fi
 fi
 
-echo "── the quality tier rides the same path as -f ────────────────────"
-# --quality low must stack with -f and reach the engine without breaking
-# format selection — a detached player that comes up and reports position proves the
-# tier did not break the stream. auto (the default) sends no sort at all.
-o4=$(shell/t-play -d -j --volume 0 --quality low -f audio -- "$U1" 2>/dev/null)
-report "quality detach envelope" 0 \
-    "$(printf '%s' "$o4" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
-id4=$(printf '%s' "$o4" | jq -r '.id // empty')
-sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
-if wait_for_sock "$sock4"; then
-    if pos=$(wait_live "$id4" position); then
-        ok "quality audio flowed (position ${pos}s) — the tier reached the engine"
-    else
-        bad "quality player position never left 0 — did --quality reach the engine?"
-    fi
-else
-    bad "the quality player's IPC socket never appeared"
-fi
-
-echo "── the start offset really moves the playhead ────────────────────"
-# The one claim in this feature that only a real mpv can settle: contract.sh proves the
-# engine READS a timestamp and the gate refuses a bad one, and neither says the number ever
-# reached a decoder. Read back off the same live socket everything else here uses.
+echo "── the quality tier, the start offset and the loop mode, one player ─"
+# --quality low must stack with -f and reach the engine without breaking format selection — a
+# detached player that comes up and reports a position proves the tier did not break the
+# stream. auto (the default) sends no sort at all.
+#
+# The start offset is the claim only a real mpv can settle: contract.sh proves the engine READS
+# a timestamp and the gate refuses a bad one, and neither says the number ever reached a
+# decoder. Read back off the same live socket everything else here uses.
 #
 # N is 600, not 42, and that is the whole design of this check. An implementation that drops
 # --start reports a single-digit position — two orders of magnitude away — so the window can
@@ -473,25 +464,31 @@ echo "── the start offset really moves the playhead ────────
 # The lower bound is 595 rather than 600 because mpv lands on the keyframe at or before the
 # target — measured 599 for this stream. Asserting 600 exactly would be asserting the
 # keyframe interval of whatever U1 resolves to today.
-o5=$(shell/t-play -d -j --volume 0 --start 600 -- "$U1" 2>/dev/null)
-report "start-offset detach envelope" 0 \
-    "$(printf '%s' "$o5" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
-id5=$(printf '%s' "$o5" | jq -r '.id // empty')
-sock5=$(printf '%s' "$o5" | jq -r '.sock // empty')
-if wait_for_sock "$sock5"; then
-    if pos=$(wait_live "$id5" position); then
+report "quality + start-offset detach envelope" 0 \
+    "$(printf '%s' "$o4" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+id4=$(printf '%s' "$o4" | jq -r '.id // empty')
+sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
+# The LAUNCH half of the loop field: --loop rides a detach the way -f and --quality do, and the
+# record it lands in is what the child re-reads before every track. Asserted on the RECORD and
+# not on mpv, because the repeat pair in the queue section proves what the value does; what is
+# unproved without this line is that a launch can carry it at all. The parent writes the
+# record, so this needs no socket.
+report "a launch records its loop mode" "one" \
+    "$(shell/t-play --status -j | jq -r --arg i "$id4" '.players[]|select(.id==$i)|.loop // empty')"
+if wait_for_sock "$sock4"; then
+    if pos=$(wait_live "$id4" position); then
+        ok "quality audio flowed (position ${pos}s) — the tier reached the engine"
         if [ "$pos" -ge 595 ] && [ "$pos" -le 605 ]; then
             ok "--start 600 opened at ${pos}s — mpv got the offset"
         else
             bad "--start 600 opened at ${pos}s, which is not where it was told to"
         fi
     else
-        bad "the start-offset player never reported a position — the claim is untested"
+        bad "the quality + start-offset player never reported a position — did --quality break the stream?"
     fi
 else
-    bad "the start-offset player's IPC socket never appeared"
+    bad "the quality + start-offset player's IPC socket never appeared"
 fi
-shell/t-play --stop --id "$id5" -j >/dev/null 2>&1
 
 echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
 report "--stop --id"       0 "$(shell/t-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
@@ -564,10 +561,10 @@ report "upcoming is capped, len is not" 5 \
 report "--next advances the position" 1 \
     "$(shell/t-play --next -j 2>/dev/null | jq -r '.queue.pos')"
 i=0
-while [ $i -lt 60 ]; do
+while [ $i -lt 240 ]; do
     u=$(shell/t-play --status -j | jq -r '.players[0].url // empty')
     [ "$u" = "$U2" ] && break
-    sleep 1; i=$((i + 1))
+    sleep 0.25; i=$((i + 1))
 done
 report "the record follows the track" "$U2" \
     "$(shell/t-play --status -j | jq -r '.players[0].url // empty')"
@@ -585,9 +582,9 @@ qid=$(printf '%s' "$qout" | jq -r '.id // empty')
 if dur=$(wait_live "$qid" duration); then
     shell/t-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
     i=0
-    while [ $i -lt 90 ]; do
+    while [ $i -lt 360 ]; do
         [ "$(shell/t-play --status -j | jq -r '.players[0].queue.pos // empty')" = "2" ] && break
-        sleep 1; i=$((i + 1))
+        sleep 0.25; i=$((i + 1))
     done
     report "a track ending advances the queue" "2" \
         "$(shell/t-play --status -j | jq -r '.players[0].queue.pos // empty')"
@@ -619,11 +616,11 @@ if dur=$(wait_live "$qid" duration); then
     # moving (it did not). Waiting only for the first would spend forty seconds arriving at
     # the same red the second reports immediately.
     i=0
-    while [ $i -lt 40 ]; do
+    while [ $i -lt 160 ]; do
         p=$(shell/t-play --status -j | jq -r '.players[0].position // empty')
         [ "$(shell/t-play --status -j | jq -r '.players[0].queue.pos // empty')" != "$qpos" ] && break
         case "$p" in "" | null) ;; *) [ "$p" -lt $((dur - 10)) ] && break ;; esac
-        sleep 1; i=$((i + 1))
+        sleep 0.25; i=$((i + 1))
     done
     report "a repeating track wraps to its own start" 1 \
         "$(p=$(shell/t-play --status -j | jq -r '.players[0].position // 999999')
@@ -638,9 +635,9 @@ if dur=$(wait_live "$qid" duration); then
     shell/t-play --set-loop off -j >/dev/null 2>&1
     shell/t-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
     i=0
-    while [ $i -lt 90 ]; do
+    while [ $i -lt 360 ]; do
         [ "$(shell/t-play --status -j | jq -r '.players[0].queue.pos // empty')" != "$qpos" ] && break
-        sleep 1; i=$((i + 1))
+        sleep 0.25; i=$((i + 1))
     done
     report "repeat off: the same end advances the queue" "$((qpos + 1))" \
         "$(shell/t-play --status -j | jq -r '.players[0].queue.pos // empty')"
@@ -653,14 +650,15 @@ fi
 # job control is OFF, and detach_play launches under `set -m`, so an untrapped INT here is a
 # plain kill landing while the TERM handler runs (measured — see stop_group). The signals are
 # repeated on every tick of the escalation because the engine call between two tracks spawns
-# processes that never saw the first one.
+# processes that never saw the first one. --stop does not return until that escalation has
+# ended and the record is removed (do_stop), so the empty record is asserted immediately:
+# polling for it would be a wait that could never fail.
 shell/t-play --next -j >/dev/null 2>&1
 # NOT a wait, and so not a poll: this sleep is SETUP. It puts the --stop below in the middle
 # of the between-tracks resolve, which is the race being driven; without it the stop lands
 # before the child has spawned anything and the check passes without touching the claim.
 sleep 0.5
 report "--stop ends the queue" 0 "$(shell/t-play --stop --all -j >/dev/null 2>&1; echo $?)"
-wait_no_players
 report "no players after a queue" 0 "$(shell/t-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
 
@@ -778,9 +776,9 @@ report "…pos moved to 1" "1" \
 report "…and that track is the one at pos" "$ejump" \
     "$(shell/t-play --queue-show -j | jq -r '.items[.pos].url')"
 i=0
-while [ $i -lt 60 ]; do
+while [ $i -lt 240 ]; do
     [ "$(shell/t-play --status -j | jq -r '.players[0].url // empty')" = "$ejump" ] && break
-    sleep 1; i=$((i + 1))
+    sleep 0.25; i=$((i + 1))
 done
 report "…and the PLAYER followed the jump" "$ejump" \
     "$(shell/t-play --status -j | jq -r '.players[0].url // empty')"
@@ -799,21 +797,7 @@ report "…and the playing track is untouched" "$eplaying" \
 report "…clearing again clears 0" "0" \
     "$(shell/t-play --queue-clear -j 2>/dev/null | jq -r '.cleared')"
 shell/t-play --stop --all -j >/dev/null 2>&1
-wait_no_players
 no_orphans "no orphan mpv after the queue edits"
-
-# The LAUNCH half of the same field: --loop rides a detach the way -f and --quality do, and
-# the record it lands in is what the child re-reads before every track. Asserted on the
-# RECORD and not on mpv, because the pair above already proved what the value does; what is
-# unproved without this line is that a launch can carry it at all. No socket wait: the record
-# is written by the parent, so this costs one detach and no decode.
-lout=$(shell/t-play -d -j --loop one --volume 0 -- "$U1" 2>/dev/null)
-lid=$(printf '%s' "$lout" | jq -r '.id // empty')
-report "a launch records its loop mode" "one" \
-    "$(shell/t-play --status -j | jq -r --arg i "$lid" '.players[]|select(.id==$i)|.loop // empty')"
-shell/t-play --stop --all -j >/dev/null 2>&1
-wait_no_players
-no_orphans "no orphan mpv after a repeat launch"
 # The failure tombstone check lives at the end of this file, driven by a real failing player.
 
 echo "── the listening log, written by a player that really played ─────"
@@ -837,9 +821,9 @@ shell/t-play -d -j --volume 0 -- "$SHORT" >/dev/null 2>&1
 # Poll for THIS track's row: the queue section also ends a track on its own, so a poll for
 # "any row that ended by itself" returns immediately and waits for nothing.
 i=0
-while [ $i -lt 60 ]; do
+while [ $i -lt 240 ]; do
     [ "$(h_url "$(shell/t-history --ls -n 50 -j 2>/dev/null)")" != "0" ] && break
-    sleep 1; i=$((i + 1))
+    sleep 0.25; i=$((i + 1))
 done
 HIST=$(shell/t-history --ls -n 50 -j 2>/dev/null)
 # THE RECORD POINT, and the one claim that separates a history from a death record: a track
@@ -858,14 +842,16 @@ report "an interrupted track says so" 0 \
 # A row is a CALL: `engine` plus `url` is `t-play --engine E -- <handle>`, which is why the
 # log stores the pair and not a bare handle. Both are asserted as the GRAMMAR each side of
 # that argv has — an engine name the player will paste into `<engine>-resolve`, a handle with
-# no whitespace in it — and not as "yt" or as "starts with http": this run drove two engines,
-# one of them on a bare BV id, and a third must pass this check unedited.
+# no whitespace in it — and not as "yt" or as "starts with http": this run drives three engines,
+# one of them on a bare BV id and one on a numeric song id, and a fourth must pass this check
+# unedited.
 report "…and every row is a call"    0 \
     "$(printf '%s' "$HIST" | jq -e 'all(.items[]; (.engine|test("^[a-z0-9][a-z0-9_-]*$")) and (.url|test("^[^[:space:]]+$")))' >/dev/null 2>&1; echo $?)"
-# One shape for every source: the same two engines the sections above drove are both in the
-# log, with no per-site branch anywhere between them and the row.
-report "…from both engines, one shape" 0 \
-    "$(printf '%s' "$HIST" | jq -e '[.items[].engine]|unique|length >= 2' >/dev/null 2>&1; echo $?)"
+# One shape for every source: the three engines the sections above drove are all in the log,
+# with no per-site branch anywhere between them and the row. An ne-search that returned no
+# playable row leaves this red as well, which is correct — the ne row was never written.
+report "…from all three engines, one shape" 0 \
+    "$(printf '%s' "$HIST" | jq -e '[.items[].engine]|unique|length >= 3' >/dev/null 2>&1; echo $?)"
 
 # The off switch is the whole switch: not a shorter row, no row. One more real player,
 # because a knob only read on a path nothing drives is a knob nobody has tested.
@@ -873,29 +859,29 @@ report "…from both engines, one shape" 0 \
 # The short track is replayed here because exactly one row for it exists by now, and only
 # this player could write a second.
 h_before=$(h_url "$HIST")
-o4=$(UT_HISTORY=0 shell/t-play -d -j --volume 0 -- "$SHORT" 2>/dev/null)
-sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
-if wait_for_sock "$sock4"; then
-    # Setup again, not a wait: mpv has to really play, or "the switch wrote nothing" is true
-    # of a track that never started and the check is vacuous.
-    sleep 2
+o7=$(UT_HISTORY=0 shell/t-play -d -j --volume 0 -- "$SHORT" 2>/dev/null)
+id7=$(printf '%s' "$o7" | jq -r '.id // empty')
+sock7=$(printf '%s' "$o7" | jq -r '.sock // empty')
+# mpv has to really PLAY, or "the switch wrote nothing" is true of a track that never started
+# and the check is vacuous — so the stop waits for the playhead to leave zero, the same live
+# reading every other player here is proved by.
+if wait_for_sock "$sock7" && wait_live "$id7" position >/dev/null; then
     shell/t-play --stop --all -j >/dev/null 2>&1
-    # An ABSENCE cannot be polled for — you can only wait long enough — so this polls the
-    # PRECONDITION instead of guessing at the absence: the row is written by the player's own
-    # exit path, so once the record is empty the only process that could write one is gone and
-    # the answer below is final. Strictly stronger than the `sleep 2` it replaced, which
-    # merely hoped.
-    wait_no_players
+    # An ABSENCE cannot be polled for — you can only wait long enough — so it is read once the
+    # PRECONDITION holds: the row is written by the player's own exit path, and --stop returns
+    # only after that whole process group is gone (do_stop, stop_group). No process that could
+    # write a row is left, so the answer below is final.
     report "UT_HISTORY=0 writes nothing" "$h_before" \
         "$(h_url "$(shell/t-history --ls -n 50 -j 2>/dev/null)")"
 else
-    bad "the UT_HISTORY=0 player never started — the off switch is untested"
+    bad "the UT_HISTORY=0 player never started playing — the off switch is untested"
 fi
 
 echo "── the death record: real player failure and reaping ───────────────"
-# When a real detached player fails (e.g. an unresolvable handle), the mpv child exits with an
-# error, detached_epitaph records the exit event, and t-play --status reaps it into .failed[].
-# No synthetic json, no fake log stubs: real mpv, real failure, real reaper.
+# An unresolvable handle fails in the ENGINE, before any mpv exists: the detached child's
+# resolve returns the engine's non-zero code (play_url_directly), detached_epitaph records the
+# exit event, and t-play --status reaps it into .failed[]. No synthetic json, no fake log
+# stubs: a real engine, a real failure, the real reaper.
 f_out=$(shell/t-play -d -j --engine yt -- "https://www.youtube.com/watch?v=00000000000" 2>/dev/null)
 f_id=$(printf '%s' "$f_out" | jq -r '.id // empty')
 report "failing player launched" 0 "$([ -n "$f_id" ] && echo 0 || echo 1)"

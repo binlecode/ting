@@ -342,7 +342,7 @@ from a real `t-playlist --show -j` envelope, so the documented pipeline is what 
 player rather than an array written to look like one —
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
-Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~88s, and it needs the network — of which ~35s is eight real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to. It needs the network, and its time is real engine resolves plus one 19-second track played out to its own end — what is left is not waiting. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
@@ -354,7 +354,8 @@ reach the player *you* are listening to, so the reap used to be skipped unless t
 
 ```sh
 tests/drive.sh -x 62 -y 20              # the reflow floor, frame dumped
-tests/drive.sh -k Enter -w Playing      # a real detached play, then cleaned up
+tests/drive.sh -k Enter -w Playing      # a real detached play, then cleaned up (en chrome)
+tests/drive.sh -k Enter -w 播放中       # the same marker under a zh chrome
 tests/drive.sh -i                       # attach and drive it by hand
 ```
 
