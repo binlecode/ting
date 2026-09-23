@@ -580,6 +580,98 @@ report "…with reason locked"            0 "$(jqv '.reason=="locked"' "$LOCKED"
 # reorder: 5.46s. After: 0.10s.
 touch -t 202001010000 "$UT_STATE_DIR/playlists/.lock-race"
 report "a stale lock is stolen"         0 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j >/dev/null 2>&1; echo $?)"
+
+# THE UNDO COPY. The owner is this shell: it is alive for the whole run, which is all an
+# owner has to be. Every "same as before" below compares the store's own --show output
+# before the write and after the undo, so what is proved is what a reader of the store sees.
+#
+# The window closes on a clock, so it is proved off the critical path: a background case,
+# owned by a `sleep` it outlives by nothing (a subshell cannot name its own pid on bash 3.2).
+# It polls --undo against a copy it made stale ON PURPOSE — a successful undo would consume
+# the copy it is waiting on — so the answer goes undo_stale while the window is open and
+# undo_expired once it has closed, and the poll ends on that answer, not on a sleep.
+# Its own store, too: every call reaps dead owners' copies, and a poller sharing this one
+# would reap the dead-owner copy further down before that check could see it written.
+sleep 30 & UNDO_HOLD=$!
+UNDO_EXPIRY_OUT="$UT_STATE_DIR.expiry"
+UNDO_EXPIRY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ting-plundo.XXXXXX")
+(
+    UT_STATE_DIR=$UNDO_EXPIRY_DIR
+    printf '%s' "$ENV_JSON" | $PL --add expiry >/dev/null 2>&1
+    $PL --rm expiry --index 0 --owner "$UNDO_HOLD" >/dev/null 2>&1
+    printf '%s' "$ENV_JSON" | $PL --add expiry >/dev/null 2>&1
+    s=$SECONDS; last=""; r=""
+    while [ $((SECONDS - s)) -le 5 ]; do
+        r=$($PL --undo --owner "$UNDO_HOLD" -j 2>/dev/null | jq -r '.reason // "ok"')
+        [ "$r" = undo_expired ] && break
+        last=$r
+    done
+    echo "$last $r" >"$UNDO_EXPIRY_OUT"
+) &
+UNDO_EXPIRY_PID=$!
+
+printf '%s' "$ENV_JSON" | $PL --add u >/dev/null 2>&1
+echo '[{"engine":"bili","url":"https://www.bilibili.com/video/BV1","title":"三"}]' | $PL --add u >/dev/null 2>&1
+U0=$($PL --show u -j)
+report "--rm --owner: undo.deadline"   0 "$(jq_ok '.status=="ok" and .removed==1 and (.undo.deadline|type)=="number"' $PL --rm u --index 1 --owner $$ -j)"
+report "--undo reports what it undid"  0 "$(jq_ok '.status=="ok" and .undone=="rm" and .name=="u" and .index==1' $PL --undo --owner $$ -j)"
+report "…and the list is as it was"    0 "$([ "$($PL --show u -j)" = "$U0" ]; echo $?)"
+report "a copy is used once"           4 "$(rc $PL --undo --owner $$ -j)"
+report "…reason undo_none"             0 "$(jq_ok '.reason=="undo_none"' $PL --undo --owner $$ -j)"
+$PL --del u --owner $$ -j >/dev/null 2>&1
+report "--del --owner then --undo: 0"  0 "$(rc $PL --undo --owner $$ -j)"
+report "…the list is back"             0 "$([ "$($PL --show u -j)" = "$U0" ]; echo $?)"
+$PL --rename u v --owner $$ -j >/dev/null 2>&1
+report "--rename undo names both"      0 "$(jq_ok '.undone=="rename" and .name=="u" and .from=="v"' $PL --undo --owner $$ -j)"
+report "…the old name is back"         0 "$([ "$($PL --show u -j)" = "$U0" ]; echo $?)"
+report "…the new name is gone"         4 "$(rc $PL --show v)"
+printf '%s' "$ENV_JSON" | $PL --add u --owner $$ -j >/dev/null 2>&1
+report "--add onto a list, undone"     0 "$($PL --undo --owner $$ >/dev/null 2>&1; [ "$($PL --show u -j)" = "$U0" ]; echo $?)"
+printf '%s' "$ENV_JSON" | $PL --add fresh --owner $$ -j >/dev/null 2>&1
+report "--add that made a list, undone" 4 "$($PL --undo --owner $$ >/dev/null 2>&1; rc $PL --show fresh)"
+# Without --owner nothing is kept, and the envelope is the one it always was.
+report "no --owner: no undo field"     0 "$(jq_ok 'has("undo")|not' $PL --rm u --index 0 -j)"
+report "…on --add either"              0 "$(jq_in 'has("undo")|not' "$ENV_JSON" $PL --add u -j)"
+report "…and nothing to undo"          0 "$(jq_ok '.reason=="undo_none"' $PL --undo --owner $$ -j)"
+# The store moved between the write and the undo: the undo refuses and changes nothing.
+$PL --rm u --index 0 --owner $$ -j >/dev/null 2>&1
+printf '%s' "$ENV_JSON" | $PL --add u -j >/dev/null 2>&1
+U1=$($PL --show u -j)
+report "changed since: 4"              4 "$(rc $PL --undo --owner $$ -j)"
+report "…reason undo_stale"            0 "$(jq_ok '.reason=="undo_stale"' $PL --undo --owner $$ -j)"
+report "…and the change is kept"       0 "$([ "$($PL --show u -j)" = "$U1" ]; echo $?)"
+$PL --del u --owner $$ -j >/dev/null 2>&1
+printf '%s' "$ENV_JSON" | $PL --add u -j >/dev/null 2>&1
+report "deleted then re-made: stale"   0 "$(jq_ok '.reason=="undo_stale"' $PL --undo --owner $$ -j)"
+# Removing the last item keeps an empty list, and the undo brings the item back into it.
+echo '[{"engine":"yt","url":"https://x/solo"}]' | $PL --add solo >/dev/null 2>&1
+S0=$($PL --show solo -j)
+$PL --rm solo --index 0 --owner $$ -j >/dev/null 2>&1
+report "the last item out: count 0"    0 "$(jq_ok '.status=="ok" and .count==0' $PL --show solo -j)"
+report "…and back in"                  0 "$($PL --undo --owner $$ >/dev/null 2>&1; [ "$($PL --show solo -j)" = "$S0" ]; echo $?)"
+# --discard drops the copy without restoring, and is 0 whether there was one or not.
+$PL --rm solo --index 0 --owner $$ -j >/dev/null 2>&1
+report "--discard: 0"                  0 "$(jq_ok '.status=="ok" and .discarded==true' $PL --undo --discard --owner $$ -j)"
+report "…again, with none: 0"          0 "$(jq_ok '.status=="ok" and .discarded==false' $PL --undo --discard --owner $$ -j)"
+report "…and nothing is left to undo"  0 "$(jq_ok '.reason=="undo_none"' $PL --undo --owner $$ -j)"
+# An owner that died without discarding (kill -9): ANY later call clears its copy.
+UNDO_DEAD=$(sh -c 'echo $$')
+$PL --rm u --index 0 --owner "$UNDO_DEAD" -j >/dev/null 2>&1
+report "a dead owner's copy is written" 0 "$([ -d "$UT_STATE_DIR/undo/playlist-$UNDO_DEAD" ]; echo $?)"
+report "…and the next --ls clears it"  1 "$($PL --ls >/dev/null 2>&1; [ -d "$UT_STATE_DIR/undo/playlist-$UNDO_DEAD" ]; echo $?)"
+# The gates: each is a malformed call, so each is 1 whatever the store holds.
+report "--owner not a number: 1"       1 "$(rc $PL --rm u --index 0 --owner x)"
+report "--owner 0: 1"                  1 "$(rc $PL --del u --owner 0)"
+report "--owner on --show: 1"          1 "$(rc $PL --show u --owner $$)"
+report "…and it says where it belongs" 0 "$(err_has 'belongs to' $PL --show u --owner $$)"
+report "--undo without --owner: 1"     1 "$(rc $PL --undo)"
+report "--discard without --undo: 1"   1 "$(rc $PL --ls --discard)"
+report "--undo beside a verb: 1"       1 "$(rc $PL --undo --ls --owner $$)"
+
+wait "$UNDO_EXPIRY_PID"
+kill "$UNDO_HOLD" 2>/dev/null; wait "$UNDO_HOLD" 2>/dev/null
+report "the window closes by itself"   "undo_stale undo_expired" "$(cat "$UNDO_EXPIRY_OUT" 2>/dev/null)"
+rm -rf "$UNDO_EXPIRY_OUT" "$UNDO_EXPIRY_DIR"
 rm -rf "$UT_STATE_DIR"
 
 echo "── the listening log: append-only, one line, bounded ──────────────"

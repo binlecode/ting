@@ -188,7 +188,8 @@ validate_enum() {
 # The reason enum here is the STATE enum and is deliberately NOT the playback/extraction one
 # (forbidden|unavailable|…): nothing in a file store can be `format_unavailable`, and
 # widening a taxonomy three other readers branch on would be the wrong kind of sharing.
-# Members: not_found | exists | invalid_name | invalid_input | locked | corrupt.
+# Members: not_found | exists | invalid_name | invalid_input | locked | corrupt |
+# undo_none | undo_expired | undo_stale.
 # ARCH-cli-contract.md「数据契约」.
 #
 # WHICH CODE EACH REASON CARRIES, and why it is not all 1. The suite reserves 1 for "the
@@ -197,7 +198,7 @@ validate_enum() {
 # player (4) rather than calling the caller's flags bad. So:
 #
 #   1  invalid_name · invalid_input   the caller's own argv or stdin is malformed
-#   4  not_found · exists · locked · corrupt   argv understood, store said no
+#   4  not_found · exists · locked · corrupt · undo_*   argv understood, store said no
 #
 # `--del` on a missing list stays 0 with `deleted:false`: the caller asked for an end state
 # and the end state holds, exactly as `--stop` does on a player that already exited.
@@ -266,7 +267,13 @@ release_lock() {
     LOCKS_HELD=()
     return 0
 }
-trap release_lock EXIT
+# A copy half-built when the write died goes with the locks: it is this process's own
+# scratch, and a `.tmp.` directory the reaper would only find once its owner is gone.
+on_exit() {
+    release_lock
+    [[ -z "${UNDO_TMP:-}" ]] || rm -rf "$UNDO_TMP" 2>/dev/null || true
+}
+trap on_exit EXIT
 
 lock_playlist() {
     local dir i aged=0
@@ -307,6 +314,108 @@ write_playlist() {
     f=$(playlist_file "$name")
     printf '%s\n' "$json" >"$f.tmp.$$" || die "cannot write $f"
     mv -f "$f.tmp.$$" "$f" || { rm -f "$f.tmp.$$" 2>/dev/null || true; die "cannot persist $f"; }
+}
+
+# ------------------------------------------------------------------------------
+# UNDO — one copy per owning process, written under the same lock as the write it undoes.
+# docs/ARCH-player.md「撤销副本」 has the why; the shape, in the order a write takes it:
+#
+#   undo_begin -> undo_obj per playlist the write touches -> undo_commit -> the write itself
+#
+# The copy holds each object's bytes BEFORE and AFTER, so --undo can refuse to restore over a
+# list somebody else has changed since (it compares, byte for byte, what is on disk against
+# the AFTER half). A write that dies after undo_commit leaves an AFTER that is not on disk,
+# which is the same refusal — a failed write can never be "undone" into a duplicate.
+#
+# Only a caller that names itself with --owner gets a copy. An agent's writes leave nothing
+# behind, and without --owner every verb's behaviour and envelope are what they always were.
+#
+# The copy lives OUTSIDE playlists/, whose *.json glob is --ls's namespace. One slot per
+# owner: the next write by the same owner replaces it, which is what keeps `z` one level deep.
+UNDO_GRACE=3
+UNDO_DIR="$UT_STATE_DIR/undo"
+OWNER=""
+DISCARD=0
+undo_slot() { echo "$UNDO_DIR/playlist-$1"; }
+
+# The copies of owners that are gone. An owner that exits normally discards its own (ting's
+# cleanup_on_exit); this is the kill -9 path, run by every call, so a copy never outlives its
+# owner by more than one invocation of this command. Keyed on the directory NAME, so it costs
+# a glob and a `kill -0` per copy and no jq. The `.tmp.` half-written ones go the same way.
+reap_dead_copies() {
+    local d o
+    [[ -d "$UNDO_DIR" ]] || return 0
+    for d in "$UNDO_DIR"/playlist-*; do
+        [[ -e "$d" ]] || continue
+        o=${d##*/playlist-}
+        o=${o%%.*}
+        [[ "$o" =~ ^[0-9]+$ ]] || continue
+        kill -0 "$o" 2>/dev/null || rm -rf "$d" 2>/dev/null || true
+    done
+    return 0
+}
+
+UNDO_TMP=""
+UNDO_OBJS="[]"
+UNDO_N=0
+UNDO_DEADLINE=""
+undo_begin() {
+    [[ -n "$OWNER" ]] || return 0
+    mkdir -p -m 700 "$UNDO_DIR" 2>/dev/null || die "cannot create the undo directory: $UNDO_DIR"
+    UNDO_TMP="$(undo_slot "$OWNER").tmp.$$"
+    rm -rf "$UNDO_TMP" 2>/dev/null || true
+    mkdir -m 700 "$UNDO_TMP" 2>/dev/null || die "cannot create $UNDO_TMP"
+    UNDO_OBJS="[]"
+    UNDO_N=0
+}
+
+# undo_obj NAME [AFTER_JSON] — one playlist the write touches. No second argument means the
+# write leaves NAME not existing (--del, the old name of --rename); a file that does not exist
+# yet is recorded as that too (--add creating a list), so "not there" restores as "not there".
+# AFTER is written the way write_playlist writes it, so cmp compares like with like.
+undo_obj() {
+    [[ -n "$OWNER" ]] || return 0
+    local key=$1 f pre=false post=false
+    f=$(playlist_file "$key")
+    if [[ -f "$f" ]]; then
+        cp "$f" "$UNDO_TMP/$UNDO_N.pre" 2>/dev/null || die "cannot write the undo copy of $f"
+        pre=true
+    fi
+    if (($# > 1)); then
+        printf '%s\n' "$2" >"$UNDO_TMP/$UNDO_N.post" || die "cannot write the undo copy of $f"
+        post=true
+    fi
+    UNDO_OBJS=$(jq -c --arg k "$key" --argjson pre "$pre" --argjson post "$post" \
+        '. + [{key: $k, pre_exists: $pre, post_exists: $post}]' <<<"$UNDO_OBJS")
+    UNDO_N=$((UNDO_N + 1))
+}
+
+# undo_commit VERB [INDEX] — the copy goes into place whole. The deadline is epoch seconds
+# with no timestamp beside it: now_utc is whole seconds too, so two writes in one second
+# could not be told apart by one, and the bytes are what --undo compares anyway.
+undo_commit() {
+    [[ -n "$OWNER" ]] || return 0
+    local slot
+    slot=$(undo_slot "$OWNER")
+    UNDO_DEADLINE=$(($(date +%s) + UNDO_GRACE))
+    jq -nc --argjson owner "$OWNER" --arg verb "$1" --arg index "${2:-}" \
+        --argjson deadline "$UNDO_DEADLINE" --argjson objs "$UNDO_OBJS" \
+        '{schema: 1, owner: $owner, verb: $verb, deadline: $deadline, objects: $objs}
+         + (if $index == "" then {} else {index: ($index | tonumber)} end)' \
+        >"$UNDO_TMP/meta.json" 2>/dev/null || die "cannot write the undo copy"
+    rm -rf "$slot" 2>/dev/null || true
+    mv "$UNDO_TMP" "$slot" 2>/dev/null || die "cannot persist the undo copy: $slot"
+    UNDO_TMP=""
+}
+
+# The envelope's `undo` field, only on a call that left a copy — which is only a call that
+# passed --owner, so an agent's envelope stays byte-for-byte what it was.
+with_undo() {
+    if [[ -n "$UNDO_DEADLINE" ]]; then
+        jq -c --argjson d "$UNDO_DEADLINE" '. + {undo: {deadline: $d}}'
+    else
+        cat
+    fi
 }
 
 # ONE reader for every verb that opens a playlist file, and the only place jq is pointed at
@@ -490,12 +599,15 @@ do_add() {
             '{schema: 1, name: $name, created_at: $now, updated_at: $now,
               count: ($new | length), items: $new}')
     fi
+    undo_begin
+    undo_obj "$NAME" "$json"
+    undo_commit add
     write_playlist "$NAME" "$json"
     release_lock
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         printf '%s' "$json" | jq -c --argjson added "$added" \
-            '{status: "ok", name, added: $added, count: (.items | length)}'
+            '{status: "ok", name, added: $added, count: (.items | length)}' | with_undo
     else
         printf 'Added %s item(s) to %s (%s total)\n' "$added" "$NAME" "$(printf '%s' "$json" | jq '.items | length')"
     fi
@@ -515,11 +627,14 @@ do_rm() {
     local json
     json=$(printf '%s' "$PLAYLIST_JSON" | jq -c --argjson i "$INDEX" --arg now "$(now_utc)" \
         'del(.items[$i]) | .updated_at = $now | .count = (.items | length)')
+    undo_begin
+    undo_obj "$NAME" "$json"
+    undo_commit rm "$INDEX"
     write_playlist "$NAME" "$json"
     release_lock
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        printf '%s' "$json" | jq -c '{status: "ok", name, removed: 1, count: (.items | length)}'
+        printf '%s' "$json" | jq -c '{status: "ok", name, removed: 1, count: (.items | length)}' | with_undo
     else
         printf 'Removed item %s from %s (%s left)\n' "$INDEX" "$NAME" "$(printf '%s' "$json" | jq '.items | length')"
     fi
@@ -528,19 +643,24 @@ do_rm() {
 # Deleting something that is already gone is not a failure — the caller asked for an end
 # state and the end state holds. Same rule as `t-play --stop` on a player that already
 # exited (ARCH-cli-contract.md「退出码」); `deleted` is the field that says which happened.
+# A delete that found nothing leaves no copy either: nothing was written, so there is nothing
+# to take back, and the owner's copy of its previous write stays where it is.
 do_del() {
     ensure_store
     local f deleted=false
     f=$(playlist_file "$NAME")
     if [[ -f "$f" ]]; then
         lock_playlist "$NAME"
+        undo_begin
+        undo_obj "$NAME"
+        undo_commit del
         rm -f "$f" || die "cannot delete $f"
         release_lock
         deleted=true
     fi
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg name "$NAME" --argjson deleted "$deleted" \
-            '{status: "ok", name: $name, deleted: $deleted}'
+            '{status: "ok", name: $name, deleted: $deleted}' | with_undo
     elif [[ "$deleted" == "true" ]]; then
         printf 'Deleted playlist %s\n' "$NAME"
     else
@@ -571,15 +691,105 @@ do_rename() {
     local json
     json=$(printf '%s' "$PLAYLIST_JSON" | jq -c --arg name "$NEW_NAME" --arg now "$(now_utc)" \
         '.name = $name | .updated_at = $now')
+    # Two objects, old name first: --undo reports the first as the list it restored and the
+    # second as `from`, the name the screen may still be showing.
+    undo_begin
+    if [[ "$NAME" == "$NEW_NAME" ]]; then
+        undo_obj "$NAME" "$json"
+    else
+        undo_obj "$NAME"
+        undo_obj "$NEW_NAME" "$json"
+    fi
+    undo_commit rename
     write_playlist "$NEW_NAME" "$json"
     [[ "$NAME" == "$NEW_NAME" ]] || rm -f "$from"
     release_lock
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg from "$NAME" --arg name "$NEW_NAME" \
-            '{status: "ok", name: $name, from: $from}'
+            '{status: "ok", name: $name, from: $from}' | with_undo
     else
         printf 'Renamed %s to %s\n' "$NAME" "$NEW_NAME"
+    fi
+}
+
+# --undo --owner PID: put back what that owner's last write changed, or say why not. Every
+# check is made under the locks of every playlist the copy names (in the order --rename takes
+# them), because a check made outside them is a check about a list that can still move.
+#
+# The order of the refusals is the order a caller can act on: no copy at all, then a copy
+# whose window has closed, then a copy the store has moved away from. `undo_stale` restores
+# NOTHING — not the one object that still matches either — because half an undo of a rename
+# is a third state nobody asked for.
+#
+# The copy survives a refusal (expired or stale). It is harmless — nothing will ever match it
+# again — and it goes with the owner's next write, its exit, or the reaper.
+do_undo() {
+    local slot line verb="" deadline="" index="" k pre post i f n=0
+    local keys=() pres=() posts=()
+    slot=$(undo_slot "$OWNER")
+    if ((DISCARD)); then
+        local had=false
+        [[ -e "$slot" ]] && had=true
+        rm -rf "$slot" 2>/dev/null || die "cannot remove $slot"
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc --argjson d "$had" '{status: "ok", discarded: $d}'
+        fi
+        return 0
+    fi
+    [[ -f "$slot/meta.json" ]] || fail 4 undo_none "nothing to undo for owner $OWNER"
+    # One read, one field per line; joined on \037 because a name may hold a space and may not
+    # hold a control character (validate_name), so `read` is a parse rather than a guess.
+    while IFS=$'\037' read -r k pre post; do
+        if ((n == 0)); then
+            verb=$k; deadline=$pre; index=$post
+        else
+            keys+=("$k"); pres+=("$pre"); posts+=("$post")
+        fi
+        n=$((n + 1))
+    done < <(jq -r '([.verb, (.deadline | tostring), (if has("index") then (.index | tostring) else "" end)]
+                     | join("\u001f")),
+                    (.objects[] | [.key, (.pre_exists | tostring), (.post_exists | tostring)] | join("\u001f"))' \
+        "$slot/meta.json" 2>/dev/null)
+    ((${#keys[@]})) && [[ "$deadline" =~ ^[0-9]+$ ]] || fail 4 corrupt "the undo copy for owner $OWNER is not readable: $slot"
+    NAME="${keys[0]}"
+    if ((${#keys[@]} == 1)); then
+        lock_playlist "${keys[0]}"
+    elif [[ "${keys[0]}" < "${keys[1]}" ]]; then
+        lock_playlist "${keys[0]}"; lock_playlist "${keys[1]}"
+    else
+        lock_playlist "${keys[1]}"; lock_playlist "${keys[0]}"
+    fi
+    (($(date +%s) < deadline)) || fail 4 undo_expired "the undo window for owner $OWNER has closed"
+    for ((i = 0; i < ${#keys[@]}; i++)); do
+        f=$(playlist_file "${keys[$i]}")
+        if [[ "${posts[$i]}" == "true" ]]; then
+            [[ -f "$f" ]] && cmp -s "$f" "$slot/$i.post" ||
+                fail 4 undo_stale "playlist '${keys[$i]}' changed after the write; nothing was undone"
+        elif [[ -e "$f" ]]; then
+            fail 4 undo_stale "playlist '${keys[$i]}' was created after the write; nothing was undone"
+        fi
+    done
+    for ((i = 0; i < ${#keys[@]}; i++)); do
+        f=$(playlist_file "${keys[$i]}")
+        if [[ "${pres[$i]}" == "true" ]]; then
+            cp "$slot/$i.pre" "$f.tmp.$$" 2>/dev/null && mv -f "$f.tmp.$$" "$f" ||
+                { rm -f "$f.tmp.$$" 2>/dev/null || true; die "cannot restore $f"; }
+        else
+            rm -f "$f" || die "cannot remove $f"
+        fi
+    done
+    rm -rf "$slot" 2>/dev/null || true
+    release_lock
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg verb "$verb" --arg name "$NAME" --arg index "$index" \
+            --arg from "${keys[1]:-}" \
+            '{status: "ok", undone: $verb, name: $name}
+             + (if $index == "" then {} else {index: ($index | tonumber)} end)
+             + (if $from == "" then {} else {from: $from} end)'
+    else
+        printf 'Undid --%s on %s\n' "$verb" "$NAME"
     fi
 }
 
@@ -598,9 +808,14 @@ Usage:
   t-playlist --rm NAME --index N
   t-playlist --del NAME
   t-playlist --rename NAME NEWNAME
+  t-playlist --undo --owner PID [--discard]
 
 Options:
   --index N     Which item --rm removes (0-based, as printed by --show)
+  --owner PID   On --add/--rm/--del/--rename: keep a copy that --undo can put back, for
+                3 seconds, in PID's one slot (the next write by PID replaces it). The -j
+                envelope then carries undo.deadline (epoch seconds). Without it, no copy.
+  --discard     With --undo: drop PID's copy without restoring it (0 even if none)
   -l            Plain text output (default)
   -j            JSON envelope, one line
   --color MODE  auto | always | never (default: auto)
@@ -625,8 +840,10 @@ Storage: $UT_STATE_DIR/playlists/<name>.json
 Exit codes: 0 ok
             1 the call was malformed   (.reason: invalid_name, invalid_input)
             2 a dependency is missing  (jq — stderr says which)
-            4 the store said no        (.reason: not_found, exists, locked, corrupt)
+            4 the store said no        (.reason: not_found, exists, locked, corrupt,
+                                        undo_none, undo_expired, undo_stale)
   --del on a playlist that is not there is 0 with deleted:false — the end state holds.
+  --undo restores nothing unless every list it names is byte-for-byte what the write left.
 
 This store holds no playback state: to play a list, hand it to the player —
   t-playlist --show chill -j | t-play -d --queue -
@@ -657,6 +874,17 @@ while (($#)); do
     # --ls and --del; a second official spelling is a second thing to keep in sync and it
     # doubles the surface a small model has to choose from (CLAUDE.md, ARCHITECTURE.md「平级动词，没有内核」).
     --ls) set_action ls; shift ;;
+    --undo) set_action undo; shift ;;
+    --discard) DISCARD=1; shift ;;
+    --owner | --owner=*)
+        case "$1" in
+        --owner=*) OWNER="${1#*=}"; shift ;;
+        *)
+            [[ $# -ge 2 ]] || { echo "t-playlist: --owner requires a process id" >&2; exit 1; }
+            OWNER="$2"; shift 2
+            ;;
+        esac
+        ;;
     --show | --add | --rm | --del)
         [[ $# -ge 2 ]] || { echo "t-playlist: $1 requires a playlist name" >&2; exit 1; }
         case "$1" in
@@ -705,7 +933,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "t-playlist: unknown flag '$1' (verbs: --ls --show --add --rm --del --rename)" >&2
+        echo "t-playlist: unknown flag '$1' (verbs: --ls --show --add --rm --del --rename --undo)" >&2
         exit 1
         ;;
     *)
@@ -715,7 +943,7 @@ while (($#)); do
     esac
 done
 
-[[ -n "$ACTION" ]] || { echo "t-playlist: an action is required: --ls --show --add --rm --del --rename (see 't-playlist -h')" >&2; exit 1; }
+[[ -n "$ACTION" ]] || { echo "t-playlist: an action is required: --ls --show --add --rm --del --rename --undo (see 't-playlist -h')" >&2; exit 1; }
 validate_enum "$COLOR_MODE" auto always never || die "--color must be one of: auto, always, never"
 
 # A selector with no action to select for. `t-play` rejects the same shape (--id without
@@ -729,11 +957,29 @@ elif [[ -n "$INDEX" ]]; then
     echo "t-playlist: --index belongs to --rm, not --$ACTION" >&2
     exit 1
 fi
+# The same kind of gate for the undo pair. --owner is not checked for being ALIVE: a dead
+# owner only means its copy goes to the reaper on the next call, which is not a usage error.
+if ((DISCARD)) && [[ "$ACTION" != "undo" ]]; then
+    echo "t-playlist: --discard belongs to --undo, not --$ACTION" >&2
+    exit 1
+fi
+if [[ -n "$OWNER" ]]; then
+    [[ "$OWNER" =~ ^[1-9][0-9]{0,9}$ ]] || { echo "t-playlist: --owner must be a positive integer (a process id)" >&2; exit 1; }
+    case "$ACTION" in
+    add | rm | del | rename | undo) ;;
+    *) echo "t-playlist: --owner belongs to --add, --rm, --del, --rename and --undo, not --$ACTION" >&2; exit 1 ;;
+    esac
+elif [[ "$ACTION" == "undo" ]]; then
+    echo "t-playlist: --undo requires --owner PID (the process whose write it takes back)" >&2
+    exit 1
+fi
 
 require_cmd jq
+reap_dead_copies
 
 case "$ACTION" in
 ls) do_ls ;;
+undo) do_undo ;;
 show | add | rm | del | rename)
     validate_name "$NAME"
     if [[ "$ACTION" == "rename" ]]; then
