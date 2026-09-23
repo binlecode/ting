@@ -1,6 +1,6 @@
 # PLAN — 全套件撤销铁律：以可撤销取代预先确认
 
-> **Status**: 草案 (Draft) · 铁律、范围与空歌单处理均已确认，待进入实施  
+> **Status**: 实施中 · 铁律、范围与空歌单处理均已确认；2026-09-23 对照代码核查，补入首帧提示、推迟停播的执行点与失效、改名撤销的刷新、`--rm` 下标入副本四处缺口  
 > **Priority**: 第一梯队 · 最高优先级（TUI 交互与心流专项）  
 > **Target Branch**: main  
 > **Roadmap 关联**: [`docs/ROADMAP.md`](ROADMAP.md)「第一梯队」——全套件撤销铁律  
@@ -103,11 +103,12 @@
 ### `--owner PID`
 
 - 接受于：`t-playlist --add / --rm / --del / --rename / --undo`；`t-play --enqueue / --queue-rm / --queue-clear / --undo`。
-- 门控（与 `--index belongs to --rm` 同一种门，`ARCH-cli-contract.md`「门模型」）：
-  - 值必须是正整数，否则退出 1 `invalid_input`；
+- 门控（与 `--index belongs to --rm` 同一种门，`ARCH-cli-contract.md`「门模型」；和那道门一样只在 stderr 说一句、退出 1，不出信封）：
+  - 值必须是正整数，否则退出 1；
   - 出现在其他动词上退出 1（「`--owner` belongs to …」），不静默忽略；
   - 不检查 PID 是否存活：写操作时 owner 已死只意味着副本会在下次调用时被清掉，不是用法错误。
 - 带 `--owner` 的成功写操作，`-j` 信封新增 `undo: {deadline: <epoch 秒>}`；不带则信封完全不变。
+- 写操作没有改动任何东西时（`--del` 一个不存在的列表，`deleted:false`）不写副本、信封不带 `undo`，该 owner 原有的副本原样保留：没有写就没有可撤销的东西。
 
 ### `--undo --owner PID [--discard] [-j]`
 
@@ -124,7 +125,7 @@
 | 锁超时 | 4 | `locked`（沿用 `t-playlist` 现有原因；`t-play` 新增同名原因） |
 | 参数错误 | 1 | `invalid_input` |
 
-- 成功信封：`{status:"ok", undone:<原动词>, ...}`。`t-playlist` 附 `name`（撤销后应显示的列表名，`--del` 与 `--rename` 撤销后就是原名）与 `index`（仅 `--rm` 的撤销：恢复出来那一项的位置，供 TUI 放光标）；`t-play` 附与其他队列动词相同的播放器记录（`pos/len/next/upcoming`），TUI 走现成的 `apply_player_record`。
+- 成功信封：`{status:"ok", undone:<原动词>, ...}`。`t-playlist` 附 `name`（撤销后应显示的列表名，`--del` 与 `--rename` 撤销后就是原名）与 `index`（仅 `--rm` 的撤销：恢复出来那一项的位置，供 TUI 放光标），`--rename` 的撤销再附 `from`（撤销前的名字，即改名后的新名；与 `--rename` 自己的信封对称），TUI 靠它认出屏幕上显示的是哪个列表；`t-play` 附与其他队列动词相同的播放器记录（`pos/len/next/upcoming`），TUI 走现成的 `apply_player_record`。
 
 ### 每次调用顺手清理
 
@@ -137,7 +138,8 @@
 - **`t-playlist`**：`$UT_STATE_DIR/undo/playlist-<owner>/`。不放在 `playlists/` 下：那里的 `*.json` 是 `--ls` 的命名空间；歌单名不能以 `.` 开头（`validate_name`），但把副本放到命名空间外面，就不用依赖这条规则。
 - **`t-play`**：`$TMPDIR/ting-<uid>/undo-queue-<owner>/`。在 `players/` 之外，`reap_dead_players` 遍历的是 `players/*.json`，不会误读。
 - **目录内容**（一个副本 = 一个目录，整体 `mv` 到位，保证原子）：
-  - `meta.json`：`{schema:1, owner, verb, deadline, objects:[{key, pre_exists, post_exists}]}`；`key` 在 `t-playlist` 是歌单名，在 `t-play` 是播放器 id；
+  - `meta.json`：`{schema:1, owner, verb, deadline, objects:[{key, pre_exists, post_exists}]}`，`--rm` 另加 `index`（撤销信封要回报它，而撤销时正文里已经没有那一项可查）；`key` 在 `t-playlist` 是歌单名，在 `t-play` 是播放器 id；
+  - `t-play` 的副本目录另放一个 `id` 文件（播放器 id 的纯文本）：`rm_player_files` 要找出以某个播放器为对象的副本，读这个文件是一次 `read`，不必对每个目录跑一次 `jq`；
   - `<k>.pre`、`<k>.post`：对象修改前 / 后的原文字节，`k` 是 `objects` 的下标；对应 `*_exists` 为 false 时不存在该文件。
 - 写副本：先在同级 `…tmp.$$` 目录写全，再 `rm -rf` 旧副本目录并 `mv` 新目录到位。都在对象锁内完成。
 - 核对：`[[ -f obj ]]` 与 `post_exists` 一致，且存在时 `cmp -s obj <k>.post`。`cmp` 与 `mv`、`mktemp`、`date` 同属系统基础工具，不算新增运行时依赖。
@@ -151,12 +153,16 @@
 
 ```bash
 UNDO_STORE=""        # playlist | queue — 本实例最后一次可撤销写发给了哪个存储
-UNDO_DEADLINE=0      # 信封里的 undo.deadline
+UNDO_END=0           # 撤销到期的时刻，换算到 $SECONDS 的时钟上（见下）
 UNDO_LABEL=""        # 提示用的短文本（动作 + 曲目或列表名）
 UNDO_STOP_PENDING=0  # 规则 7：到期才执行的停播
 ```
 
 它们不是副本，只是 `ting` 记得「该去哪个存储撤销、提示显示到什么时候」。副本本身只在磁盘上，是否能撤销永远由所有者命令判定。
+
+**本地时钟用 `$SECONDS`**：写成功时 fork 一次 `date +%s`，`UNDO_END=$((SECONDS + deadline - now))`。之后每一帧、每一轮的到期判定都是一次算术比较，不 fork——bash 3.2 没有 `EPOCHSECONDS` 也没有 `printf '%(%s)T'`，按帧 fork `date` 是每次重绘多一个进程。两边都是整秒，本地判定与所有者命令的判定最多差一秒，差出来的那一秒里按 `z` 得到的是 `undo_expired`，照第 4 步处理。
+
+**记录失效时挂着的停播立即执行**：内存记录被清空或被新记录替换，只要不是 `z` 成功，旧的撤销就再也做不成了——同存储的新写覆盖了槽，跨存储的新写 discard 了旧副本，到期，或 `undo_last` 得到退出 4。此时若 `UNDO_STOP_PENDING` 为 1，当场 `stop_current_playback`。清空记录只有一个函数（`undo_forget`），这条规则只写在它里面。
 
 ### 所有可撤销调用都带 `--owner $$`
 
@@ -168,26 +174,30 @@ UNDO_STOP_PENDING=0  # 规则 7：到期才执行的停播
 
 - 在列表按键分发里绑定 `z | Z) undo_last ;;`，任何视图都生效。
 - `undo_last`：
-  1. `UNDO_STORE` 为空或已过 `UNDO_DEADLINE` → 提示 `S_UNDO_NONE`，返回；
+  1. `UNDO_STORE` 为空或 `SECONDS >= UNDO_END` → 提示 `S_UNDO_NONE`，返回；
   2. 调 `"$PLAYLIST_BIN"` 或 `"$PLAY_BIN"` 的 `--undo --owner $$ -j`；
   3. 退出 0：取消 `UNDO_STOP_PENDING`，清空内存记录，按信封刷新视图（见下），提示 `S_UNDO_DONE`；
   4. 退出 4：清空内存记录，按 reason 提示（`undo_stale` 要明确说「列表已被别处修改，未撤销」），**不刷新、不猜**；
   5. 其他退出码：保留内存记录（锁超时可以重试），提示失败原因。
 - **刷新视图**：
-  - 歌单：若当前是 `LIST_SOURCE=playlist` 且显示的正是信封里的 `name`，`reload_playlist` 后把 `selected` 设为信封的 `index`（夹到 `NUM_ENTRIES-1` 以内），**再**按 `selected` 重算 `page_index`；若当前在搜索视图且撤销的是 `--del`，或是把列表删空的那次 `--rm`（删空后 TUI 已回到搜索视图），`open_playlist` 重新打开该列表，`--rm` 的情形再把光标放到信封的 `index`；其他视图只提示，不跳转。
-  - 队列：`apply_player_record` + `reload_queue`。
+  - 歌单：撤销的是 `--rename` 且屏幕上是信封的 `from`（改名后的新名）时，先把 `PLAYLIST_NAME` / `QUERY_LABEL` 改回信封的 `name`，然后照下一种情形处理——改名之后 `PLAYLIST_NAME` 已是新名，只按 `name` 比对会认不出屏幕上的列表，标题停在一个已不存在的名字上。若当前是 `LIST_SOURCE=playlist` 且显示的正是信封里的 `name`，`reload_playlist` 后把 `selected` 设为信封的 `index`（夹到 `NUM_ENTRIES-1` 以内），**再**按 `selected` 重算 `page_index`；若当前在搜索视图且撤销的是 `--del`，或是把列表删空的那次 `--rm`（删空后 TUI 已回到搜索视图），`open_playlist` 重新打开该列表，`--rm` 的情形再把光标放到信封的 `index`；其他视图只提示，不跳转。
+  - 队列：`apply_player_record`；当前在队列视图时再 `reload_queue`，其他视图不跳转。
 - 光标只用信封给出的位置，不用 TUI 自己记的下标：列表可能已被别处修改，只有所有者命令知道恢复到了哪里。
 
 ### 提示的生命周期与刷新
 
-- 现有规则是提示在下一次按键时被 `read_nav_input` 清掉。撤销提示改为：`display_menu` 在 `NOTICE_TEXT` 为空且 `now < UNDO_DEADLINE` 时，把 `UNDO_LABEL` + `S_UNDO_HINT` 画在同一个提示位上。按键仍会清掉普通提示，但只要撤销仍然有效，下一帧就重新显示撤销提示——**提示可见 ⇔ `z` 有效**。
-- `read_nav_input` 的 `-t 1` 刷新条件加上 `((UNDO_DEADLINE > 0))`，与 `PREF_DIRTY`、`IMAGE_DIRTY` 并列。`nav_tick` 里到期时：若 `UNDO_STOP_PENDING` 则执行 `stop_current_playback`，然后清空内存记录。副本文件不在这里删：它由所有者命令惰性判定为过期，由退出时的 discard 或下一次写覆盖。
+- 现有规则是提示在下一次按键时被 `read_nav_input` 清掉。撤销提示改为：`display_menu` 在 `SECONDS < UNDO_END` 时，总在提示位上画撤销提示——提示位为空时画 `UNDO_LABEL` + `S_UNDO_HINT`，已有普通提示时把 `S_UNDO_HINT` 接在它后面。按键仍会清掉普通提示，撤销提示照画。
+- **为什么是「接在后面」而不是「提示位空时才画」**：可撤销写的那一帧，提示位几乎总是被占着——`d` / `D` / `R` / `a` 成功时各自写了一条成功提示，删空时 `open_playlist` 写了 `S_PL_EMPTY`。只在空位上画，撤销提示要等到下一次按键才出现，恰好错过用户最可能想撤销的那一刻。两者并排，**提示可见 ⇔ `z` 有效**才从第一帧起成立。可撤销写成功时不再写自己的成功提示：`UNDO_LABEL` 已经说了做了什么（「已移出 → 列表名」），再写一条是同一句话说两遍。
+- `read_nav_input` 的 `-t 1` 刷新条件加上 `((UNDO_END > 0))`，与 `PREF_DIRTY`、`IMAGE_DIRTY` 并列，保证没有播放、没有按键时到期那一帧也会重画。
+- **到期判定放在主循环每一轮的开头，不放在 `nav_tick`**：`nav_tick` 只在读键超时时才跑，连续按键（按住 `j`）时一次也不跑，推迟的停播就会拖到用户停手为止。每一轮开头 `((UNDO_END > 0 && SECONDS >= UNDO_END)) && undo_forget`，按键与超时两条路都经过这里，而且只是一次算术比较。阻塞的提示（`a` 的选择器、`R` / `n` 的输入）期间主循环不转，停播推迟到提示返回后的第一轮——这时撤销早已过期，用户正在输入，延迟停播的那几秒无害，不为它在阻塞读里另开时钟。
+- 副本文件不在到期时删：它由所有者命令惰性判定为过期，由退出时的 discard 或下一次写覆盖。
 
 ### 推迟的停播（规则 7）
 
 - `delete_from_playlist`：删除前 `focused_is_playing` 为真时，不再立即 `stop_current_playback`，改为置 `UNDO_STOP_PENDING=1`。
 - `delete_current_playlist`：同理（列表内有在播曲目时）。
-- 宽限期内按 `Enter` 播别的：`play_selected` 本来就会先 `stop_current_playback`，这时顺手清掉 `UNDO_STOP_PENDING`。
+- 宽限期内按 `Enter` 播别的：`play_selected` 本来就会先 `stop_current_playback`，这时顺手清掉 `UNDO_STOP_PENDING`（只清停播，不清撤销记录：撤销仍可做，只是那一首已经不在播了）。
+- 宽限期内又做了一次可撤销写：见「内存记录」的失效规则，挂着的停播当场执行。
 - 宽限期内退出：`q` 本来就停播；`Q`（保留播放退出）让已删除的那一首继续播完——这是用户明确选择的「让它继续播」，不额外处理。
 
 ### 删除的确认
@@ -227,6 +237,10 @@ UNDO_STOP_PENDING=0  # 规则 7：到期才执行的停播
 | `ting` 被 `kill -9`，副本残留 | 规则 5：下次任意调用清理死 owner 的副本 |
 | 两个 `ting` 实例、agent 互相撤销 | 规则 4：副本按 owner 分槽；agent 不带 `--owner` 不留副本 |
 | 连续多次 `d` 后按 `z` | 单槽：只撤销最后一次，提示里写明是哪一首 |
+| 写成功那一帧提示位被成功提示或 `S_PL_EMPTY` 占着，看不到撤销提示 | 撤销提示接在普通提示后面，从第一帧起可见 |
+| 连续按键时 `nav_tick` 不跑，推迟的停播过期不执行 | 到期判定在主循环每一轮开头，用 `$SECONDS` 比较 |
+| 宽限期内又做了一次可撤销写，旧撤销作废而停播仍挂着 | `undo_forget`：记录失效（非 `z` 成功）时挂着的停播当场执行 |
+| `R` 之后 `z`，屏幕标题停在新名上 | 撤销信封带 `from`，TUI 认出屏幕上的列表并改回原名 |
 
 ---
 
@@ -268,6 +282,7 @@ UNDO_STOP_PENDING=0  # 规则 7：到期才执行的停播
    - `d` → 等撤销提示从帧上消失 → `z` → 提示「无可撤销」，列表不变；
    - 在播行 `d` → 宽限期内播放条仍在 → `z` → 播放条始终未消失；另一轮不按 `z` → 播放条在提示消失时一同消失；
    - `D` → 回到搜索 → `z` → 列表重新打开；
+   - `R` 改名 → `z` → 标题回到原名，`--ls` 里只有原名；
    - 单曲歌单 `d` → 回到搜索、帧上无 `y/N`、有空列表提示与撤销提示 → `z` → 列表重新打开且那一首在；另一轮不按 `z` → `b` 的选择器里该列表仍在、显示 0 首；
    - `q` 退出后状态目录下该 owner 的副本目录不存在。
 
