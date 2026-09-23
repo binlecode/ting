@@ -253,7 +253,16 @@ stopped moving, and the two were unhitched deliberately when the packaging decis
 `p`/`P` move it earlier/later · `X` drop everything still waiting ·
 `Space` pause · `-`/`=` volume · `#` row numbers (the jump's partner: it prints the
 number `Nj` takes) · `Tab` list mode ·
-`[`/`]` seek · `r` loop mode · `s` stop · `l` language · `t` theme · `q` quit
+`[`/`]` seek · `r` loop mode · `s` stop · `l` language · `t` theme · `z` undo · `q` quit
+
+**Nothing asks "are you sure".** `d`, `D` (delete the playlist on screen) and `X` act on one
+key, and so do `a`, `R`, `+` and `x`; for three seconds after any of them the notice line says
+`z to undo`, and `z` puts it back exactly — the row in its own slot, the list under its old
+name, the queue as it was. A confirmation guards nothing once `d y` has become one gesture; a
+cheap way back does. Deleting the track that is playing does not stop it until the undo has
+closed, so `z` inside the window never interrupts the sound. The copy is kept by the store
+that was written, for this `ting` only: `t-playlist` and `t-play` take `--owner PID` and
+`--undo` for any caller that wants the same (`docs/ARCH-player.md`「撤销副本」).
 
 **The hint block has three tiers and `?` cycles them.** `core` — the shipped default — prints
 this view's own job (move, act on the row, get back out, quit, and `?` itself) and fits one
@@ -308,7 +317,8 @@ follows it over each boundary, so the bar under the rows is always the chapter y
 source, so it reads `chapters='<the item>'`.
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
-nothing and the log has no per-row removal to call. It names the track and defaults to no.
+nothing and the log has no per-row removal to call. Taking out the last track leaves the list
+there, empty, for `D` to delete if that is what you meant.
 The row count lives on the two page EDGES rather than on a key of its own: `→` past the last
 page fetches one batch more, and `←` on page 1 drops one again — a local truncation, no
 re-fetch, with a screenful as the floor. Ten of these keys — engine, sort, mode, quality
