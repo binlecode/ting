@@ -491,12 +491,18 @@ ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AR
 - 失败 → `{status:"error", engine, url, mode, reason}`，`reason` 用与播放相同的枚举，
   且**退出 2+** —— 下限抬到 2，因为一个视频不可用时 yt-dlp 退出 1，而 1 是留给用法错误的。
 
-auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不跑 yt-dlp：
+auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不跑 yt-dlp（只读本机的 cookie 文件一个字节）：
 - **`auth`** ∈ `cookie | anonymous` —— 调用方要渲染的那个摘要。
   它 `== "cookie"` 当且仅当 `cookie_browser != "none"` **且** `profile_found`。
 - **`cookie_browser`** = `<ENGINE>_COOKIE_BROWSER` 的原值（`chrome`、`safari`、`none`…），
   引擎名大写就是那个变量名（「配置面」、「加一个引擎」）。
 - **`profile_found`** = 那个浏览器的 profile 目录在这台机器上在不在。
+- **`cookie_readable`** ∈ `true | false | null` —— 那份 cookie 库**这个进程读不读得出来**：
+  列出浏览器目录、找到最新的 cookie 文件、读它一个字节（ARCH-engine.md 匿名回退一节）。
+  它是另一个问题，不是 `auth` 的修正：目录在、`auth:"cookie"`，而 macOS 隐私保护不让当前终端 app
+  进去 —— 这时 `auth` 仍如实说"会尝试"，`cookie_readable:false` 说"尝试会落空、会走匿名"。
+  `null` = 没有尝试（`auth:"anonymous"`）或这个浏览器没有探针，不作任何断言。
+  加它而不是改 `auth` 的含义，是为了不让任何一个现有读者读错。
 - **这个信封承诺的是"发不发"，此外什么都不承诺 —— 而"此外"是两件事。**
   站点**认不认**（过期登录照样报 `cookie`），以及认了之后这个账号**够到什么**。
   第二件是量过的：本机实测 2026-08-26 —— 从 chrome 提取到 3159 个 cookie，
@@ -514,8 +520,12 @@ stopped_by_user | unknown | null(ok)`。**`cookies` 说的是本机，不是站�
 读不出来（最常见的是 macOS 隐私保护不让当前终端 app 读 Chrome 的数据目录，yt-dlp 的目录遍历
 把它报成 "could not find … cookies database"），请求根本没发出去。它挣到一个成员，是因为调用方
 在它上面的分支与众不同：不是重试，也不是放弃，而是**去掉 cookie 再问一次**或去授权 ——
-`yt-search` 自己就这么做（仅在分类为 `cookies` 时匿名重试一次），与 `resolve_stream` 早已有的
-匿名回退同理；在此之前它只能报成 `unknown`。**`network` 除了连通性之外也涵盖 HTTP 429 限流**：
+每个读 cookie 的动词自己就这么做（仅在分类为 `cookies` 时匿名重试一次），所以它只在匿名那次
+也失败时才会被看到的是**另一个** reason；在此之前它只能报成 `unknown`。
+**原因在信封里，怎么办在 stderr 里。** 分类为 `cookies` 时引擎往 stderr 写**一行**人话：
+丢了什么、为什么、怎么修（授权哪个终端 app、或设 `<ENGINE>_COOKIE_BROWSER=none`）。
+`-j` 下也写 —— 那是给人看的散文，不是契约，信封的形状一个字节不变；一次干净的调用 stderr 为空，
+所以"stderr 有字"本身就是"有件事该告诉用户"。**`network` 除了连通性之外也涵盖 HTTP 429 限流**：
 两者都是可重试的，而那是调用方在它上面唯一会走的分支，
 所以在一个三个动词都在发布的契约里，429 没有挣到一个新的枚举成员。
 它是刻意**不**跟 `forbidden` 归在一起的 —— 403 说的是这份凭据永远不行，429 说的是现在不行。
@@ -936,7 +946,7 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    同时检查这个站的 `webpage_url` 会不会把偏移带进 `url`；会的话就剥掉它，且**只剥它**。
 4. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
    「配置面」），信封按 「数据契约」，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`
-   等价。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
+   等价；`cookie_readable` 来自这个引擎自己的 `cookie_probe`。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
    `tests/contract.sh` 把这几条当作对**每一个被发现的**引擎的不变量来断言，
    所以第三个引擎落地那天它就被覆盖了 —— 不是等谁想起来去加一行。
 5. **旋钮前缀：** 引擎自己的调校一律读 `FOO_*`（引擎名大写 —— cookie、格式、传输，

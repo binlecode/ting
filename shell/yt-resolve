@@ -359,7 +359,7 @@ classify_yt_dlp_error() {
     # The browser's cookie store could not be read, before any request was made — the same
     # member and the same wording yt-search's reader matches (the enum is ARCH-cli-contract.md
     # 「数据契约」). First, because it says nothing about the site.
-    if grep -qiE 'could not (find|copy) [a-z]+ cookies? database|failed to decrypt|cannot decrypt|find-generic-password|keyring|keychain' <<<"$text"; then
+    if grep -qiE 'could not (find|copy) [a-z]+ cookies? database|failed to decrypt|cannot decrypt|find-generic-password|keyring|keychain|\[Errno [0-9]+\][^:]*: .*(Cookies|cookies\.sqlite|binarycookies)' <<<"$text"; then
         echo "cookies"
         return
     fi
@@ -384,6 +384,126 @@ classify_yt_dlp_error() {
         return
     fi
     echo "unknown"
+}
+
+# ── the cookie store, diagnosed ─────────────────────────────────────────────────────────
+# yt-dlp words several different causes as ONE sentence. A folder the calling terminal app
+# is not allowed into (macOS privacy protection) is walked as empty and reported "could not
+# find … cookies database" — the same words as a browser that was never used, and the same
+# command then works from another terminal. cookie_probe tells them apart by doing what
+# yt-dlp does: list the browser's folder, find its newest cookie file, read one byte of it.
+# `[ -r ]` would not do: it consults Unix permissions, and privacy protection sits above
+# them. Local — no network, no Keychain. The paths are site knowledge, so each engine carries
+# its own copy (ARCH-engine.md, the anonymous-fallback section).
+COOKIE_STATE=""; COOKIE_PATH=""; COOKIE_ERR=""
+cookie_denied() {
+    COOKIE_ERR=$1
+    if [[ "$1" == *"Operation not permitted"* && "$(uname -s)" == "Darwin" ]]; then
+        COOKIE_STATE="blocked"
+    else
+        COOKIE_STATE="denied"
+    fi
+    return 0
+}
+cookie_probe() {
+    COOKIE_STATE="unknown"; COOKIE_PATH=""; COOKIE_ERR=""
+    local b=$1 root="" name="Cookies" as="$HOME/Library/Application Support" mac=0 f newest="" err
+    if [[ "$(uname -s)" == "Darwin" ]]; then mac=1; fi
+    case "$b" in
+    chrome)   if ((mac)); then root="$as/Google/Chrome"; else root="$HOME/.config/google-chrome"; fi ;;
+    chromium) if ((mac)); then root="$as/Chromium"; else root="$HOME/.config/chromium"; fi ;;
+    brave)    if ((mac)); then root="$as/BraveSoftware/Brave-Browser"; else root="$HOME/.config/BraveSoftware/Brave-Browser"; fi ;;
+    edge)     if ((mac)); then root="$as/Microsoft Edge"; else root="$HOME/.config/microsoft-edge"; fi ;;
+    opera)    if ((mac)); then root="$as/com.operasoftware.Opera"; else root="$HOME/.config/opera"; fi ;;
+    vivaldi)  if ((mac)); then root="$as/Vivaldi"; else root="$HOME/.config/vivaldi"; fi ;;
+    firefox)  name="cookies.sqlite"
+              if ((mac)); then root="$as/Firefox"; else root="$HOME/.mozilla/firefox"; fi ;;
+    safari)   ((mac)) || return 0
+              name="Cookies.binarycookies"
+              root="$HOME/Library/Containers/com.apple.Safari/Data/Library/Cookies"
+              if [[ ! -d "$root" ]]; then root="$HOME/Library/Cookies"; fi ;;
+    *) return 0 ;;
+    esac
+    COOKIE_PATH=$root
+    if [[ ! -e "$root" ]]; then COOKIE_STATE="missing"; return 0; fi
+    if ! err=$(ls "$root" 2>&1 >/dev/null); then cookie_denied "$err"; return 0; fi
+    # Newest wins because that is the profile yt-dlp itself picks when none is named.
+    while IFS= read -r f; do
+        if [[ -z "$newest" || "$f" -nt "$newest" ]]; then newest=$f; fi
+    done < <(find "$root" -maxdepth 3 -type f -name "$name" 2>/dev/null)
+    if [[ -z "$newest" ]]; then COOKIE_STATE="missing"; return 0; fi
+    COOKIE_PATH=$newest
+    if ! err=$(head -c1 "$newest" 2>&1 >/dev/null); then cookie_denied "$err"; return 0; fi
+    COOKIE_STATE="readable"
+    return 0
+}
+# The app to name in the fix. TERM_PROGRAM is what the terminal says it is; tmux and screen
+# replace it with themselves, and then the honest answer is that we cannot tell.
+terminal_app() {
+    case "${TERM_PROGRAM:-}" in
+    Apple_Terminal) echo "Terminal" ;;
+    iTerm.app) echo "iTerm" ;;
+    ghostty) echo "Ghostty" ;;
+    vscode) echo "VS Code" ;;
+    WezTerm) echo "WezTerm" ;;
+    WarpTerminal) echo "Warp" ;;
+    "" | tmux | screen)
+        if [[ "${TERM:-}" == "xterm-kitty" ]]; then echo "kitty"; else echo "your terminal app"; fi ;;
+    *) echo "$TERM_PROGRAM" ;;
+    esac
+}
+# ONE line on stderr that says what was lost, why, and the fix. stderr and not the envelope:
+# it is prose for a person, and the -j envelope keeps its shape (ARCH-cli-contract.md).
+cookie_diagnosis() {
+    local b=${YT_COOKIE_BROWSER:-} first="" app prog="yt-resolve" knob="YT_COOKIE_BROWSER"
+    cookie_probe "$b"
+    first=$(printf '%s\n' "$1" | grep -m1 'ERROR' | sed 's/^ERROR: //') || first=""
+    case "$COOKIE_STATE" in
+    blocked)
+        app=$(terminal_app)
+        printf '%s: no %s cookies: macOS blocks %s from reading them - grant it Full Disk Access (System Settings > Privacy & Security), restart it; or set %s=none\n' \
+            "$prog" "$b" "$app" "$knob" ;;
+    denied)
+        printf '%s: no %s cookies: %s reading %s; or set %s=none\n' \
+            "$prog" "$b" "${COOKIE_ERR##*: }" "$COOKIE_PATH" "$knob" ;;
+    missing)
+        printf '%s: no %s cookies: %s has no cookie database - sign in to it once; or set %s=none (looked under %s)\n' \
+            "$prog" "$b" "$b" "$knob" "$COOKIE_PATH" ;;
+    readable)
+        case "$b" in
+        firefox | safari)
+            printf '%s: no %s cookies: %s; or set %s=none\n' \
+                "$prog" "$b" "${first:-yt-dlp could not load them}" "$knob" ;;
+        *)
+            printf '%s: no %s cookies: they could not be decrypted - allow Keychain access to "%s Safe Storage" when macOS asks; or set %s=none\n' \
+                "$prog" "$b" "$b" "$knob" ;;
+        esac ;;
+    *)
+        printf '%s: no %s cookies: %s; or set %s=none\n' \
+            "$prog" "$b" "${first:-yt-dlp could not load them}" "$knob" ;;
+    esac
+    return 0
+}
+# Run one yt-dlp command ("$@", cookie args NOT included) with the configured cookie store,
+# and once more WITHOUT it when the store itself is what failed — only then, so a network
+# error is not paid for twice. stdout is the command's; yt-dlp's stderr lands in ERR_FILE for
+# the caller's classifier; the diagnosis goes to this process's stderr.
+ytdlp_cookied() {
+    local out="" rc=0
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        out=$("$@" "${COOKIE_ARGS[@]}" 2>"$ERR_FILE") || rc=$?
+        if ((rc != 0)) || [[ -z "$out" ]]; then
+            if [[ "$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")" == "cookies" ]]; then
+                cookie_diagnosis "$(cat "$ERR_FILE" 2>/dev/null)" >&2
+                rc=0
+                out=$("$@" 2>"$ERR_FILE") || rc=$?
+            fi
+        fi
+    else
+        out=$("$@" 2>"$ERR_FILE") || rc=$?
+    fi
+    printf '%s' "$out"
+    return "$rc"
 }
 
 # This process's own scratch dir: 0700, created lazily, removed however we exit. Lazily
@@ -894,6 +1014,11 @@ resolve_stream() {
 
     if ((${#COOKIE_ARGS[@]} > 0)); then
         raw_c=$(dump_once "${COOKIE_ARGS[@]}") || rc_c=$?
+        # The anonymous attempt below already covers a store that cannot be read; this only
+        # says so, once, in words (see cookie_diagnosis).
+        if ((rc_c != 0)) && [[ "$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc_c")" == "cookies" ]]; then
+            cookie_diagnosis "$(cat "$ERR_FILE" 2>/dev/null)" >&2
+        fi
         if ((rc_c == 0)) && [[ -n "$raw_c" ]] && probe_raw "$raw_c"; then
             emit_stream "$raw_c" 0
             return 0
@@ -935,13 +1060,10 @@ resolve_stream() {
 resolve_info() {
     ensure_scratch
     local cmd=(yt-dlp --dump-single-json --skip-download)
-    if ((${#COOKIE_ARGS[@]} > 0)); then
-        cmd+=("${COOKIE_ARGS[@]}")
-    fi
     cmd+=(--no-warnings --quiet "$TARGET_URL")
 
     local raw rc=0
-    raw=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+    raw=$(ytdlp_cookied "${cmd[@]}") || rc=$?
 
     if ((rc != 0)) || [[ -z "$raw" ]]; then
         local reason
@@ -1081,9 +1203,6 @@ resolve_transcript() {
     mkdir -p "$dir" 2>/dev/null || true
 
     local cmd=(yt-dlp --skip-download --no-simulate)
-    if ((${#COOKIE_ARGS[@]} > 0)); then
-        cmd+=("${COOKIE_ARGS[@]}")
-    fi
     cmd+=(
         --write-subs --write-auto-subs
         --sub-langs "$langs"
@@ -1099,7 +1218,7 @@ resolve_transcript() {
     # reason enum the resolve and search paths use, instead of being reported as a generic
     # "no captions" when the real answer is 429 / private video / no network.
     local out rc=0
-    out=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+    out=$(ytdlp_cookied "${cmd[@]}") || rc=$?
 
     local vid subs_json
     vid=$(printf '%s\n' "$out" | sed -n 1p)
@@ -1238,15 +1357,12 @@ resolve_items() {
     # returned before — and with one it starts where the last envelope said it stopped.
     local start=$((CURSOR_OFFSET + 1)) end=$((CURSOR_OFFSET + ITEMS_MAX))
     local cmd=(yt-dlp --flat-playlist -J --playlist-items "$start:$end")
-    # Cookies for the same reason --info takes them: a caller's own unlisted playlist is
-    # readable with the login it already configured, and this verb makes no other use of it.
-    if ((${#COOKIE_ARGS[@]} > 0)); then
-        cmd+=("${COOKIE_ARGS[@]}")
-    fi
+    # Cookies (through ytdlp_cookied) for the same reason --info takes them: a caller's own
+    # unlisted playlist is readable with the login it already configured.
     cmd+=(--no-warnings --quiet "$CONTAINER_URL")
 
     local raw rc=0
-    raw=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+    raw=$(ytdlp_cookied "${cmd[@]}") || rc=$?
 
     if ((rc != 0)) || [[ -z "$raw" ]]; then
         items_fail "$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")"
@@ -1380,19 +1496,31 @@ def item_url: if (.url | type) == "string" and (.url | startswith("http"))
 # login still reports "cookie", and so does a live login on an account entitled to nothing
 # the anonymous client cannot already have. The sibling engine carries the measured case.
 resolve_auth() {
-    local auth="anonymous" found=false
+    local auth="anonymous" found=false readable=null
     if ((${#COOKIE_ARGS[@]} > 0)); then
         auth="cookie"
         found=true
+        # `auth` says the engine will TRY the store; this says whether the try can succeed.
+        # A profile folder that exists is not a store this process may read (cookie_probe),
+        # and a status line that said "signed in" over a blocked read was the whole bug.
+        # null = no probe for this browser, so no claim either way.
+        cookie_probe "$YT_COOKIE_BROWSER"
+        case "$COOKIE_STATE" in
+        readable) readable=true ;;
+        unknown) readable=null ;;
+        *) readable=false ;;
+        esac
     fi
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg engine "$ENGINE_NAME" --arg auth "$auth" \
-            --arg browser "$YT_COOKIE_BROWSER" --argjson found "$found" \
+            --arg browser "$YT_COOKIE_BROWSER" --argjson found "$found" --argjson readable "$readable" \
             '{status: "ok", engine: $engine, auth: $auth,
-              cookie_browser: $browser, profile_found: $found}'
+              cookie_browser: $browser, profile_found: $found, cookie_readable: $readable}'
         return 0
     fi
-    if [[ "$auth" == "cookie" ]]; then
+    if [[ "$auth" == "cookie" && "$readable" == "false" ]]; then
+        printf 'cookie (%s, unreadable: %s)\n' "$YT_COOKIE_BROWSER" "$COOKIE_STATE"
+    elif [[ "$auth" == "cookie" ]]; then
         printf 'cookie (%s)\n' "$YT_COOKIE_BROWSER"
     else
         printf 'anonymous\n'
@@ -1471,8 +1599,9 @@ Items JSON (--items -j): {status,engine,id,url,title,count,total,has_more,next_c
   A `list=` is expanded ONLY by this verb. Every other verb here still passes
   --no-playlist, so a single video's URL never turns into a queue on its own.
 
-Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
+Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found,cookie_readable}
   auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
+  cookie_readable: can this process read the store (true|false; null = not tried/no probe).
 
 Exit codes: 0 ok · 1 usage/validation · 2+ a missing dependency, or a propagated
             yt-dlp failure (see .reason)

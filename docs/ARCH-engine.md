@@ -459,12 +459,25 @@ ranged 请求**（`curl -I -r 0-`）：206/200 ⇒ 有权；403 ⇒ 缺 PO token
 **profile 在、却读不出来，是第三种情况，而且只有运行时才知道。** 存在性检查只看目录；
 macOS 的隐私保护可以不让**当前终端 app** 读 Chrome 的数据目录，这时 yt-dlp 的目录遍历什么都
 找不到，报的是 "could not find chrome cookies database" —— 同一台机器、同一条命令，换一个终端
-app 就好了。分类器把它认成 `cookies`（ARCH-cli-contract.md「数据契约」），请求根本没发出去。
-解析那一半本来就会在 cookie 尝试失败后匿名再来一次，所以播放不受影响；搜索原先没有这一步，
-于是每一次搜索都失败。现在 `yt-search` **只在分类为 `cookies` 时**去掉 cookie 重问一次 ——
-YouTube 搜索不需要登录，而只认这一个原因，是为了不让一次网络错误花两遍时间。
-`--info` / `--transcript` 不回退，照实报 `cookies`，让调用方去授权或设 `none`。
-`--auth` 报的是"会不会**尝试**送 cookie"，不是"读不读得出来"：这种情况下状态行照样写着已登录。
+app 就好了。它和"从没用过这个浏览器"是**同一句话**，所以引擎自己去分辨：
+- **分类**：`cookies`（ARCH-cli-contract.md「数据契约」）认两种措辞 —— yt-dlp 自己的
+  "could not find / copy … cookies database"、钥匙串与解密失败，以及落在 cookie 文件路径上的
+  原始 OS 错误（`[Errno 13] Permission denied: '…/Cookies'`）。请求根本没发出去。
+- **回退**：每个读 cookie 的 yt-dlp 调用都经 `ytdlp_cookied`，**只在分类为 `cookies` 时**去掉
+  cookie 重问一次 —— 只认这一个原因，是为了不让一次网络错误花两遍时间；`resolve_stream` 本来
+  就有的匿名回退保持原样，只是多说一句为什么。于是一份读不出来的库永远不会让一个动词失败，
+  代价只是登录才看得见的内容。
+- **诊断**：`cookie_probe` 做 yt-dlp 做的事 —— 列浏览器目录、找最新的 cookie 文件、读它一个字节
+  —— 得出 `readable | blocked | denied | missing | unknown`。它必须真去读：`[ -r ]` 看的是 Unix
+  权限，而隐私保护压在那之上，文件看上去可读、读的时候才被拦。`blocked` 只认 macOS 上的
+  "Operation not permitted"，其余读错一律 `denied` 并原样带上系统的话，所以猜错一种措辞也不会
+  吞掉真话。要修的那个 app 取自 `$TERM_PROGRAM`；tmux/screen 会把它换成自己，那时如实说
+  "your terminal app"。`blocked` 这一支没法在测试里造出来（隐私保护不能对一个临时目录打开），
+  它是唯一一个只在真机上看得到的状态。
+- **说出来**：分类为 `cookies` 时往 stderr 写一行，**先因后法、路径殿后**（TUI 的提示只有一行，
+  放不下的从尾巴截掉）。
+- **`--auth`** 用同一个探针加出 `cookie_readable`：`auth` 仍是"会不会尝试"，这个字段是"尝试会不会
+  落空" —— 状态行据此不再在一次被拦的读取上写"已登录"。
 
 **这个决定是可查询的，靠 `--auth`。** 上面那两句里藏着一件调用方看不见的事：cookie 究竟会不会
 被送出去，取决于**两个**条件 —— 变量不是 `none`，**并且**那个 profile 目录真的在这台机器上。

@@ -781,9 +781,13 @@ ncmpcpp、ncspot 都是），所以它是唯一一个不用教的选择；`R` **
 
     **按设计保持英文的**：帮助文本、错误句子（`Play failed:`、`no results`、`search failed`），
     以及页眉/状态行的 `k=v` 字段标签。
-    `search failed` 后面带着引擎信封的 `reason`（`search failed (cookies)`）：`-j` 下引擎把原因
-    写进 stdout 的信封、stderr 是空的，只读 stderr 的旧写法让原因在屏幕上消失 —— 一次
-    "终端 app 读不了 Chrome cookie" 就这样被报成了一句什么都没说的失败。
+    `search failed` 后面先带引擎信封的 `reason`，再带引擎 stderr 的那一行建议
+    （`search failed (network): no chrome cookies: macOS blocks Ghostty …`）：`-j` 下原因在
+    stdout 的信封里、建议在 stderr 里，只读 stderr 的旧写法两样都丢了 —— 一次"终端 app 读不了
+    Chrome cookie"就这样被报成了一句什么都没说的失败。**成功时**同一行变成一条提示
+    （`store_notice`，下一个键就消失）：结果照来、登录却没带上，恰恰是最需要说、又最安静的那种；
+    一次干净的搜索 stderr 为空，所以这条提示不会平白出现。状态行的认证段同理多了第三态：
+    `--auth` 报 `cookie_readable:false` 时写"匿名（cookie 读不到）"，而不是"已登录"。
   - **chrome 一次运行只说一套主题 —— 而且那是终端的主题，不是我们的。** 默认调色板
     （`minimal`）只用 ANSI 16 的索引码；刻意不用 RGB、也不用 256 色 —— minimal/mono
     路径能发出的转义只有 0/1/2/32/33/34/36 与 1;3x 的复合，加上音源胶囊在 minimal 档的

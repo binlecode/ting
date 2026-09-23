@@ -478,14 +478,17 @@ engine_resolve_bin() {
 # It reports the cookie DECISION, not a valid login — an expired session still answers
 # "cookie". The status line therefore says which profile playback will READ, which is the
 # question a user can act on; whether the site accepted it is not knowable without a round
-# trip this suite does not make.
+# trip this suite does not make. What IS knowable locally is whether the store can be read
+# at all (`cookie_readable`, one read of the cookie file): a terminal app macOS will not let
+# into the browser's folder gets the anonymous client whatever the decision said.
 #
 # An engine whose resolve half has no --auth exits non-zero and the field simply
 # disappears — the same way a missing --transcript states a missing capability by not
 # existing, so a third engine is never blocked on implementing this.
 #
 # Recomputed on each source switch rather than kept in a map: bash 3.2 has no associative
-# array, and one I/O-free fork is cheaper than keeping parallel arrays correct.
+# array, and one fork (~50 ms, a directory listing and a one-byte read) is cheaper than
+# keeping parallel arrays correct.
 ENGINE_AUTH=""
 refresh_engine_auth() {
     ENGINE_AUTH=""
@@ -498,6 +501,11 @@ refresh_engine_auth() {
     cookie)
         b=$(printf '%s' "$out" | jq -r '.cookie_browser // empty' 2>/dev/null) || b=""
         ENGINE_AUTH="${b:-cookie}"
+        # A store the engine will try and cannot read is not "signed in". `false` only:
+        # a missing field (an older engine) or null (a browser it cannot probe) claims nothing.
+        if [[ "$(printf '%s' "$out" | jq -r '.cookie_readable' 2>/dev/null)" == "false" ]]; then
+            ENGINE_AUTH="blocked"
+        fi
         ;;
     anonymous) ENGINE_AUTH="anon" ;;
     esac
@@ -2055,7 +2063,7 @@ set_ui_lang() {
         S_U_RESULTS="结果"; S_U_ITEMS="项"; S_U_CHAP="章"; S_U_PAGE="页"; S_LISTMODE="视图"
         S_SORT_RELEVANCE="相关度"; S_SORT_VIEWS="播放量"; S_SORT_DUR="时长"
         S_MODE_AUDIO="音频"; S_MODE_VIDEO="视频"; S_MODE_FAST="快速"
-        S_AUTH_IN="已登录"; S_AUTH_ANON="匿名"; S_LIKES="赞"; S_TOTAL="总长"
+        S_AUTH_IN="已登录"; S_AUTH_ANON="匿名"; S_AUTH_BLOCKED="匿名（cookie 读不到）"; S_LIKES="赞"; S_TOTAL="总长"
         S_SEEK="跳转"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
@@ -2108,7 +2116,7 @@ set_ui_lang() {
         S_U_RESULTS="results"; S_U_ITEMS="items"; S_U_CHAP="chapters"; S_U_PAGE="page"; S_LISTMODE="view"
         S_SORT_RELEVANCE="relevance"; S_SORT_VIEWS="views"; S_SORT_DUR="duration"
         S_MODE_AUDIO="audio"; S_MODE_VIDEO="video"; S_MODE_FAST="fast"
-        S_AUTH_IN="signed in"; S_AUTH_ANON="anonymous"; S_LIKES="likes"; S_TOTAL="total"
+        S_AUTH_IN="signed in"; S_AUTH_ANON="anonymous"; S_AUTH_BLOCKED="anonymous (cookies unreadable)"; S_LIKES="likes"; S_TOTAL="total"
         S_SEEK="seek"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
@@ -4356,15 +4364,21 @@ fetch_json() {
     spin_stop
     SEARCH_ERR=$(<"$errfile")
     rm -f "$errfile"
-    # Under -j an engine says why on STDOUT, in the envelope, and writes nothing to stderr —
-    # so a failed search used to reach the screen as a bare "search failed" with its reason
-    # thrown away. The reason is the one field an engine promises on failure; use it.
-    if ((rc != 0)) && [[ -z "$SEARCH_ERR" ]]; then
+    # Under -j an engine says WHY on stdout, in the envelope, and what a person can do about
+    # it on stderr — one line, and only when there is something to do (the cookie diagnosis;
+    # a clean search writes nothing there). A failed search used to reach the screen as a
+    # bare "search failed" with both thrown away. Now the reason leads and the advice follows.
+    # On SUCCESS the same line is a notice: results that came back without the login the
+    # status line promised are the case that most needs saying, and it is the quiet one.
+    local note="${SEARCH_ERR##*$'\n'}"
+    note=${note#"${ENGINE_SEARCH##*/}: "}
+    if ((rc != 0)); then
         local why
         why=$(printf '%s' "$out" | jq -r '.reason // empty' 2>/dev/null) || why=""
-        [[ -n "$why" ]] && SEARCH_ERR="search failed ($why)"
+        if [[ -n "$why" ]]; then SEARCH_ERR="search failed ($why)${note:+: $note}"; fi
+        return 1
     fi
-    ((rc == 0)) || return 1
+    if [[ -n "$note" ]]; then store_notice "$S_SEARCH_ACT:" "$note"; fi
     cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
     [[ "$cnt" != "0" ]] || return 2
     json="$out"
@@ -4769,6 +4783,7 @@ display_list_menu() {
         # those rows mix engines, so one token would be a false statement about half of them.
         if [[ -n "$ENGINE_AUTH" ]]; then
             if [[ "$ENGINE_AUTH" == "anon" ]]; then st_items+=("$S_AUTH_ANON")
+            elif [[ "$ENGINE_AUTH" == "blocked" ]]; then st_items+=("$S_AUTH_BLOCKED")
             else st_items+=("$S_AUTH_IN"); fi
         fi
     fi
@@ -8846,10 +8861,9 @@ while true; do
     R) rename_current_playlist ;;     # rename the playlist on screen
     # The three row sources say "did not open" with 1 — an empty log, a one-part video, a
     # video with no chapters, and every fetch that failed — and each of those paths has
-    # already printed its notice and waited on a key. Without `|| true` set -e reads that 1
-    # as a dying TUI and takes the whole loop down ON THE KEYPRESS that was supposed to
-    # dismiss the notice, which is the worst possible moment to exit: the user pressed a key
-    # to go back. Same guard, same reason, as the Enter arm above.
+    # already stored its notice (a frame line the next key clears). Without `|| true` set -e
+    # reads that 1 as a dying TUI and takes the whole loop down on the very key that opened
+    # the view, which is the worst possible moment to exit: the user asked for something. Same guard, same reason, as the Enter arm above.
     h | H) open_history || true ;;    # open the listening log as the row source
     c | C) open_parts || true ;;      # open the focused row's parts (?p=N) as the row source
     i | I) open_chapters || true ;;   # open the focused row's chapters as the row source (one --info)
