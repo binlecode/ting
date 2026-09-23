@@ -3296,7 +3296,8 @@ else
     tmux send-keys -t "$TS" b
     poll_until 10 pane_has '1\. renamed-list' >/dev/null
     tmux send-keys -t "$TS" 1 Enter
-    poll_until 10 pane_has "playlist='renamed-list'" >/dev/null
+    opened=$(poll_until 10 pane_has "playlist='renamed-list'")
+    report "1 reopens the renamed playlist by number" 1 "$opened"
 
     tmux send-keys -t "$TS" D
     poll_until 10 pane_has "Delete playlist" >/dev/null
