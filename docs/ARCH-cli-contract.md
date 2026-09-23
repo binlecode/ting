@@ -509,8 +509,13 @@ auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不�
 
 播放状态（`t-play -j -- <handle>`）—— 播放器自己的信封，也是唯一一个没有 `engine` 键的：
 播放器与站点无关，它回声出来的那个句柄就是别人给它的那个（ARCHITECTURE.md「命令拓扑」）。
-`reason` 枚举：`forbidden | unavailable | format_unavailable | network |
-stopped_by_user | unknown | null(ok)`。**`network` 除了连通性之外也涵盖 HTTP 429 限流**：
+`reason` 枚举：`forbidden | unavailable | format_unavailable | network | cookies |
+stopped_by_user | unknown | null(ok)`。**`cookies` 说的是本机，不是站点**：浏览器的 cookie 库
+读不出来（最常见的是 macOS 隐私保护不让当前终端 app 读 Chrome 的数据目录，yt-dlp 的目录遍历
+把它报成 "could not find … cookies database"），请求根本没发出去。它挣到一个成员，是因为调用方
+在它上面的分支与众不同：不是重试，也不是放弃，而是**去掉 cookie 再问一次**或去授权 ——
+`yt-search` 自己就这么做（仅在分类为 `cookies` 时匿名重试一次），与 `resolve_stream` 早已有的
+匿名回退同理；在此之前它只能报成 `unknown`。**`network` 除了连通性之外也涵盖 HTTP 429 限流**：
 两者都是可重试的，而那是调用方在它上面唯一会走的分支，
 所以在一个三个动词都在发布的契约里，429 没有挣到一个新的枚举成员。
 它是刻意**不**跟 `forbidden` 归在一起的 —— 403 说的是这份凭据永远不行，429 说的是现在不行。

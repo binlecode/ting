@@ -356,6 +356,13 @@ classify_yt_dlp_error() {
         echo "stopped_by_user"
         return
     fi
+    # The browser's cookie store could not be read, before any request was made — the same
+    # member and the same wording yt-search's reader matches (the enum is ARCH-cli-contract.md
+    # 「数据契约」). First, because it says nothing about the site.
+    if grep -qiE 'could not (find|copy) [a-z]+ cookies? database|failed to decrypt|cannot decrypt|find-generic-password|keyring|keychain' <<<"$text"; then
+        echo "cookies"
+        return
+    fi
     if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
         echo "forbidden"
         return

@@ -86,7 +86,7 @@
   - SoundCloud 额外理解已实测的 `#t=H:MM:SS` / `#t=M:SS`；
   - 只剥离被识别的偏移，保留媒体身份所需的其余 query；解析失败填 `null`，不报用法错误；
   - resolve 与 `--info` 信封填写同一个值，规范 `url` 中不保留偏移。
-- resolve 信封必须原样满足公共 schema：`stream_urls`、非凭据 `http_headers`、`format`、`selected`、`selected_resolution`、`retried` 和 `start_seconds` 均按正本语义生成。外部失败只使用共享 reason：`forbidden | unavailable | format_unavailable | network | unknown`；引擎不产生退出码 4。
+- resolve 信封必须原样满足公共 schema：`stream_urls`、非凭据 `http_headers`、`format`、`selected`、`selected_resolution`、`retried` 和 `start_seconds` 均按正本语义生成。外部失败只使用共享 reason：`forbidden | unavailable | format_unavailable | network | cookies | unknown`；引擎不产生退出码 4。
 - `--auth` 在依赖门之前回答，不发网络、不跑 yt-dlp；它只报告 cookie 是否会发送，不宣称会话有效或一定获得 Go+ 音质。
 
 ### 3.4 `--items` 阻断实验

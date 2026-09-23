@@ -302,8 +302,9 @@ Long-only flags: --engine --detach --status --stop --set-volume --pause --resume
 
 Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-contract.md):
   play -j   {status, url, mode, exit_code, reason, retried}
-            reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
-                    unknown|null(ok)   (network also covers HTTP 429 rate limiting)
+            reason: forbidden|unavailable|format_unavailable|network|cookies|
+                    stopped_by_user|unknown|null(ok)   (network also covers HTTP 429
+                    rate limiting; cookies = the browser cookie store could not be read)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
   --status  {status:"players", players:[{id,pid,url,engine,mode,volume,paused,position,
             duration,title,selected,selected_resolution,media,loop,started_at,queue,

@@ -4356,6 +4356,14 @@ fetch_json() {
     spin_stop
     SEARCH_ERR=$(<"$errfile")
     rm -f "$errfile"
+    # Under -j an engine says why on STDOUT, in the envelope, and writes nothing to stderr —
+    # so a failed search used to reach the screen as a bare "search failed" with its reason
+    # thrown away. The reason is the one field an engine promises on failure; use it.
+    if ((rc != 0)) && [[ -z "$SEARCH_ERR" ]]; then
+        local why
+        why=$(printf '%s' "$out" | jq -r '.reason // empty' 2>/dev/null) || why=""
+        [[ -n "$why" ]] && SEARCH_ERR="search failed ($why)"
+    fi
     ((rc == 0)) || return 1
     cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
     [[ "$cnt" != "0" ]] || return 2

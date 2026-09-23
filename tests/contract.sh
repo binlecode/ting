@@ -1886,6 +1886,45 @@ else
     rm -rf "$PS_STATE"
 fi
 
+echo
+echo "── a cookie store that cannot be read ─────────────────────────────"
+# The failure a user hit on 2026-09-22: their terminal app was not allowed to read Chrome's
+# data folder, yt-dlp's directory walk reported "could not find chrome cookies database",
+# every search failed as `unknown`, and the TUI said only "search failed". Reproduced here
+# with nothing seeded: a HOME holding an EMPTY Chrome folder is a profile that exists and
+# a cookie store that does not, which is exactly what the blocked read looks like to both
+# yt-search's existence check and yt-dlp's walk. The dead proxy keeps it offline, and it
+# is also what makes the search check discriminating: without the anonymous retry the
+# search stops at the cookie error (`cookies`, before this fix `unknown`); WITH it the
+# retry reaches the transport and fails `network`.
+CK_HOME="$UT_TEST_TMP/cookie-home"
+mkdir -p "$CK_HOME/Library/Application Support/Google/Chrome" "$CK_HOME/.config/google-chrome"
+ck_reason() { HOME="$CK_HOME" http_proxy=$NOPROXY https_proxy=$NOPROXY "$@" 2>/dev/null | jq -r '.reason // "none"' 2>/dev/null; }
+report "an unreadable cookie store is its own reason" cookies \
+    "$(YT_COOKIE_BROWSER=chrome ck_reason shell/yt-resolve --info -j -- "https://www.youtube.com/watch?v=$MEDIA_ID")"
+report "…and search asks again without it" network \
+    "$(YT_COOKIE_BROWSER=chrome ck_reason shell/yt-search -j -n 3 -- lofi)"
+# The TUI's half: under -j the engine's reason is on STDOUT and stderr is empty, so a failed
+# first search printed a bare "search failed". It must name the reason.
+if tmux_ok; then
+    CK_TS="ctest-cookie-$$"
+    CK_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-cookie.XXXXXX")
+    tmux kill-session -t "$CK_TS" 2>/dev/null
+    tmux new-session -d -s "$CK_TS" -x 80 -y 20 \
+        "http_proxy='$NOPROXY' https_proxy='$NOPROXY' UT_STATE_DIR='$CK_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' TING_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/ting' lofi; echo __GONE__; sleep 5" 2>/dev/null
+    said=0
+    i=0
+    while [ $i -lt 200 ]; do
+        tmux capture-pane -t "$CK_TS" -p -J 2>/dev/null | grep -qE 'search failed \(network\)' && { said=1; break; }
+        sleep 0.05; i=$((i + 1))
+    done
+    report "a failed first search names its reason" 1 "$said"
+    tmux kill-session -t "$CK_TS" 2>/dev/null
+    rm -rf "$CK_STATE"
+else
+    echo "  skip  (needs tmux for a real tty)"
+fi
+
 if [ "$OFFLINE" = 1 ]; then
     echo
     echo "── the live half: SKIPPED (--offline) ─────────────────────────────"

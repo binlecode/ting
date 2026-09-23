@@ -781,6 +781,9 @@ ncmpcpp、ncspot 都是），所以它是唯一一个不用教的选择；`R` **
 
     **按设计保持英文的**：帮助文本、错误句子（`Play failed:`、`no results`、`search failed`），
     以及页眉/状态行的 `k=v` 字段标签。
+    `search failed` 后面带着引擎信封的 `reason`（`search failed (cookies)`）：`-j` 下引擎把原因
+    写进 stdout 的信封、stderr 是空的，只读 stderr 的旧写法让原因在屏幕上消失 —— 一次
+    "终端 app 读不了 Chrome cookie" 就这样被报成了一句什么都没说的失败。
   - **chrome 一次运行只说一套主题 —— 而且那是终端的主题，不是我们的。** 默认调色板
     （`minimal`）只用 ANSI 16 的索引码；刻意不用 RGB、也不用 256 色 —— minimal/mono
     路径能发出的转义只有 0/1/2/32/33/34/36 与 1;3x 的复合，加上音源胶囊在 minimal 档的

@@ -335,6 +335,14 @@ classify_yt_dlp_error() {
         echo "stopped_by_user"
         return
     fi
+    # The browser's cookie store could not be read — before any request was made. First,
+    # because it says nothing about the site: a store the calling terminal app is not allowed
+    # to read (macOS privacy protection) is reported by yt-dlp's directory walk as "could not
+    # find", and that looked like a search that fails for no reason.
+    if grep -qiE 'could not (find|copy) [a-z]+ cookies? database|failed to decrypt|cannot decrypt|find-generic-password|keyring|keychain' <<<"$text"; then
+        echo "cookies"
+        return
+    fi
     if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
         echo "forbidden"
         return
@@ -403,10 +411,6 @@ fetch_results() {
     fi
     [[ -n "$match_filter" ]] && cmd+=(--match-filter "$match_filter")
 
-    if (( ${#COOKIE_ARGS[@]} > 0 )); then
-        cmd+=("${COOKIE_ARGS[@]}")
-    fi
-
     cmd+=(
         --flat-playlist
         --dump-single-json
@@ -422,10 +426,20 @@ fetch_results() {
     # shape it could branch on. Capture the failure and emit the same {status:"error",
     # reason} taxonomy the rest of the suite uses; the exit code stays yt-dlp's own.
     ensure_scratch
-    local result_json rc=0 err="$SCRATCH_DIR/search.err"
-    result_json=$("${cmd[@]}" 2>"$err") || rc=$?
+    local result_json rc=0 err="$SCRATCH_DIR/search.err" reason=""
+    result_json=$("${cmd[@]}" "${COOKIE_ARGS[@]+"${COOKIE_ARGS[@]}"}" 2>"$err") || rc=$?
+    # A cookie store that cannot be READ is not a search that failed: YouTube search needs no
+    # login, so it is asked once more without the store — the same fallback resolve_stream
+    # already makes. Only on a positively identified `cookies` failure, so a network error
+    # is not paid for twice.
     if ((rc != 0)) || [[ -z "$result_json" ]]; then
-        local reason
+        reason=$(classify_yt_dlp_error "$(cat "$err" 2>/dev/null)" "$rc")
+        if [[ "$reason" == "cookies" ]]; then
+            rc=0
+            result_json=$("${cmd[@]}" 2>"$err") || rc=$?
+        fi
+    fi
+    if ((rc != 0)) || [[ -z "$result_json" ]]; then
         reason=$(classify_yt_dlp_error "$(cat "$err" 2>/dev/null)" "$rc")
         if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
             jq -nc --arg e "$ENGINE_NAME" --arg q "$QUERY" --arg reason "$reason" \
