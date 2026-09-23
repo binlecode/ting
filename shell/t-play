@@ -230,6 +230,7 @@ Usage (everything after -- is the handle, so it may start with '-'):
   t-play --queue-mv N --to M --expect-url U [--id ID]    move one waiting track
   t-play --queue-jump N --expect-url U [--id ID] [-j]    play one waiting track NOW
   t-play --queue-clear [--id ID] [-j]                    drop every waiting track
+  t-play --undo --owner PID [--discard] [-j]             take back PID's last queue write
   t-play (no handle, no action)                          usage error; use ting to browse
 
 Not here, by design: metadata, captions and stream URLs are extraction, so they are the
@@ -280,6 +281,15 @@ Options:
   --queue-jump N  Move the track at N to the front of the wait and START it, in one
               locked write — as two calls a track ending in between would skip it.
   --queue-clear   Drop every waiting track. The one playing keeps playing (--stop stops it).
+  --owner PID     On --enqueue/--queue-rm/--queue-clear: keep a copy of the queue that
+              --undo can put back, for 3 seconds, in PID's one slot (PID's next queue
+              write replaces it). The envelope then carries undo.deadline (epoch seconds),
+              and a busy queue lock fails the call (reason locked) instead of writing
+              unlocked. Without it, no copy and no change.
+  --undo          With --owner: restore the queue that copy was taken from — only if the
+              queue is still byte-for-byte what the write left (a track boundary moves
+              pos, so it will not be), else undo_stale and nothing changes.
+  --discard       With --undo: drop the copy without restoring it (0 even if there is none).
   --expect-url U  REQUIRED by --queue-rm/--queue-mv/--queue-jump: the url that index held
               when you read it. An index into a queue is a guess about a moment — the
               player advances on its own — and a queue dies with its player, so a removal
@@ -346,6 +356,11 @@ Output contracts (one line of JSON each; the why behind each shape: ARCH-cli-con
   --queue-clear {status:"ok", id, cleared:<n>, queue:{…}}
             | {status:"error", reason:"queue_range"}   index/--to is not a WAITING track
             | {status:"error", reason:"queue_stale"}   --expect-url named a different track
+            | {status:"error", reason:"locked"}        (--owner only) the queue lock was busy
+            with --owner, the ok envelope adds undo:{deadline}
+  --undo    {status:"ok", undone:<verb>, id, queue:{…}}
+            | {status:"error", reason:"undo_none"|"undo_expired"|"undo_stale"|"locked"}
+  --undo --discard {status:"ok", discarded:<bool>}
             \`queue\` is the same object --enqueue and --next publish, read back off the file
             after the write — never predicted from what the call asked for.
 
@@ -1753,6 +1768,7 @@ player_queue() { echo "$STATE_DIR/queue-$1.json"; }
 rm_player_files() {
     rm -f "$(player_sock "$1")" "$(player_log "$1")" "$(player_queue "$1")" 2>/dev/null || true
     rmdir "$(queue_lock_dir "$1")" "$(player_lock_dir "$1")" 2>/dev/null || true
+    undo_drop_for_player "$1"
     return 0
 }
 queue_lock_dir() { echo "$STATE_DIR/lock-queue-$1"; }
@@ -1778,6 +1794,97 @@ lock_queue_state() {
 
 unlock_queue_state() {
     rmdir "$(queue_lock_dir "$1")" 2>/dev/null || true
+}
+
+# The lock for a write that leaves an undo copy (--owner). Everywhere else the queue lock is
+# best effort, as it always was: on timeout the caller writes unlocked. A write with a copy
+# may not, because a copy taken outside the lock records a queue that can still move and the
+# undo that trusts it would restore the wrong thing. So with --owner a timeout is a failure
+# (exit 4, reason locked), and without it nothing here changes.
+queue_lock_write() {
+    lock_queue_state "$1" && return 0
+    [[ -z "$UNDO_OWNER" ]]
+}
+
+# ------------------------------------------------------------------------------
+# UNDO — the queue's copy, the same rule t-playlist keeps for playlists (docs/ARCH-player.md
+# 「撤销副本」): written under the queue lock between reading the queue and replacing it, only
+# for a caller that names itself with --owner, one slot per owner. It lives beside the queue
+# in $STATE_DIR, outside players/ (reap_dead_players' namespace), because a copy that
+# outlived the queue it restores could only ever be refused.
+#
+# The `id` file names the player in plain text, so dropping a dead player's copies (below)
+# is a `read` per copy rather than a jq.
+# ------------------------------------------------------------------------------
+UNDO_GRACE=3
+UNDO_OWNER=""
+UNDO_DISCARD=0
+UNDO_DEADLINE=""
+undo_slot() { echo "$STATE_DIR/undo-queue-$1"; }
+
+# undo_save ID QUEUE_FILE NEW_FILE — call with the queue lock held, after NEW_FILE is
+# complete and before it is moved over QUEUE_FILE. Returns 1 if the copy could not be written,
+# and the caller then does not write either.
+undo_save() {
+    [[ -n "$UNDO_OWNER" ]] || return 0
+    local id=$1 qf=$2 new=$3 slot tmpd deadline
+    slot=$(undo_slot "$UNDO_OWNER")
+    tmpd="$slot.tmp.$$"
+    deadline=$(($(date +%s) + UNDO_GRACE))
+    rm -rf "$tmpd" 2>/dev/null || true
+    if mkdir -m 700 "$tmpd" 2>/dev/null &&
+        cp "$qf" "$tmpd/0.pre" 2>/dev/null &&
+        cp "$new" "$tmpd/0.post" 2>/dev/null &&
+        printf '%s\n' "$id" >"$tmpd/id" &&
+        jq -nc --argjson owner "$UNDO_OWNER" --arg verb "$ACTION" --argjson deadline "$deadline" --arg id "$id" \
+            '{schema: 1, owner: $owner, verb: $verb, deadline: $deadline,
+              objects: [{key: $id, pre_exists: true, post_exists: true}]}' >"$tmpd/meta.json" 2>/dev/null; then
+        rm -rf "$slot" 2>/dev/null || true
+        if mv "$tmpd" "$slot" 2>/dev/null; then
+            UNDO_DEADLINE=$deadline
+            return 0
+        fi
+    fi
+    rm -rf "$tmpd" 2>/dev/null || true
+    return 1
+}
+
+# Every call's sweep (run before any verb): the copies of owners that are gone. An owner that
+# exits normally discards its own; this is the kill -9 path. Keyed on the directory name, so
+# it is a glob and a `kill -0` per copy.
+reap_dead_undo_copies() {
+    local d o
+    for d in "$STATE_DIR"/undo-queue-*; do
+        [[ -e "$d" ]] || continue
+        o=${d##*/undo-queue-}
+        o=${o%%.*}
+        [[ "$o" =~ ^[0-9]+$ ]] || continue
+        kill -0 "$o" 2>/dev/null || rm -rf "$d" 2>/dev/null || true
+    done
+    return 0
+}
+
+# The copies whose OBJECT is gone: a player that stopped takes its queue with it, and a copy
+# of that queue is a copy of nothing. Called from rm_player_files, the one place a player's
+# files go.
+undo_drop_for_player() {
+    local d pid_of=""
+    for d in "$STATE_DIR"/undo-queue-*; do
+        [[ -f "$d/id" ]] || continue
+        pid_of=""
+        IFS= read -r pid_of <"$d/id" 2>/dev/null || true
+        [[ "$pid_of" == "$1" ]] && rm -rf "$d" 2>/dev/null
+    done
+    return 0
+}
+
+# The envelope's `undo` field, on a call that left a copy and on no other.
+with_undo() {
+    if [[ -n "$UNDO_DEADLINE" ]]; then
+        jq -c --argjson d "$UNDO_DEADLINE" '. + {undo: {deadline: $d}}'
+    else
+        cat
+    fi
 }
 
 # stdin -> QUEUE_ITEMS_JSON, an array of {engine,url,title,duration}. THREE shapes, the same
@@ -1844,11 +1951,13 @@ queue_write_new() {
 # is the player's own child advancing the position.
 queue_append() {
     local id=$1 items=$2 qf tmp rc=0
+    QUEUE_EDIT_ERR=""
     qf=$(player_queue "$id")
     [[ -f "$qf" ]] || return 1
     tmp="$qf.tmp.$$"
-    lock_queue_state "$id" || true
-    if jq -c --argjson add "$items" '.items = (.items + $add)' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+    queue_lock_write "$id" || { QUEUE_EDIT_ERR="locked"; return 1; }
+    if jq -c --argjson add "$items" '.items = (.items + $add)' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]] &&
+        undo_save "$id" "$qf" "$tmp"; then
         mv -f "$tmp" "$qf" || rc=1
     else
         rm -f "$tmp" 2>/dev/null || true
@@ -1885,7 +1994,7 @@ queue_edit() {
     QUEUE_EDIT_URL=""
     qf=$(player_queue "$id")
     [[ -f "$qf" ]] || { QUEUE_EDIT_ERR="queue_failed"; return 1; }
-    lock_queue_state "$id" || true
+    queue_lock_write "$id" || { QUEUE_EDIT_ERR="locked"; return 1; }
     # One read for all three checks, joined on \037 for the reason queue_current joins on it:
     # a url carries no whitespace, so `read` is a parse rather than a guess.
     line=$(jq -r --argjson i "$idx" \
@@ -1915,7 +2024,7 @@ queue_edit() {
     fi
     tmp="$qf.tmp.$$"
     if jq -c --argjson i "$idx" --argjson t "${to:-0}" "$prog" "$qf" >"$tmp" 2>/dev/null &&
-        [[ -s "$tmp" ]]; then
+        [[ -s "$tmp" ]] && undo_save "$id" "$qf" "$tmp"; then
         mv -f "$tmp" "$qf" || rc=1
     else
         rm -f "$tmp" 2>/dev/null || true
@@ -1937,11 +2046,13 @@ queue_edit() {
 # not touch it: stopping playback is --stop's job, not this verb's.
 queue_clear_tail() {
     local id=$1 qf tmp rc=0
+    QUEUE_EDIT_ERR=""
     qf=$(player_queue "$id")
     [[ -f "$qf" ]] || return 1
     tmp="$qf.tmp.$$"
-    lock_queue_state "$id" || true
-    if jq -c '.items = .items[0:(.pos + 1)]' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+    queue_lock_write "$id" || { QUEUE_EDIT_ERR="locked"; return 1; }
+    if jq -c '.items = .items[0:(.pos + 1)]' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]] &&
+        undo_save "$id" "$qf" "$tmp"; then
         mv -f "$tmp" "$qf" || rc=1
     else
         rm -f "$tmp" 2>/dev/null || true
@@ -2705,6 +2816,7 @@ do_enqueue() {
     local id added
     id=$RESOLVED_ID
     if ! queue_append "$id" "$QUEUE_ITEMS_JSON"; then
+        [[ "$QUEUE_EDIT_ERR" == "locked" ]] && queue_edit_fail locked "the queue of player $id is locked by another process"
         [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"queue_failed"}' || echo "failed to enqueue" >&2
         exit 4
     fi
@@ -2712,7 +2824,7 @@ do_enqueue() {
     queue_snapshot "$id"
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg id "$id" --argjson added "$added" --argjson queue "$QUEUE_JSON" \
-            '{status: "ok", id: $id, added: $added, queue: $queue}'
+            '{status: "ok", id: $id, added: $added, queue: $queue}' | with_undo
     else
         printf 'queued %s (player %s)\n' "$added" "$id"
     fi
@@ -2819,6 +2931,7 @@ do_queue_rm() {
     id=$RESOLVED_ID
     if ! queue_edit "$id" "$idx" '.items = (.items[0:$i] + .items[($i + 1):])'; then
         case "$QUEUE_EDIT_ERR" in
+        locked) queue_edit_fail locked "the queue of player $id is locked by another process" ;;
         queue_range) queue_edit_fail queue_range "index $idx is not a waiting track in this queue" ;;
         queue_stale) queue_edit_fail queue_stale "index $idx is not the track --expect-url named; re-read the queue" ;;
         *) queue_edit_fail queue_failed "failed to rewrite the queue" ;;
@@ -2827,7 +2940,7 @@ do_queue_rm() {
     queue_snapshot "$id"
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg id "$id" --argjson index "$idx" --arg url "$QUEUE_EDIT_URL" --argjson queue "$QUEUE_JSON" \
-            '{status: "ok", id: $id, removed: {index: $index, url: $url}, queue: $queue}'
+            '{status: "ok", id: $id, removed: {index: $index, url: $url}, queue: $queue}' | with_undo
     else
         printf 'removed track %s (player %s)\n' "$idx" "$id"
     fi
@@ -2914,14 +3027,70 @@ do_queue_clear() {
     before=$(jq -r '(.items | length) - (.pos + 1)' "$(player_queue "$id")" 2>/dev/null) || before=0
     [[ -n "$before" ]] || before=0
     if ! queue_clear_tail "$id"; then
+        [[ "$QUEUE_EDIT_ERR" == "locked" ]] && queue_edit_fail locked "the queue of player $id is locked by another process"
         queue_edit_fail queue_failed "failed to rewrite the queue"
     fi
     queue_snapshot "$id"
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg id "$id" --argjson cleared "$before" --argjson queue "$QUEUE_JSON" \
-            '{status: "ok", id: $id, cleared: $cleared, queue: $queue}'
+            '{status: "ok", id: $id, cleared: $cleared, queue: $queue}' | with_undo
     else
         printf 'cleared %s waiting track(s) (player %s)\n' "$before" "$id"
+    fi
+    exit 0
+}
+
+# --undo --owner PID: put the queue back the way that owner's last queue write found it, or
+# say why not. Checked under the queue lock, strictly (a timeout is `locked`, never an
+# unlocked restore), in the order a caller can act on: no copy, a closed window, a queue
+# that has moved since. The last one is the common one, and it is the RIGHT answer: the
+# player rewrites `pos` at every track boundary, and putting back the bytes from before it
+# would rewind the queue into a replay.
+#
+# No --id: the copy names its player. A player that has stopped took its copies with it
+# (rm_player_files), so that case is undo_none, not stale.
+do_queue_undo() {
+    local slot id="" verb deadline qf line
+    slot=$(undo_slot "$UNDO_OWNER")
+    if ((UNDO_DISCARD)); then
+        local had=false
+        [[ -e "$slot" ]] && had=true
+        rm -rf "$slot" 2>/dev/null || true
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc --argjson d "$had" '{status: "ok", discarded: $d}'
+        fi
+        exit 0
+    fi
+    [[ -f "$slot/meta.json" && -f "$slot/id" ]] ||
+        queue_edit_fail undo_none "nothing to undo for owner $UNDO_OWNER"
+    IFS= read -r id <"$slot/id" || true
+    line=$(jq -r '[.verb, (.deadline | tostring)] | join("\u001f")' "$slot/meta.json" 2>/dev/null) || line=""
+    IFS=$'\037' read -r verb deadline <<<"$line"
+    [[ -n "$id" && "$deadline" =~ ^[0-9]+$ ]] ||
+        queue_edit_fail queue_failed "the undo copy for owner $UNDO_OWNER is not readable: $slot"
+    qf=$(player_queue "$id")
+    lock_queue_state "$id" || queue_edit_fail locked "the queue of player $id is locked by another process"
+    if (($(date +%s) >= deadline)); then
+        unlock_queue_state "$id"
+        queue_edit_fail undo_expired "the undo window for owner $UNDO_OWNER has closed"
+    fi
+    if ! [[ -f "$qf" ]] || ! cmp -s "$qf" "$slot/0.post"; then
+        unlock_queue_state "$id"
+        queue_edit_fail undo_stale "the queue of player $id changed after the write; nothing was undone"
+    fi
+    if ! { cp "$slot/0.pre" "$qf.tmp.$$" 2>/dev/null && mv -f "$qf.tmp.$$" "$qf"; }; then
+        rm -f "$qf.tmp.$$" 2>/dev/null || true
+        unlock_queue_state "$id"
+        queue_edit_fail queue_failed "failed to rewrite the queue"
+    fi
+    rm -rf "$slot" 2>/dev/null || true
+    unlock_queue_state "$id"
+    queue_snapshot "$id"
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg id "$id" --arg verb "$verb" --argjson queue "$QUEUE_JSON" \
+            '{status: "ok", undone: $verb, id: $id, queue: $queue}'
+    else
+        printf 'undid --%s (player %s)\n' "$verb" "$id"
     fi
     exit 0
 }
@@ -2998,7 +3167,7 @@ ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
 ENGINE_SPECIFIED=0
 ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek |
                      # seek-to | enqueue | next | set-loop | queue-show | queue-rm |
-                     # queue-mv | queue-jump | queue-clear
+                     # queue-mv | queue-jump | queue-clear | undo
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # relayed from the resolve envelope; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
@@ -3266,6 +3435,23 @@ while (($#)); do
         set_action queue-clear --queue-clear
         shift
         ;;
+    --undo)
+        set_action undo --undo
+        shift
+        ;;
+    --discard)
+        UNDO_DISCARD=1
+        shift
+        ;;
+    --owner)
+        [[ $# -ge 2 ]] || die "--owner requires a process id"
+        UNDO_OWNER="$2"
+        shift 2
+        ;;
+    --owner=*)
+        UNDO_OWNER="${1#*=}"
+        shift
+        ;;
     --queue-rm)
         [[ $# -ge 2 ]] || die "--queue-rm requires the index of a waiting track"
         set_action queue-rm --queue-rm
@@ -3348,7 +3534,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --loop --status --stop --set-volume --pause --resume --seek --seek-to --set-loop --queue --enqueue --next --queue-show --queue-rm --queue-mv --queue-jump --queue-clear --to --expect-url --id --all --color --viz-color)"
+        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --loop --status --stop --set-volume --pause --resume --seek --seek-to --set-loop --queue --enqueue --next --queue-show --queue-rm --queue-mv --queue-jump --queue-clear --undo --owner --discard --to --expect-url --id --all --color --viz-color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -3428,6 +3614,21 @@ stop | set-volume | pause | resume | seek | seek-to | enqueue | next | set-loop 
 esac
 if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
     die "--all applies only to --stop"
+fi
+# The undo pair, gated like --all: a modifier on a verb it does not belong to is refused,
+# not ignored. --owner is not checked for being alive — a dead owner's copy just goes to the
+# sweep on the next call.
+if ((UNDO_DISCARD)) && [[ "$ACTION" != undo ]]; then
+    die "--discard applies only to --undo"
+fi
+if [[ -n "$UNDO_OWNER" ]]; then
+    [[ "$UNDO_OWNER" =~ ^[1-9][0-9]{0,9}$ ]] || die "--owner must be a positive integer (a process id)"
+    case "$ACTION" in
+    enqueue | queue-rm | queue-clear | undo) ;;
+    *) die "--owner applies only to --enqueue, --queue-rm, --queue-clear and --undo" ;;
+    esac
+elif [[ "$ACTION" == undo ]]; then
+    die "--undo requires --owner PID (the process whose queue write it takes back)"
 fi
 if [[ -n "$PLAY_START" ]]; then
     # Rejected AT THE DOOR rather than clamped or coerced: --start 10:00 and --start -60 are
@@ -3530,6 +3731,10 @@ if ((! IS_HANDLE)) && [[ "$QUERY" != *[![:space:]]* ]] && [[ -z "$ACTION" ]]; th
     die "provide a video id or URL (to search, run ${ENGINE}-search; for interactive browsing, ting)"
 fi
 
+# Every call, whatever it is for, sweeps away the undo copies of owners that are gone (the
+# kill -9 path; see reap_dead_undo_copies). A glob and nothing else when there are none.
+reap_dead_undo_copies
+
 # Lifecycle queries need only jq and take no handle — answer them before the heavier
 # mpv dependency check and before any routing.
 if [[ "$ACTION" == "status" ]]; then
@@ -3589,7 +3794,7 @@ fi
 # not a WAITING one depends on where the player has got to — it is a well-formed call that
 # did not take effect, which is 4 and is decided under the lock in queue_edit.
 case "$ACTION" in
-queue-show | queue-clear)
+queue-show | queue-clear | undo)
     require_cmd jq
     [[ -z "$QUEUE_EXPECT_URL" ]] || die "--expect-url applies only to --queue-rm, --queue-mv and --queue-jump"
     [[ -z "$QUEUE_TO_ARG" ]] || die "--to applies only to --queue-mv"
@@ -3617,6 +3822,7 @@ queue-rm) do_queue_rm "$QUEUE_INDEX_ARG" "${TARGET_ID:-}" ;;
 queue-mv) do_queue_mv "$QUEUE_INDEX_ARG" "$QUEUE_TO_ARG" "${TARGET_ID:-}" ;;
 queue-jump) do_queue_jump "$QUEUE_INDEX_ARG" "${TARGET_ID:-}" ;;
 queue-clear) do_queue_clear "${TARGET_ID:-}" ;;
+undo) do_queue_undo ;;
 esac
 # The third disk-state verb, and the reason it is here rather than up with the socket verbs:
 # what it writes is the player's record. It TRIES the socket afterwards (do_set_loop) so the

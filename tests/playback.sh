@@ -783,6 +783,33 @@ done
 report "…and the PLAYER followed the jump" "$ejump" \
     "$(shell/t-play --status -j | jq -r '.players[0].url // empty')"
 
+# UNDO, on the same real player: a write that names its owner (this shell, alive for the whole
+# file) leaves a copy, and --undo puts the queue back byte for byte. Every "came back" below is
+# the WHOLE order read off --queue-show, for the reason the move checks above give: one index
+# can look right against a verb that did nothing.
+uorder=$(shell/t-play --queue-show -j | jq -c '[.items[].url]')
+uenq=$(jq -nc --arg a "$U1" --arg b "$U2" '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' |
+    shell/t-play --enqueue - --owner $$ -j 2>/dev/null)
+report "--enqueue --owner carries undo.deadline" 0 \
+    "$(printf '%s' "$uenq" | jq -e '.status=="ok" and .added==2 and (.undo.deadline|type)=="number"' >/dev/null 2>&1; echo $?)"
+report "--undo takes the enqueue back" 0 \
+    "$(shell/t-play --undo --owner $$ -j 2>/dev/null | jq -e '.status=="ok" and .undone=="enqueue" and (.queue|has("pos"))' >/dev/null 2>&1; echo $?)"
+report "…and the order came home" "$uorder" \
+    "$(shell/t-play --queue-show -j | jq -c '[.items[].url]')"
+# A tail to edit, written WITHOUT an owner — and so with the envelope it always had.
+report "--enqueue without --owner: no undo field" 0 \
+    "$(jq -nc --arg a "$U1" --arg b "$U2" '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' |
+       shell/t-play --enqueue - -j 2>/dev/null | jq -e 'has("undo")|not' >/dev/null 2>&1; echo $?)"
+uorder=$(shell/t-play --queue-show -j | jq -c '[.items[].url]')
+ulast=$(shell/t-play --queue-show -j | jq -r '.len - 1')
+uurl=$(shell/t-play --queue-show -j | jq -r '.items[-1].url')
+shell/t-play --queue-rm "$ulast" --expect-url "$uurl" --owner $$ -j >/dev/null 2>&1
+report "--queue-rm, then --undo: the track is back in its slot" "$uorder" \
+    "$(shell/t-play --undo --owner $$ -j >/dev/null 2>&1; shell/t-play --queue-show -j | jq -c '[.items[].url]')"
+shell/t-play --queue-clear --owner $$ -j >/dev/null 2>&1
+report "--queue-clear, then --undo: the whole tail is back" "$uorder" \
+    "$(shell/t-play --undo --owner $$ -j >/dev/null 2>&1; shell/t-play --queue-show -j | jq -c '[.items[].url]')"
+
 # --queue-clear drops the tail and nothing else. The track being heard surviving IS the claim:
 # clearing a queue is not stopping a player, and --stop is the verb for that.
 eplaying=$(shell/t-play --status -j | jq -r '.players[0].url // empty')
@@ -796,7 +823,29 @@ report "…and the playing track is untouched" "$eplaying" \
 # nothing, never a failure.
 report "…clearing again clears 0" "0" \
     "$(shell/t-play --queue-clear -j 2>/dev/null | jq -r '.cleared')"
+# A TRACK BOUNDARY BETWEEN THE WRITE AND THE UNDO. The player rewrites pos when it moves on,
+# so the queue is no longer what the write left and the undo must refuse — putting back the
+# bytes from before would rewind pos and replay a track. --next is the boundary, driven.
+jq -nc --arg a "$U1" --arg b "$U2" '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' |
+    shell/t-play --enqueue - -j >/dev/null 2>&1
+ulast=$(shell/t-play --queue-show -j | jq -r '.len - 1')
+uurl=$(shell/t-play --queue-show -j | jq -r '.items[-1].url')
+shell/t-play --queue-rm "$ulast" --expect-url "$uurl" --owner $$ -j >/dev/null 2>&1
+shell/t-play --next -j >/dev/null 2>&1
+uafter=$(shell/t-play --queue-show -j | jq -c '{pos, urls: [.items[].url]}')
+report "an undo across a track boundary is undo_stale" "undo_stale" \
+    "$(shell/t-play --undo --owner $$ -j 2>/dev/null | jq -r '.reason // empty')"
+report "…and the queue is left as the player has it" "$uafter" \
+    "$(shell/t-play --queue-show -j | jq -c '{pos, urls: [.items[].url]}')"
+# The copy dies with its player. undo_none and not undo_stale is the discriminating answer: a
+# copy that outlived the queue would still be found, and refused for the missing file.
+jq -nc --arg a "$U1" '[{engine:"yt",url:$a}]' | shell/t-play --enqueue - -j >/dev/null 2>&1
+ulast=$(shell/t-play --queue-show -j | jq -r '.len - 1')
+uurl=$(shell/t-play --queue-show -j | jq -r '.items[-1].url')
+shell/t-play --queue-rm "$ulast" --expect-url "$uurl" --owner $$ -j >/dev/null 2>&1
 shell/t-play --stop --all -j >/dev/null 2>&1
+report "--stop takes the player's undo copy with it" "undo_none" \
+    "$(shell/t-play --undo --owner $$ -j 2>/dev/null | jq -r '.reason // empty')"
 no_orphans "no orphan mpv after the queue edits"
 # The failure tombstone check lives at the end of this file, driven by a real failing player.
 

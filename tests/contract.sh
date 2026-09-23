@@ -431,6 +431,16 @@ report "--expect-url is not --queue-show's" 1 "$(rc shell/t-play --queue-show --
 report "--expect-url is not --queue-clear's" 1 "$(rc shell/t-play --queue-clear --expect-url x -j)"
 # The verbs are mutually exclusive actions like every other one, named in the error.
 report "two queue verbs conflict"  1 "$(rc shell/t-play --queue-show --queue-clear -j)"
+# The undo pair. Idle, --undo has no copy to find (4, undo_none), and that 4 is what gives
+# the 1s beside it their teeth; --discard with nothing to drop is 0. What a copy restores
+# needs a real queue and is playback.sh's.
+report "idle --undo is 4, undo_none" 0 "$(jq_ok '.reason=="undo_none"' shell/t-play --undo --owner $$ -j)"
+report "idle --undo --discard is 0"  0 "$(jq_ok '.status=="ok" and .discarded==false' shell/t-play --undo --discard --owner $$ -j)"
+report "--undo needs --owner"        1 "$(rc shell/t-play --undo -j)"
+report "--owner not a number is 1"   1 "$(rc shell/t-play --queue-clear --owner x -j)"
+report "--owner is not --queue-mv's" 1 "$(rc shell/t-play --queue-mv 2 --to 1 --expect-url x --owner $$ -j)"
+report "--discard needs --undo"      1 "$(rc shell/t-play --queue-clear --discard -j)"
+report "--undo takes no --id"        1 "$(rc shell/t-play --undo --owner $$ --id nope -j)"
 
 # ── the loop mode, idle. REPEAT is what the player has; playing ON to the next track is a
 # queue, and the two are told apart at the door. --loop and --set-loop are one enum with two
