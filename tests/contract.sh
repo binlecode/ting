@@ -2986,6 +2986,53 @@ else
     report "the count lands in its own key" 1 "$appended"
     report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
 
+    # ---- the page counter across a tier change, and keys that arrive as one burst --------
+    # 22 rows is short enough that the full block takes rows from the page and hidden gives
+    # them back, so the page size moves under the counter. The counter is printed before the
+    # reflow decides that size, and it used to divide by the previous frame's — `page 1/3`
+    # over a list of ten. It is read off the FIRST frame without the block, not polled: with
+    # a preference write pending, the one-second tick redraws within a second and a poll
+    # would have caught the next, corrected frame and passed the bug.
+    pane_rows()  { printf '%s\n' "$1" | grep -cE '^[[:space:]>▶▎]*[0-9]+\. '; }
+    pane_pages() { printf '%s\n' "$1" | grep -oE 'page [0-9]+/[0-9]+' | head -1 | cut -d/ -f2; }
+    frame_without_block() {
+        FRAME=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
+        ! printf '%s\n' "$FRAME" | grep -qE '\? keys'
+    }
+    tmux resize-window -t "$TS" -x 100 -y 22 2>/dev/null
+    tmux send-keys -t "$TS" '?'
+    poll_until 10 pane_has '[-]/= volume' >/dev/null
+    full_rows=$(pane_rows "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)")
+    tmux send-keys -t "$TS" '?'
+    FRAME=""
+    poll_until 10 frame_without_block >/dev/null
+    hid_rows=$(pane_rows "$FRAME"); hid_pages=$(pane_pages "$FRAME")
+    report "hidden gives page mode back the rows full took" 1 \
+        "$([ "$hid_rows" -gt "$full_rows" ] && echo 1 || echo 0)"
+    report "…and its first frame counts pages by the rows it shows" 1 \
+        "$([ "$hid_rows" -gt 0 ] && [ "$hid_pages" = $(( (20 + hid_rows - 1) / hid_rows )) ] && echo 1 || echo 0)"
+
+    # Two presses in one tmux write land in the tty together, inside the unbracketed-paste
+    # probe's window — which is also what a held key or a quick double-tap looks like. One
+    # repeated character is keystrokes, not text: `? ?` from hidden walks core and on to full,
+    # and a paste would have opened the new-search prompt with `??` in it instead.
+    tmux send-keys -t "$TS" '?' '?'
+    burst=$(poll_until 10 pane_has '[-]/= volume')
+    report "a double-tapped ? is two presses, not a paste" 1 "$burst"
+    report "…and opens no search prompt" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'New search')"
+    # The same for a row jump typed at speed: `12j` in one write goes to row 12 (page 2 of
+    # this 20-row list), where a paste would search for "12j".
+    tmux send-keys -t "$TS" 1 2 j
+    jumped=$(poll_until 10 pane_has '▎[[:space:]]*12\. ')
+    report "a fast 12j jumps to row 12, not a search" 1 "$jumped"
+    # Back to core at the geometry the rest of the section expects: full -> hidden -> core.
+    tmux send-keys -t "$TS" '?' '?'
+    poll_until 10 pane_back '[-]/= volume' '\? keys' >/dev/null
+    tmux send-keys -t "$TS" 1 j
+    tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
+    poll_until 5 pane_has '▎[[:space:]]*1\. ' >/dev/null
+
     # Leave page mode back to scroll mode via Tab
     tmux send-keys -t "$TS" Tab
     gone=$(poll_until 10 pane_lacks 'page [0-9]+/[0-9]+')
@@ -3097,7 +3144,13 @@ else
     # move_selection, so more_results' "no filter can be open here" was an assertion, not a
     # fact. `zzz` matches nothing, which is what makes the check discriminating: the filtered
     # count is 0, and an unguarded edge replaces it with a whole re-fetched row set.
-    tmux send-keys -t "$TS" / z z z
+    # `/` and the text go in two writes, with the filter's own instruction line as the marker
+    # between them: in one write the list reader sees `/zzz` arrive as a single burst, which
+    # is the shape of a paste, and a paste in the list is a search — no person types a key
+    # and three more inside one tty write, and the suite should not either.
+    tmux send-keys -t "$TS" /
+    poll_until 10 pane_has 'type to narrow' >/dev/null
+    tmux send-keys -t "$TS" z z z
     narrowed=$(poll_until 10 results_is 0)
     report "a filter narrows to nothing" 1 "$narrowed"
     # Esc right behind the arrow, so the wait has a MARKER instead of a guessed duration:

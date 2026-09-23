@@ -2175,7 +2175,8 @@ keys_hidden() { [[ "$KEYS_TIER" == "hidden" ]]; }
 # Rotate the key-hint tier in place (key: ?). Three tiers: `core` is one line of
 # this view's own job — move, act on the row, get back out, quit; `full` adds the
 # engine / store / tuning / playback family; `hidden` completely suppresses the
-# hint block, freeing all vertical space for list rows.
+# hint block and hands its rows back to the height budget — which scroll mode fills and
+# page mode uses only up to UT_PAGE_ROWS (ARCH-tui.md, the key-tier section).
 cycle_keys() {
     case "$KEYS_TIER" in
     core) KEYS_TIER="full" ;;
@@ -5891,7 +5892,16 @@ display_menu() {
     # 2 q arrives, so a full-screen redraw cannot flash a half-rendered frame. Skipped
     # under tmux by default (it buffers output and needs terminal-overrides passthrough).
     if ((SYNC_ON)); then printf '\033P=1q'; fi
+    # The page counter on the title line is printed BEFORE the reflow decides PAGE_SIZE, so
+    # it divides by the previous frame's size. Whenever the reflow moves it — a key tier that
+    # grows or frees the hint block, a resize, the provisional size of the very first frame —
+    # that frame said `1/17` over a list of ten. One more pass inside the same hold, and only
+    # then: the size depends on geometry, not on the counter, so the second pass is final.
+    local prev_psize=$PAGE_SIZE
     display_list_menu "$1"
+    if [[ "$LIST_MODE" == "page" ]] && ((PAGE_SIZE != prev_psize)); then
+        display_list_menu "$1"
+    fi
     if ((SYNC_ON)); then printf '\033P=2q'; fi
 }
 
@@ -8055,6 +8065,12 @@ READ_NAV_KEY=""
 # is the seek key, so `Esc` + an arrow did not merely lose the arrow, it seeked.
 PENDING_KEY=""
 PENDING_ESC=0
+# A third carry-over, from the unbracketed-paste probe rather than the Esc parse: keys that
+# arrived as one burst but are keystrokes, not text (see check_unbracketed_tail). REPLAY_KEYS
+# is what is left of the burst; REPLAY_UNIT is the one character it repeats, or "" when the
+# burst is digits — ASCII, so `${:0:1}` takes exactly one under any locale.
+REPLAY_KEYS=""
+REPLAY_UNIT=""
 
 # The row-jump count register: the digits typed so far, "" when there are none. A global for
 # the reason PENDING_KEY is one — it is an intent that outlives the keypress that made it,
@@ -8226,13 +8242,16 @@ read_paste_tail() {
 
 # Detect unbracketed paste (e.g. Cmd+V in macOS Terminal.app without DECSET 2004).
 # If the character read is followed immediately by queued bytes in the tty buffer,
-# slurp all pending bytes (MIN=0, TIME=1, up to 100ms wait for paste arrival).
+# slurp all pending bytes (MIN=0, TIME=0: what is already there, never a wait). A paste
+# lands in the tty as one write, so its tail is queued before the first byte is even read;
+# waiting for more is what turned two separate keystrokes 100 ms apart into one "paste",
+# and it cost every non-exempt key a 100 ms stall when nothing followed.
 UNBRACKETED_TAIL=""
 check_unbracketed_tail() {
     UNBRACKETED_TAIL=""
     ((ESC_DD >= 0)) || { command -v dd >/dev/null 2>&1 && ESC_DD=1 || ESC_DD=0; }
     ((ESC_DD == 1)) || return 1
-    if ! stty min 0 time 1 </dev/tty 2>/dev/null; then
+    if ! stty min 0 time 0 </dev/tty 2>/dev/null; then
         return 1
     fi
     UNBRACKETED_TAIL=$(dd bs=4096 count=1 2>/dev/null </dev/tty || true)
@@ -8280,6 +8299,12 @@ read_nav_input() {
     if [[ -n "$PENDING_KEY" ]]; then
         READ_NAV_KEY="$PENDING_KEY"
         PENDING_KEY=""
+        NOTICE_LABEL=""; NOTICE_TEXT=""
+        return 0
+    fi
+    if [[ -n "$REPLAY_KEYS" ]]; then
+        READ_NAV_KEY="${REPLAY_UNIT:-${REPLAY_KEYS:0:1}}"
+        REPLAY_KEYS="${REPLAY_KEYS#"$READ_NAV_KEY"}"
         NOTICE_LABEL=""; NOTICE_TEXT=""
         return 0
     fi
@@ -8335,6 +8360,26 @@ read_nav_input() {
         " " | "" | $'\n' | $'\r' | $'\t' | j | J | k | K | "-" | "=" | "[" | "]") ;;
         *)
             if check_unbracketed_tail; then
+                # A burst is not always a paste. Held-key repeat, a double-tapped `?`, or
+                # a row jump typed fast (`12j`) all queue behind the first byte, and nobody
+                # pastes one repeated character or a run of digits ending in the `j` that
+                # fires it into a list. Those two shapes are handed back as keystrokes, one
+                # per call; anything else is text. Capped at 64 so the repeat test stays a
+                # short-string operation — a longer run is a paste of whatever it is.
+                if ((${#UNBRACKETED_TAIL} <= 64)); then
+                    local burst="$CHAR_IN$UNBRACKETED_TAIL"
+                    burst="${burst%[jJ]}"
+                    if [[ -n "$burst" && "$burst" != *[!0-9]* ]]; then
+                        REPLAY_UNIT=""; REPLAY_KEYS="$UNBRACKETED_TAIL"
+                        READ_NAV_KEY="$CHAR_IN"
+                        return 0
+                    fi
+                    if [[ -z "${UNBRACKETED_TAIL//"$CHAR_IN"/}" ]]; then
+                        REPLAY_UNIT="$CHAR_IN"; REPLAY_KEYS="$UNBRACKETED_TAIL"
+                        READ_NAV_KEY="$CHAR_IN"
+                        return 0
+                    fi
+                fi
                 PASTE_TEXT="$CHAR_IN$UNBRACKETED_TAIL"
                 READ_NAV_KEY="PASTE"
                 return 0
