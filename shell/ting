@@ -640,13 +640,16 @@ Keys (List View):
   a        add the focused row to a playlist               (needs t-playlist)
   b        open a stored playlist as the row source; b again
            returns to the search results                    (needs t-playlist)
-  d        remove the focused row from the playlist on screen, after a
-           confirmation; stops the player when it was on that row;
-           playlist rows only                               (needs t-playlist)
-  D        delete the entire playlist on screen, after a confirmation;
-           stops playback when active; playlist rows only   (needs t-playlist)
+  d        remove the focused row from the playlist on screen; removing the last
+           one leaves the list, empty. Stops the player when it was on that row,
+           once the undo has closed; playlist rows only     (needs t-playlist)
+  D        delete the entire playlist on screen; stops playback when active, once
+           the undo has closed; playlist rows only          (needs t-playlist)
   R        rename the playlist on screen;
            playlist rows only                               (needs t-playlist)
+  z        undo the last d / D / R / a / + / x / X, for 3 seconds after it — the
+           frame says "z to undo" for exactly as long as it can. Nothing asks
+           "are you sure" first; this is what replaced that question
   h        open the listening log as the row source; h again
            returns to the search results                    (needs t-history)
   c        open the focused row's parts as the row source; c again returns to the
@@ -2084,10 +2087,11 @@ set_ui_lang() {
         S_PL_NONE="还没有播放列表（按 a 建一个）"; S_PL_ITEM="首"; S_PL_ITEMS="首"
         S_PL_ABSENT="未安装 t-playlist"; S_PL_SEARCH_ONLY="该键只在搜索结果里可用（按 n 重新搜索）"
         S_PL_LIST_ONLY="该键只在播放列表里可用（按 b 打开一个）"
-        S_PL_RM_KEY="移出"; S_PL_RM_HEAD="移出列表"; S_PL_RM_CONFIRM="确认？(y/N)"; S_PL_REMOVED="已移出"
-        S_PL_DEL_KEY="删列表"; S_PL_DEL_HEAD="删除播放列表"; S_PL_DEL_CONFIRM="确认删除该列表及其全部曲目？(y/N)"; S_PL_DELETED="已删除列表"
+        S_PL_RM_KEY="移出"; S_PL_REMOVED="已移出"
+        S_PL_DEL_KEY="删列表"; S_PL_DELETED="已删除列表"
         S_PL_RENAME_KEY="重命名"; S_PL_RENAME_PROMPT="重命名列表名称（Esc 取消）"; S_PL_RENAMED="已重命名"
-        S_PL_EMPTY_DEL_CONFIRM="该列表为空，是否彻底删除？(y/N)"
+        S_UNDO_KEY="撤销"; S_UNDO_ACT="撤销"; S_UNDO_HINT="z 撤销"; S_UNDO_DONE="已撤销"; S_UNDO_NONE="无可撤销"
+        S_UNDO_STALE="已被别处修改，未撤销"
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 t-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
@@ -2102,7 +2106,7 @@ set_ui_lang() {
         S_Q_ONE="队列里只有正在播放的这一首"
         S_Q_ELSEWHERE="先回结果列表再看队列"
         S_Q_PLAYING_ROW="正在播的这首不能移出，用 s 停、用 > 跳过"
-        S_Q_CLEAR_CONFIRM="清空全部待播曲目？正在播的不受影响。(y/N)"
+        S_Q_ADDED="已加入队列"; S_Q_REMOVED="已移出队列"; S_Q_CLEARED="已清空待播"
         S_Q_STALE="队列已经变了，重新读一次"
         S_ADOPT_ACT="播放器"; S_ADOPT_MANY="后台有多个播放器在跑，没有接管（t-play --status 可以看）"
         S_PREF_ACT="配置"
@@ -2137,10 +2141,11 @@ set_ui_lang() {
         S_PL_NONE="no playlists yet (press a to make one)"; S_PL_ITEM="item"; S_PL_ITEMS="items"
         S_PL_ABSENT="t-playlist is not installed"; S_PL_SEARCH_ONLY="that key needs search results (press n to search)"
         S_PL_LIST_ONLY="that key needs a playlist (press b to open one)"
-        S_PL_RM_KEY="remove"; S_PL_RM_HEAD="Remove from"; S_PL_RM_CONFIRM="Confirm? (y/N)"; S_PL_REMOVED="Removed from"
-        S_PL_DEL_KEY="del-list"; S_PL_DEL_HEAD="Delete playlist"; S_PL_DEL_CONFIRM="Delete playlist and all tracks? (y/N)"; S_PL_DELETED="Deleted playlist"
+        S_PL_RM_KEY="remove"; S_PL_REMOVED="Removed from"
+        S_PL_DEL_KEY="del-list"; S_PL_DELETED="Deleted playlist"
         S_PL_RENAME_KEY="rename"; S_PL_RENAME_PROMPT="New name for playlist (Esc cancels)"; S_PL_RENAMED="Renamed to"
-        S_PL_EMPTY_DEL_CONFIRM="Playlist is empty, delete it? (y/N)"
+        S_UNDO_KEY="undo"; S_UNDO_ACT="Undo"; S_UNDO_HINT="z to undo"; S_UNDO_DONE="Undone"; S_UNDO_NONE="nothing to undo"
+        S_UNDO_STALE="changed elsewhere, not undone"
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="t-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
@@ -2155,7 +2160,7 @@ set_ui_lang() {
         S_Q_ONE="the queue holds only the track that is playing"
         S_Q_ELSEWHERE="go back to the results first, then open the queue"
         S_Q_PLAYING_ROW="this one is playing — s stops it, > skips it"
-        S_Q_CLEAR_CONFIRM="Drop every waiting track? The one playing keeps playing. (y/N)"
+        S_Q_ADDED="Queued"; S_Q_REMOVED="Removed from the queue"; S_Q_CLEARED="Cleared the queue"
         S_Q_STALE="the queue moved — reopening it"
         S_ADOPT_ACT="Player"; S_ADOPT_MANY="several background players are running, none adopted (t-play --status lists them)"
         S_PREF_ACT="Config"
@@ -2787,8 +2792,8 @@ LAYOUT_MIN_FIELD=12
 
 # An UNDROPPABLE text budget's floor: what such a budget is clamped UP to, so a pane too
 # narrow to hold everything beside the text elides the text rather than wrapping the row.
-# Four sites spend it — three clamps on core titles (result row, confirm target, playlist
-# pick), and the banner's final drop rung for key tail. It is also what truncate_disp's
+# Three sites spend it — two clamps on core titles (result row, playlist pick), and the
+# banner's final drop rung for key tail. It is also what truncate_disp's
 # contract leans on — no caller reaches its budget-cannot-hold-the-mark branch, because
 # every caller clamps to at least this.
 LAYOUT_MIN_BUDGET=8
@@ -4022,7 +4027,7 @@ enqueue_selected() {
     fi
     focused_payload || { store_notice "$S_Q_ACT:" "$S_PL_FAILED"; return 0; }
     local out rc=0
-    out=$(printf '%s' "$FOCUSED_PAYLOAD" | "$PLAY_BIN" --enqueue - --id "$CURRENT_PLAY_ID" -j 2>/dev/null) || rc=$?
+    out=$(printf '%s' "$FOCUSED_PAYLOAD" | "$PLAY_BIN" --enqueue - --id "$CURRENT_PLAY_ID" --owner $$ -j 2>/dev/null) || rc=$?
     if ((rc != 0)); then
         store_notice "$S_Q_ACT:" "$S_PL_FAILED"
         return 0
@@ -4030,8 +4035,10 @@ enqueue_selected() {
     # No notice on success: one keypress should cost one keypress, and the status line's
     # queue segment IS the confirmation. This was the first key to be given that rule; the
     # notice mechanism now applies it everywhere (see store_notice), so what used to be the
-    # exception here is simply how the file works.
+    # exception here is simply how the file works. The undo offer is the one line it does
+    # draw, and only for as long as `z` can act on it.
     apply_player_record "$out"
+    undo_arm queue "$out" "$S_Q_ACT:" "$S_Q_ADDED $GL_ARROW ${R_TITLE[$selected]:-}" || true
     return 0
 }
 
@@ -4255,6 +4262,9 @@ play_state_marks() {
 }
 
 stop_current_playback() {
+    # Whatever stops the player pays the stop a delete was holding back (undo_forget): Enter
+    # on another row, s, q. There is nothing left for it to stop.
+    UNDO_STOP_PENDING=0
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
         "$PLAY_BIN" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
         clear_play_state
@@ -4283,6 +4293,10 @@ cleanup_on_exit() {
         # next redraw, and nothing repaints after this one.
         printf '%s %s\n' "$S_PREF_ACT:" "$S_PREF_FAILED"
     fi
+    # This process's undo copy goes with it: nothing can press `z` for it now. One store, one
+    # call — the slot is suite-wide, so there is never a second copy to look for. A kill -9
+    # skips this line, and the store's own sweep of dead owners covers that.
+    undo_discard
     # When quitting via Q (detach-quit), preserve the player in background.
     # Otherwise, stop whatever is currently playing so quitting ting cleanly stops the sound.
     if ((QUIT_KEEP_PLAYING)); then
@@ -4927,12 +4941,28 @@ display_list_menu() {
     # notice is exactly the extra line the measure pass exists to prevent. Bold label, dim
     # text — the two weights the status segments already use, so it reads as chrome and not
     # as a row.
-    if [[ -n "$NOTICE_LABEL" || -n "$NOTICE_TEXT" ]]; then
-        local nt_w
-        disp_w "$NOTICE_LABEL "; nt_w=$DISP_W
-        truncate_disp "$NOTICE_TEXT" $((right_edge - nt_w))
-        printf '\033[K%s%s%s %s%s%s\n' \
-            "$C_BOLD" "$NOTICE_LABEL" "$C_RESET" "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    #
+    # THE UNDO OFFER rides the same line, and it is drawn for exactly as long as `z` can act:
+    # the offer alone when the line is free, or appended to whatever notice holds it. Appended
+    # rather than waiting for a free line, because the frame right after a write is exactly
+    # when the line is taken (the write's own words, or S_PL_EMPTY after the last track) and
+    # exactly when the user wants the undo. The hint is measured FIRST and never truncated —
+    # a title long enough to push `z` off the edge would hide the one part that is a key.
+    local n_label="$NOTICE_LABEL" n_text="$NOTICE_TEXT" n_undo=""
+    if undo_active; then
+        n_undo=" $GL_SEP $S_UNDO_HINT"
+        if [[ -z "$n_label" && -z "$n_text" ]]; then
+            n_label="$UNDO_HEAD"
+            n_text="$UNDO_LABEL"
+        fi
+    fi
+    if [[ -n "$n_label" || -n "$n_text" ]]; then
+        local nt_w nu_w=0
+        disp_w "$n_label "; nt_w=$DISP_W
+        if [[ -n "$n_undo" ]]; then disp_w "$n_undo"; nu_w=$DISP_W; fi
+        truncate_disp "$n_text" $((right_edge - nt_w - nu_w))
+        printf '\033[K%s%s%s %s%s%s%s\n' \
+            "$C_BOLD" "$n_label" "$C_RESET" "$C_DIM" "$TRUNC_TEXT" "$C_RESET" "$n_undo"
         chrome_h=$((chrome_h + 1))
     fi
 
@@ -5026,6 +5056,9 @@ display_list_menu() {
     # `a`/`b`/`d`/`e` already follow off an install, applied to the VIEW instead.
     keys_full && ((search_view)) && nav_items+=("o	$S_SORT")
     nav_items+=("/	$S_FILTER")
+    # Core and in every view, because every view can be where the user has just done
+    # something they regret: the writes are spread over four row sources and two stores.
+    nav_items+=("z	$S_UNDO_KEY")
     # The source key wants BOTH: a second engine installed (on a single-engine install
     # cycle_engine returns immediately) and search rows on screen (it refetches the query,
     # and a playlist is engine-agnostic — its rows route by their own stored engine).
@@ -5946,8 +5979,8 @@ display_menu() {
 # the bug and not the fix.
 #
 # WINCH_OK gates it to the wait that owns the whole screen. Everywhere else something else
-# owns the cursor — the `n` prompt is echoing a query mid-keystroke, confirm_key is holding
-# a y/N question, the fetch spinner is animating one line — and a full-screen repaint there
+# owns the cursor — the `n` prompt is echoing a query mid-keystroke, the `a`/`b` picker is
+# waiting for a name, the fetch spinner is animating one line — and a full-screen repaint there
 # erases what the user is reading or typing. (A NOTICE is not on this list any more: it is
 # drawn by the frame, so a repaint reproduces it instead of erasing it.) Setting it around
 # the one blocking read in read_nav_input covers both key loops that own the screen (the
@@ -6145,7 +6178,7 @@ play_selected() {
 #
 # So: a message stops the UI only when it is really asking something (ROADMAP.md「横切规范」
 # 只为一个答案停下来). The two readers that ARE asking keep their own blocking read, because
-# they have a question in them: confirm_key (y/N) and prompt_name (a playlist name).
+# they have a question in them: prompt_name (a playlist name) and the picker built on it.
 #
 # The label is the caller's, because "Play failed:" is the wrong word for a store that is
 # not there — and it is what lets one line serve every source without a second spelling.
@@ -6213,21 +6246,170 @@ list_playlists() {
     return 0
 }
 
-# A yes/no, taken as ONE byte rather than through read_query_input: a confirmation is not
-# text, so a reader that assembles UTF-8 and handles backspace is answering a question nobody
-# asked, and an Enter to commit a single letter is a second keypress for no decision. Only y
-# confirms; every other key — Esc included — cancels, which is the safe default for a
-# destructive verb and is why the prompt strings spell it (y/N). The letter is deliberately
-# ASCII in both chrome languages: it is a KEY, and the zh prompt says so too.
-confirm_key() {
-    local k=""
-    printf '%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$1" "$C_RESET"
-    IFS= read -rsn1 k || return 1
-    printf '\n'
-    case "$k" in
-    y | Y) return 0 ;;
-    esac
-    return 1
+# ── Undo: `z` ──────────────────────────────────────────────────────────────────────────
+# WHY THERE IS NO "ARE YOU SURE". A confirmation guards nothing once it has become a habit —
+# `d` then `y` is one gesture after the tenth time — so d, D and X used to cost two keys and a
+# frame that stopped for a question, for a protection that had already stopped working. What
+# makes a key safe is that its effect is cheap to reverse, and `x` in the queue already lived
+# by that. So every write the user can regret keeps a copy for three seconds, and `z` puts it
+# back. ARCH-tui.md「可撤销取代预先确认」.
+#
+# THE COPY IS NOT HERE. It is written by the command that owns the object, under the lock of
+# the write itself, keyed on this process (--owner $$), and only that command decides whether
+# it can still be restored (docs/ARCH-player.md「撤销副本」). What this file keeps is which
+# store to ask and until when to offer it — the four scalars below. One slot for the whole
+# suite: a write to the OTHER store drops the copy in this one first, so `z` is always "the
+# last thing I did" and never a stack.
+#
+# THE CLOCK IS $SECONDS. The deadline arrives as epoch seconds; converting it once, at the
+# write, means every frame and every loop turn can ask "still open?" with arithmetic instead
+# of forking `date` — bash 3.2 has neither EPOCHSECONDS nor printf %(%s)T. Both clocks are
+# whole seconds, so the two answers can differ by one, and in that second `z` gets
+# undo_expired from the store, which is simply the honest answer.
+UNDO_STORE=""        # playlist | queue — the store holding this process's copy, if any
+UNDO_END=0           # when the offer closes, on the $SECONDS clock; 0 = nothing on offer
+UNDO_HEAD=""         # the notice label the offer is drawn under (the store's own)
+UNDO_LABEL=""        # what was done, as the success notice would have said it
+UNDO_STOP_PENDING=0  # a stop the write implied, held back until the offer closes
+UNDO_BIN=""          # undo_bin's out-param: the command that owns UNDO_STORE
+
+undo_active() {
+    ((UNDO_END > 0 && SECONDS < UNDO_END))
+}
+
+undo_bin() {
+    if [[ "$1" == "queue" ]]; then UNDO_BIN="$PLAY_BIN"; else UNDO_BIN="$PLAYLIST_BIN"; fi
+}
+
+# The offer is over and `z` did not take it — it closed, another write replaced it, or the
+# store refused it. The one place that happens, because it is the one place the held-back stop
+# has to be paid: the user deleted the row the player is on, the undo that would have made
+# that harmless is gone, so the stop the delete implied happens now.
+undo_forget() {
+    UNDO_END=0
+    UNDO_HEAD=""
+    UNDO_LABEL=""
+    if ((UNDO_STOP_PENDING)); then
+        UNDO_STOP_PENDING=0
+        stop_current_playback
+    fi
+    return 0
+}
+
+# Drop this process's copy in the store that holds it, restoring nothing. Idempotent in the
+# store (no copy is 0), so it is safe to call whether the offer is still open or not.
+undo_discard() {
+    [[ -n "$UNDO_STORE" ]] || return 0
+    undo_bin "$UNDO_STORE"
+    [[ -n "$UNDO_BIN" ]] && "$UNDO_BIN" --undo --discard --owner $$ -j >/dev/null 2>&1 || true
+    UNDO_STORE=""
+    return 0
+}
+
+# undo_arm STORE ENVELOPE HEAD LABEL — a write succeeded; offer it. Returns 1 when the
+# envelope carries no undo (a store that predates it, or a write that changed nothing), and the
+# caller then says what happened in a plain notice instead.
+#
+# A write that left no copy leaves the previous offer standing: the store still holds that
+# copy, and nothing has replaced it.
+undo_arm() {
+    local store=$1 env=$2 dl
+    dl=$(printf '%s' "$env" | jq -r '.undo.deadline // empty' 2>/dev/null) || dl=""
+    [[ "$dl" =~ ^[0-9]+$ ]] || return 1
+    [[ "$UNDO_STORE" == "$store" ]] || undo_discard
+    undo_forget
+    UNDO_STORE="$store"
+    UNDO_END=$((SECONDS + dl - $(date +%s)))
+    UNDO_HEAD="$3"
+    UNDO_LABEL="$4"
+    return 0
+}
+
+# Once per loop turn, in BOTH loops that own the screen, and not in nav_tick: nav_tick runs
+# only when the read times out, so a user holding `j` would keep a held-back stop waiting for
+# as long as they held it.
+undo_tick() {
+    if ((UNDO_END > 0 && SECONDS >= UNDO_END)); then undo_forget; fi
+    return 0
+}
+
+# The cursor on a row the STORE named (the envelope's index), never one this file remembered:
+# the list may have moved under the undo, and only the store knows where the row went back.
+undo_place_cursor() {
+    local idx=$1
+    ((idx < NUM_ENTRIES)) || idx=$((NUM_ENTRIES - 1))
+    ((idx >= 0)) || idx=0
+    selected=$idx
+    page_index=$((idx / PAGE_SIZE + 1))
+}
+
+# Show what the undo restored, where it can be seen from here. A list on screen is re-read;
+# a list the write took off the screen (a D, or a d that emptied it) is reopened when we are
+# back on the search it left us on; anywhere else the notice is the whole answer. A rename's
+# undo is recognised by `from` — the name the screen was left showing — because the name it
+# restores is one this view has not been called since.
+undo_show_playlist() {
+    local env=$1 name from index verb
+    IFS=$'\037' read -r verb name from index < <(printf '%s' "$env" |
+        jq -r '[.undone // "", .name // "", .from // "", (.index // "" | tostring)] | join("\u001f")' 2>/dev/null) || return 0
+    [[ -n "$name" ]] || return 0
+    if [[ -n "$from" && "$LIST_SOURCE" == "playlist" && "$PLAYLIST_NAME" == "$from" ]]; then
+        PLAYLIST_NAME="$name"
+        QUERY_LABEL="$name"
+    fi
+    if [[ "$LIST_SOURCE" == "playlist" && "$PLAYLIST_NAME" == "$name" ]]; then
+        reload_playlist "$name"
+        [[ -n "$index" ]] && undo_place_cursor "$index"
+    elif [[ "$LIST_SOURCE" == "search" ]] && [[ "$verb" == "del" || "$verb" == "rm" ]]; then
+        if open_playlist "$name" && [[ -n "$index" ]]; then undo_place_cursor "$index"; fi
+    fi
+    return 0
+}
+
+# `z`. What the store answers decides everything: 0 restored it, 4 is the store saying no
+# (and why), and only `locked` among the 4s keeps the offer — the copy is intact and a retry
+# can succeed, where every other refusal is final.
+undo_last() {
+    if ! undo_active; then
+        store_notice "$S_UNDO_ACT:" "$S_UNDO_NONE"
+        return 0
+    fi
+    local store="$UNDO_STORE" out rc=0 errfile msg reason
+    undo_bin "$store"
+    errfile=$(mktemp "${TMPDIR:-/tmp}/ting-undo-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-undo-err.$$"
+    out=$("$UNDO_BIN" --undo --owner $$ -j 2>"$errfile") || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc == 0)); then
+        # The copy is spent and the stop it was holding back is not owed any more.
+        UNDO_STORE=""
+        UNDO_STOP_PENDING=0
+        undo_forget
+        if [[ "$store" == "queue" ]]; then
+            apply_player_record "$out"
+            [[ "$LIST_SOURCE" == "queue" ]] && reload_queue "$selected"
+        else
+            undo_show_playlist "$out"
+        fi
+        store_notice "$S_UNDO_ACT:" "$S_UNDO_DONE"
+        return 0
+    fi
+    reason=$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null) || reason=""
+    msg=${msg##*$'\n'}
+    msg=${msg#t-playlist: }
+    msg=${msg#t-play: }
+    if ((rc == 4)) && [[ "$reason" != "locked" ]]; then
+        [[ "$reason" == "undo_none" ]] && UNDO_STORE=""
+        undo_forget
+        case "$reason" in
+        undo_stale) store_notice "$S_UNDO_ACT:" "$S_UNDO_STALE" ;;
+        undo_none | undo_expired) store_notice "$S_UNDO_ACT:" "$S_UNDO_NONE" ;;
+        *) store_notice "$S_UNDO_ACT:" "${msg:-$S_PL_FAILED}" ;;
+        esac
+        return 0
+    fi
+    store_notice "$S_UNDO_ACT:" "${msg:-$S_PL_FAILED}"
+    return 0
 }
 
 # Prompt for a playlist name, echoing what is typed. Esc / empty cancels, exactly like the
@@ -6271,7 +6453,7 @@ focused_payload() {
 add_to_playlist() {
     ((NUM_ENTRIES > 0)) || return 0
     have_store || return 0
-    local name payload rc=0 msg errfile
+    local name payload rc=0 msg errfile out
     if ! focused_payload; then
         store_notice "$S_PL_ACT:" "$S_PL_FAILED"
         return 0
@@ -6290,7 +6472,7 @@ add_to_playlist() {
     fi
     name="$PROMPT_NAME"
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-pl-err.$$"
-    printf '%s' "$payload" | "$PLAYLIST_BIN" --add "$name" -j >/dev/null 2>"$errfile" || rc=$?
+    out=$(printf '%s' "$payload" | "$PLAYLIST_BIN" --add "$name" --owner $$ -j 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -6302,8 +6484,10 @@ add_to_playlist() {
     fi
     # The success side is a notice too, and under the same label as every failure this key
     # can report: one keypress costs one keypress (the rule `+` already followed), and the
-    # confirmation rides the next frame instead of holding the screen for a second key.
-    store_notice "$S_PL_ACT:" "$S_PL_ADDED $GL_ARROW $name"
+    # confirmation rides the next frame instead of holding the screen for a second key. It is
+    # drawn as the undo offer while there is one — the same sentence, with `z` beside it.
+    undo_arm playlist "$out" "$S_PL_ACT:" "$S_PL_ADDED $GL_ARROW $name" ||
+        store_notice "$S_PL_ACT:" "$S_PL_ADDED $GL_ARROW $name"
 }
 
 # Which item of the STORE the focused row is, in PL_ITEM_INDEX — 0-based, which is what
@@ -6351,14 +6535,14 @@ focused_is_playing() {
 
 # Remove the focused row from the playlist it is a row OF. The store does the removing, by
 # index, exactly as `a` lets it do the adding: this file neither rewrites the file nor decides
-# what a removal means. Two things make it different from the other store keys — it is
-# destructive, so it asks first and defaults to no; and it is the only one that acts on the
-# view it is already in, so it ends by re-reading the store rather than by opening something.
+# what a removal means. It asks nothing first — `z` takes it back (see the Undo section) —
+# and it is the only store key that acts on the view it is already in, so it ends by
+# re-reading the store rather than by opening something.
 delete_from_playlist() {
     ((NUM_ENTRIES > 0)) || return 0
     playlist_only || return 0
     have_store || return 0
-    local name="$PLAYLIST_NAME" rc=0 msg errfile w playing=0
+    local name="$PLAYLIST_NAME" rc=0 msg errfile out title playing=0
     if ! focused_index; then
         # The row is not in the envelope the view was built from, so the store and the screen
         # disagree and an --index taken from here would delete SOMETHING ELSE. Refuse.
@@ -6369,17 +6553,11 @@ delete_from_playlist() {
     # nothing below still knows which row it was: reload_playlist repoints `selected` at
     # whatever moved up into the gap.
     if focused_is_playing; then playing=1; fi
-    # What is about to go, named the way the row names it — a confirmation that says only
-    # "are you sure" is asking about something the user has to remember rather than read.
-    layout_cols
-    w=$((LAYOUT_COLS - 4))
-    ((w < LAYOUT_MIN_BUDGET)) && w=$LAYOUT_MIN_BUDGET
-    truncate_disp "${R_TITLE[$selected]}" "$w"
-    printf '\n%s%s%s %s %s\n' "$C_BOLD" "$S_PL_RM_HEAD" "$C_RESET" "$GL_ARROW" "$name"
-    printf '  %s\n' "$TRUNC_TEXT"
-    confirm_key "$S_PL_RM_CONFIRM" || return 0
+    # Named in the offer, because a run of `d` leaves only the LAST one undoable and the user
+    # has to be able to read which one that is.
+    title="${R_TITLE[$selected]}"
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-pl-err.$$"
-    "$PLAYLIST_BIN" --rm "$name" --index "$PL_ITEM_INDEX" -j >/dev/null 2>"$errfile" || rc=$?
+    out=$("$PLAYLIST_BIN" --rm "$name" --index "$PL_ITEM_INDEX" --owner $$ -j 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -6389,26 +6567,27 @@ delete_from_playlist() {
         store_notice "$S_PL_ACT:" "$msg"
         return 0
     fi
-    store_notice "$S_PL_ACT:" "$S_PL_REMOVED $GL_ARROW $name"
     # The record is gone, so a player still holding it is playing something the user just
-    # deleted — and the banner would keep naming a row the store no longer has. Stopped
-    # BEFORE the reload, so the redraw that reload ends with already draws no player.
-    if ((playing)); then stop_current_playback; fi
+    # deleted. With an undo on offer the stop WAITS for the offer to close (undo_forget):
+    # a stopped player is the one part of this that a copy cannot put back, so `z` inside the
+    # window must find it still playing. With no offer it stops now, BEFORE the reload, so the
+    # redraw that reload ends with already draws no player.
+    if undo_arm playlist "$out" "$S_PL_ACT:" "$S_PL_REMOVED $GL_ARROW $name: $title"; then
+        if ((playing)); then UNDO_STOP_PENDING=1; fi
+    else
+        store_notice "$S_PL_ACT:" "$S_PL_REMOVED $GL_ARROW $name"
+        if ((playing)); then stop_current_playback; fi
+    fi
     reload_playlist "$name"
 }
 
-# Delete the entire playlist on screen, after a confirmation.
-# Calls `t-playlist --del`, stops the player if any track in the playlist is currently playing,
-# and returns to the search view.
+# Delete the entire playlist on screen and return to the search view. No question first, for
+# the reason `d` asks none: `z` takes it back. A track of this list that is playing stops when
+# the offer closes, not before (see delete_from_playlist).
 delete_current_playlist() {
     playlist_only || return 0
     have_store || return 0
-    local name="$PLAYLIST_NAME" rc=0 msg errfile url playing=0
-    layout_cols
-    local w=$((LAYOUT_COLS - 4))
-    ((w < LAYOUT_MIN_BUDGET)) && w=$LAYOUT_MIN_BUDGET
-    printf '\n%s%s%s %s %s (%d %s)\n' "$C_BOLD" "$S_PL_DEL_HEAD" "$C_RESET" "$GL_ARROW" "$name" "$NUM_ENTRIES" "$S_PL_ITEMS"
-    confirm_key "$S_PL_DEL_CONFIRM" || return 0
+    local name="$PLAYLIST_NAME" rc=0 msg errfile url out playing=0
 
     if [[ -n "$CURRENT_PLAY_ID" && -n "$CURRENT_PLAY_URL" ]] && ((${#urls[@]} > 0)); then
         for url in "${urls[@]}"; do
@@ -6421,10 +6600,9 @@ delete_current_playlist() {
             fi
         done
     fi
-    if ((playing)); then stop_current_playback; fi
 
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-pl-err.$$"
-    "$PLAYLIST_BIN" --del "$name" -j >/dev/null 2>"$errfile" || rc=$?
+    out=$("$PLAYLIST_BIN" --del "$name" --owner $$ -j 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -6434,7 +6612,12 @@ delete_current_playlist() {
         store_notice "$S_PL_ACT:" "$msg"
         return 0
     fi
-    store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"
+    if undo_arm playlist "$out" "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"; then
+        if ((playing)); then UNDO_STOP_PENDING=1; fi
+    else
+        store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"
+        if ((playing)); then stop_current_playback; fi
+    fi
     back_to_search
 }
 
@@ -6444,14 +6627,14 @@ delete_current_playlist() {
 rename_current_playlist() {
     playlist_only || return 0
     have_store || return 0
-    local old_name="$PLAYLIST_NAME" new_name rc=0 msg errfile
+    local old_name="$PLAYLIST_NAME" new_name rc=0 msg errfile out
     prompt_name "$S_PL_RENAME_PROMPT" || return 0
     new_name="$PROMPT_NAME"
     [[ -n "$new_name" ]] || return 0
     if [[ "$new_name" == "$old_name" ]]; then return 0; fi
 
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-pl-err.$$"
-    "$PLAYLIST_BIN" --rename "$old_name" "$new_name" -j >/dev/null 2>"$errfile" || rc=$?
+    out=$("$PLAYLIST_BIN" --rename "$old_name" "$new_name" --owner $$ -j 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -6463,7 +6646,8 @@ rename_current_playlist() {
     fi
     PLAYLIST_NAME="$new_name"
     QUERY_LABEL="$new_name"
-    store_notice "$S_PL_ACT:" "$S_PL_RENAMED $GL_ARROW $new_name"
+    undo_arm playlist "$out" "$S_PL_ACT:" "$S_PL_RENAMED $GL_ARROW $new_name" ||
+        store_notice "$S_PL_ACT:" "$S_PL_RENAMED $GL_ARROW $new_name"
 }
 
 # Re-open the list after it has CHANGED under us, keeping the user where they were. The
@@ -6476,16 +6660,12 @@ rename_current_playlist() {
 # A reload that FAILS lands on the search rather than on rows the store no longer agrees
 # with: the item is already gone, so what is on screen is a picture of the past. The one
 # expected failure is the list going empty, and there the notice is S_PL_EMPTY — the same
-# sentence `b` gives for opening an empty list, because it is the same fact.
+# sentence `b` gives for opening an empty list, because it is the same fact. The empty list
+# STAYS: removing its last track is not a request to delete it, and asking at that moment was
+# a question the user had not come to answer. It is D's to delete, like any other list.
 reload_playlist() {
     local name=$1 keep=$selected
     if ! open_playlist "$name"; then
-        if [[ "$PL_SHOW_COUNT" == "0" ]]; then
-            if confirm_key "$S_PL_EMPTY_DEL_CONFIRM"; then
-                "$PLAYLIST_BIN" --del "$name" -j >/dev/null 2>&1
-                store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $name"
-            fi
-        fi
         back_to_search
         return 0
     fi
@@ -6704,13 +6884,9 @@ browse_playlists() {
         return 0
     fi
     pick_playlist "$PL_LS_JSON" "$S_PL_OPEN" "$S_PL_PROMPT_OPEN" || { display_menu "$page_index"; return 0; }
+    # An empty list answers with open_playlist's own S_PL_EMPTY and nothing more: it is
+    # still a list, and deleting it is D's job (see reload_playlist).
     if ! open_playlist "$PROMPT_NAME"; then
-        if [[ "$PL_SHOW_COUNT" == "0" ]]; then
-            if confirm_key "$S_PL_EMPTY_DEL_CONFIRM"; then
-                "$PLAYLIST_BIN" --del "$PROMPT_NAME" -j >/dev/null 2>&1
-                store_notice "$S_PL_ACT:" "$S_PL_DELETED $GL_ARROW $PROMPT_NAME"
-            fi
-        fi
         return 0
     fi
 }
@@ -6909,9 +7085,11 @@ queue_row_target() {
 # user (a track ended between the keypress and the write), and the honest response is to show
 # them what it looks like now rather than to explain. The reload is what makes the refusal
 # harmless, which is what lets the pin be mandatory.
+Q_UNDO_LABEL=""
 queue_verb() {
     local keep=$1; shift
-    local out rc=0 errfile msg reason
+    local out rc=0 errfile msg reason undo_label="$Q_UNDO_LABEL"
+    Q_UNDO_LABEL=""
     errfile=$(mktemp "${TMPDIR:-/tmp}/ting-queue-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ting-queue-err.$$"
     out=$("$PLAY_BIN" "$@" --id "$CURRENT_PLAY_ID" -j 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
@@ -6932,13 +7110,18 @@ queue_verb() {
     # status line follow the write without waiting for the next tick.
     apply_player_record "$out"
     reload_queue "$keep"
+    # The two callers that pass --owner name what they did in Q_UNDO_LABEL (taken on entry, so
+    # a call that failed cannot leave it for the next one); the offer is made here, after the
+    # reload, because it is the store's envelope that carries it.
+    if [[ -n "$undo_label" ]]; then
+        undo_arm queue "$out" "$S_Q_ACT:" "$undo_label" || true
+    fi
     return 0
 }
 
-# `x` — drop the focused waiting track. No confirmation, unlike `d` on a playlist: a playlist
-# is a thing the user built and keeps, a queue is what they are doing right now, and removing
-# the wrong one costs a track they can put back with `+`. The refusal that DOES matter is the
-# one below it.
+# `x` — drop the focused waiting track. No confirmation, and this was the key that showed none
+# was needed: removing the wrong one is cheap to reverse. `z` reverses it exactly, in its own
+# slot, which `+` could not. The refusal that DOES matter is the one below it.
 queue_remove() {
     queue_row_target || { store_notice "$S_Q_ACT:" "$S_PL_FAILED"; return 0; }
     # Answered here rather than left to the player's queue_range, because this is the one
@@ -6950,22 +7133,19 @@ queue_remove() {
     fi
     # The cursor stays on the SLOT, not on the track: what lands under it is whatever moved
     # up into the gap, which is the next thing the user was going to consider.
-    queue_verb "$Q_ROW_INDEX" --queue-rm "$Q_ROW_INDEX" --expect-url "$Q_ROW_URL"
+    Q_UNDO_LABEL="$S_Q_REMOVED $GL_ARROW ${R_TITLE[$selected]:-}"
+    queue_verb "$Q_ROW_INDEX" --queue-rm "$Q_ROW_INDEX" --expect-url "$Q_ROW_URL" --owner $$
     return 0
 }
 
-# `X` — drop everything still waiting. This one DOES confirm, by the rule `D` follows: it is
-# the only queue key whose effect the user cannot undo one keypress at a time.
+# `X` — drop everything still waiting. It used to be the one queue key that asked first,
+# because nothing short of re-adding every track could reverse it; `z` reverses it in one key,
+# so it asks nothing, like `D`.
 queue_clear() {
-    local w
     ((NUM_ENTRIES > 0)) || return 0
-    layout_cols
-    w=$((LAYOUT_COLS - 4))
-    ((w < LAYOUT_MIN_BUDGET)) && w=$LAYOUT_MIN_BUDGET
-    printf '\n%s%s%s\n' "$C_BOLD" "$S_Q_ACT" "$C_RESET"
-    confirm_key "$S_Q_CLEAR_CONFIRM" || return 0
     # Only the played rows and the playing one survive, so the cursor goes to the last of them.
-    queue_verb "$CURRENT_QUEUE_POS" --queue-clear
+    Q_UNDO_LABEL="$S_Q_CLEARED"
+    queue_verb "$CURRENT_QUEUE_POS" --queue-clear --owner $$
     return 0
 }
 
@@ -7918,6 +8098,9 @@ filter_live() {
         # when it is parked on the chapter that was playing — and a filter that hides the new
         # one simply leaves it where it is (chapter_follow).
         chapter_follow
+        # Fourth: an undo offer that has closed pays its held-back stop here as well — this
+        # loop owns the screen for as long as / is open (undo_tick).
+        undo_tick
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
@@ -8360,7 +8543,10 @@ read_nav_input() {
     # by the same one-clause addition: with nothing playing this read blocks outright, so a
     # cover the frame could not draw would wait for the user's next keypress to appear —
     # which is to say it would appear one row late, on the row they had already left.
-    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)) || [[ -n "$PREF_DIRTY" ]] || ((IMAGE_DIRTY)); then
+    # An undo offer arms it too: with nothing playing and no key pressed, the frame where the
+    # offer closes has to be drawn by the clock, or the hint would outlive the offer.
+    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)) || [[ -n "$PREF_DIRTY" ]] || ((IMAGE_DIRTY)) ||
+        ((UNDO_END > 0)); then
         t_opt=(-t 1)
     fi
     # The resize gate is armed for THIS read only — the wait that owns the whole screen —
@@ -8730,6 +8916,7 @@ while true; do
     check_player_alive   # a player that ended or crashed must not keep its banner
     player_check_ready   # …and one that has not started yet must not claim it is playing
     chapter_follow       # …and a chapter list must move with the playhead, not with the keys
+    undo_tick            # …and a closed undo offer must stop what its delete held back
     # Page mode's clamp only. In scroll mode the cursor is free to be anywhere in the list
     # and it is the WINDOW that follows — clamping it into a page-sized box here would undo
     # every move the moment it crossed one, which is the whole difference between the modes.
@@ -8859,6 +9046,7 @@ while true; do
     d) delete_from_playlist ;;        # remove the focused row from the playlist on screen
     D) delete_current_playlist ;;     # delete the entire playlist on screen
     R) rename_current_playlist ;;     # rename the playlist on screen
+    z | Z) undo_last ;;               # take back the last d/D/R/a/+/x/X, while it is offered
     # The three row sources say "did not open" with 1 — an empty log, a one-part video, a
     # video with no chapters, and every fetch that failed — and each of those paths has
     # already stored its notice (a frame line the next key clears). Without `|| true` set -e
@@ -8882,7 +9070,7 @@ while true; do
         if [[ "$LIST_SOURCE" == "queue" ]]; then
             case "$READ_NAV_KEY" in
             x) queue_remove ;;          # drop the focused waiting track
-            X) queue_clear ;;           # drop every waiting track (confirms first)
+            X) queue_clear ;;           # drop every waiting track
             p) queue_move -1 ;;         # one slot earlier
             P) queue_move 1 ;;          # one slot later
             esac
