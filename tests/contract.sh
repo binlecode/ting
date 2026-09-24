@@ -19,7 +19,7 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-09-23 on the author's machine: ~175s in full (661 checks), of which
+# Cost, measured 2026-09-23 on the author's machine: ~195s in full (664 checks), of which
 # `--offline` is the first ~48s with no packet sent. The live half is dominated by real
 # engine round trips (2-8s each) and the tmux TUI panes, which each wait for a real search and
 # a real first frame. The total count moves by a few between runs, and that is not sloppiness:
@@ -4001,6 +4001,59 @@ else
     rm -rf "$TUI_STATE"
 
     undo_pane
+
+    # ── The install goes away under a running session: `q` must still stop the player ─────
+    # Measured at the 0.14.0 release: `brew upgrade` deleted the old cellar a second after a
+    # session opened from it had started a track, and `q` then ran a deleted `t-play --stop`
+    # and left the mpv playing with nothing attached. The upgrade is reproduced for real: a
+    # copy of the suite is the install, the pane runs `ting` from it, and the copy is removed
+    # while the track plays. Two answers, told apart by what PATH still holds — the stable
+    # name a package manager keeps for the current version (this checkout's shell/ stands in
+    # for it), or nothing at all, where the stop cannot happen and the exit must say so.
+    #
+    # PATH is narrowed to a directory of links to the external tools, which isolates rather
+    # than stages: nothing in it behaves differently from the real tool it points at.
+    RL_BASE=$(mktemp -d "${TMPDIR:-/tmp}/ting-relocate.XXXXXX")
+    mkdir -p "$RL_BASE/tools" "$RL_BASE/state"
+    : >"$RL_BASE/cfg"
+    for _t in jq mpv yt-dlp curl nc ncat; do
+        command -v "$_t" >/dev/null 2>&1 && ln -s "$(command -v "$_t")" "$RL_BASE/tools/$_t"
+    done
+    rl_players() { shell/t-play --status -j 2>/dev/null | jq '.players | length'; }
+    # rl_run <PATH for the pane> — boots from a fresh copy, plays, deletes the copy, presses q.
+    rl_run() {
+        rm -rf "$RL_BASE/inst"
+        mkdir -p "$RL_BASE/inst"
+        cp -R shell config VERSION "$RL_BASE/inst/"
+        tmux kill-session -t "$TS" 2>/dev/null
+        tmux new-session -d -s "$TS" -x 100 -y 30 \
+            "env PATH='$1' YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$RL_BASE/state' TING_STATE_DIR='$RL_BASE/state' UT_CONFIG='$RL_BASE/cfg' TING_CONFIG='$RL_BASE/cfg' YT_LANG=en '$RL_BASE/inst/shell/ting' --volume 0 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+        poll_until 40 pane_has "query='" >/dev/null
+        tmux send-keys -t "$TS" Enter
+        [ "$(poll_until 40 pane_has 'Playing: ')" = 1 ] || return 1
+        rm -rf "$RL_BASE/inst"
+        tmux send-keys -t "$TS" q
+        poll_until 15 pane_has 'RC=' >/dev/null
+        return 0
+    }
+    TS="ctest-relocate-$$"
+    shell/t-play --stop --all -j >/dev/null 2>&1
+    if rl_run "$PWD/shell:$RL_BASE/tools:/usr/bin:/bin"; then
+        report "install gone, t-play on PATH: q stops the player" 0 "$(rl_players)"
+    else
+        report "the relocate pane's player starts" 1 0
+    fi
+    shell/t-play --stop --all -j >/dev/null 2>&1
+    if rl_run "$RL_BASE/tools:/usr/bin:/bin"; then
+        report "install gone, no t-play anywhere: q says how to stop it" 1 \
+            "$(pane_has 'still playing .* t-play --stop --id [A-Za-z0-9]+' && echo 1 || echo 0)"
+        report "…and the player it names is really still up" 1 "$(rl_players)"
+    else
+        report "the relocate pane's player starts (no t-play)" 1 0
+    fi
+    shell/t-play --stop --all -j >/dev/null 2>&1
+    tmux kill-session -t "$TS" 2>/dev/null
+    rm -rf "$RL_BASE"
 
     # ── Startup adoption: the player this screen did NOT launch ─────────────────────────
     # The bug this section pins was audible. With `t-play -d` already playing, ting started

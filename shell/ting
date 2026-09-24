@@ -356,6 +356,28 @@ elif command -v t-history >/dev/null 2>&1; then
     HISTORY_BIN=$(command -v t-history)
 fi
 
+# AN UPGRADE CAN TAKE THE TOOLS OUT FROM UNDER A RUNNING SESSION. The three paths above are
+# resolved once, at startup, and a package manager installs each version into a directory of
+# its own and deletes the old one when the new one lands (Homebrew's cleanup does it the same
+# second). A session opened before the upgrade then holds paths to files that are gone — and
+# the one call that must not fail quietly is the STOP: measured at the 0.14.0 release, `q`
+# ran a deleted `t-play --stop`, and the mpv it should have stopped played on with nothing
+# attached to it. So a path that no longer runs is looked up again on PATH, where a package
+# manager keeps its stable name for whichever version is current. One `[[ -x ]]` per tool per
+# loop turn (a stat, no fork); nothing is re-resolved while the file is still there, so an
+# ordinary session never changes which copy it talks to.
+relocate_tools() {
+    local p
+    if [[ ! -x "$PLAY_BIN" ]] && p=$(command -v t-play 2>/dev/null) && [[ -x "$p" ]]; then PLAY_BIN="$p"; fi
+    if [[ -n "$PLAYLIST_BIN" && ! -x "$PLAYLIST_BIN" ]] && p=$(command -v t-playlist 2>/dev/null) && [[ -x "$p" ]]; then
+        PLAYLIST_BIN="$p"
+    fi
+    if [[ -n "$HISTORY_BIN" && ! -x "$HISTORY_BIN" ]] && p=$(command -v t-history 2>/dev/null) && [[ -x "$p" ]]; then
+        HISTORY_BIN="$p"
+    fi
+    return 0
+}
+
 # THE ENGINE REGISTRY — discovered, not listed. The suite's whole claim is that adding a
 # source is adding a PAIR of scripts and changing nothing else; a hardcoded list of engine
 # names in this file would make that claim false at the third source, and it would be false
@@ -2073,6 +2095,7 @@ set_ui_lang() {
         S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
         S_QUITTING="正在退出"; S_PLAY_FAILED="播放失败"; S_SEARCH_ACT="搜索"
+        S_STOP_LOST="播放器没能停下，还在放 —— 用这条停掉它："
         S_URL_ACT="链接"; S_CONTAINER_ACT="合集"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
@@ -2127,6 +2150,7 @@ set_ui_lang() {
         S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
         S_QUITTING="Quitting"; S_PLAY_FAILED="Play failed"; S_SEARCH_ACT="Search"
+        S_STOP_LOST="the player could not be stopped and is still playing — stop it with:"
         S_URL_ACT="URL"; S_CONTAINER_ACT="Container"
         S_PIC_LOADING="loading pic..."
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
@@ -4261,14 +4285,26 @@ play_state_marks() {
     fi
 }
 
+# A stop that did not happen is SAID, never assumed: the banner stays (the player is still
+# running, and the banner is the one thing on screen that says so), the notice names the
+# command that stops it, and STOP_LOST_ID carries the id to cleanup_on_exit, which prints the
+# same line after the screen is gone — on `q` that line is the only witness there will be.
+STOP_LOST_ID=""
 stop_current_playback() {
     # Whatever stops the player pays the stop a delete was holding back (undo_forget): Enter
     # on another row, s, q. There is nothing left for it to stop.
     UNDO_STOP_PENDING=0
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        "$PLAY_BIN" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
-        clear_play_state
+        relocate_tools
+        if "$PLAY_BIN" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1; then
+            STOP_LOST_ID=""
+            clear_play_state
+        else
+            STOP_LOST_ID="$CURRENT_PLAY_ID"
+            store_notice "$S_ADOPT_ACT:" "$S_STOP_LOST t-play --stop --id $CURRENT_PLAY_ID"
+        fi
     fi
+    return 0
 }
 
 cleanup_on_exit() {
@@ -4303,6 +4339,9 @@ cleanup_on_exit() {
         return 0
     fi
     stop_current_playback
+    if [[ -n "$STOP_LOST_ID" ]]; then
+        printf 'ting: %s t-play --stop --id %s\n' "$S_STOP_LOST" "$STOP_LOST_ID" >&2
+    fi
 }
 trap cleanup_on_exit EXIT INT TERM HUP
 
@@ -8101,6 +8140,7 @@ filter_live() {
         # Fourth: an undo offer that has closed pays its held-back stop here as well — this
         # loop owns the screen for as long as / is open (undo_tick).
         undo_tick
+        relocate_tools
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
@@ -8917,6 +8957,7 @@ while true; do
     player_check_ready   # …and one that has not started yet must not claim it is playing
     chapter_follow       # …and a chapter list must move with the playhead, not with the keys
     undo_tick            # …and a closed undo offer must stop what its delete held back
+    relocate_tools       # …and an upgrade that moved the tools must not strand the player
     # Page mode's clamp only. In scroll mode the cursor is free to be anywhere in the list
     # and it is the WINDOW that follows — clamping it into a page-sized box here would undo
     # every move the moment it crossed one, which is the whole difference between the modes.
