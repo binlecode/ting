@@ -19,7 +19,7 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-09-23 on the author's machine: ~175s in full (646 checks), of which
+# Cost, measured 2026-09-23 on the author's machine: ~175s in full (661 checks), of which
 # `--offline` is the first ~48s with no packet sent. The live half is dominated by real
 # engine round trips (2-8s each) and the tmux TUI panes, which each wait for a real search and
 # a real first frame. The total count moves by a few between runs, and that is not sloppiness:
@@ -49,6 +49,9 @@
 # Usage:  tests/contract.sh            all checks
 #         tests/contract.sh --offline  the hermetic half only — every gate, both stores, the
 #                                      idle lifecycle, and no packet sent
+#         tests/contract.sh --only undo  the TUI undo pane alone (`z`, the held-back stop, the
+#                                      queue keys, the zh chrome): one real search, a real
+#                                      player, ~50s. The same checks the full run makes
 # Exit:   0 = every check held, 1 = at least one regression
 
 set -uo pipefail
@@ -60,13 +63,28 @@ cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
 # checks, in the same order, and the flag only stops before the first live call. What it
 # gives up is stated where it stops, so nobody mistakes a green --offline for a green suite.
 OFFLINE=0
+# --only runs ONE section and nothing else, for the loop of editing that section. It is not a
+# second suite: it calls the same function the full run calls, so the two cannot disagree
+# about what the checks are. One name today; a name it does not know is refused, not ignored.
+ONLY=""
 while [ $# -gt 0 ]; do
     case "$1" in
     --offline) OFFLINE=1; shift ;;
+    --only)
+        [ $# -ge 2 ] || { echo "contract.sh: --only needs a section name (undo)" >&2; exit 1; }
+        case "$2" in
+        undo) ONLY=$2 ;;
+        *) echo "contract.sh: --only knows one section: undo (got '$2')" >&2; exit 1 ;;
+        esac
+        shift 2 ;;
     -h | --help) sed -n '/^# Usage:/,/^# Exit:/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "contract.sh: unknown argument '$1' (try --help)" >&2; exit 1 ;;
     esac
 done
+if [ "$OFFLINE" = 1 ] && [ -n "$ONLY" ]; then
+    echo "contract.sh: --offline and --only cannot be combined (the undo pane needs a real search)" >&2
+    exit 1
+fi
 
 # ---- the player's state dir, pointed somewhere disposable ---------------------------
 # THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
@@ -266,6 +284,335 @@ err_has() {
     e=$("$@" 2>&1 >/dev/null)
     printf '%s' "$e" | grep -qi -- "$pat" && echo 0 || echo 1
 }
+
+# tmux is the tty for every pane below; a machine without it skips them, it does not fail.
+tmux_ok() {
+    command -v tmux >/dev/null 2>&1 || return 1
+    local _probe="ctest-probe-$$"
+    if tmux new-session -d -s "$_probe" "exit 0" 2>/dev/null; then
+        tmux kill-session -t "$_probe" 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
+# ONE POLLER FOR EVERY PANE IN THIS FILE. There used to be twenty-five copies of the same five-line
+# loop, each with its own counter, its own `sleep 0.25` and its own spelling of "did it
+# happen yet" — and a quarter of a second is a terrible granularity to watch a 15-25ms redraw
+# with: every one of those polls missed its first capture and then slept 250ms, so the
+# section spent seconds of wall clock waiting for something that had already happened. The
+# BUDGET is unchanged (the numbers below are seconds, and they are the same seconds the
+# counters spelled as `-lt 40` × 0.25); only the granularity moved.
+#
+# `poll_until <secs> <predicate…>` echoes 1 the moment the predicate holds and 0 when the
+# budget is gone, which is exactly the shape `report` wants — so a check is one line and
+# cannot drift from the poll that fed it.
+poll_until() {
+    local secs=$1 n i=0; shift
+    n=$((secs * 20))
+    while [ $i -lt $n ]; do
+        "$@" >/dev/null 2>&1 && { echo 1; return 0; }
+        sleep 0.05; i=$((i + 1))
+    done
+    echo 0
+}
+# The predicates. `-J` everywhere (join wrapped lines) so a pattern cannot miss because the
+# terminal folded the line it was on.
+pane_has()   { tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE "$1"; }
+pane_lacks() { ! pane_has "$1"; }
+# Left a room and came back: the pane must no longer show the room's marker AND must show the
+# one it returned to. Both halves, because a view that never changed still shows the second.
+pane_back()  { pane_lacks "$1" && pane_has "$2"; }
+cfg_has()    { grep -qE "$1" "$TUI_CFG"; }
+
+# The undo pane, as a function so `--only undo` can run it without the rest of the file
+# (see the dispatch just below). It is CALLED where it always ran, inside the live TUI block.
+undo_pane() {
+    # ── Undo replaces the confirmation: `z` ─────────────────────────────────────────────
+    # d, D and X used to stop the frame for a y/N; now they act on one key and the frame
+    # offers `z` for three seconds (ARCH-tui.md「可撤销取代预先确认」). What is claimed here is
+    # the TUI half — the offer is on the first frame and gone when `z` stops working, `z`
+    # puts back what the store says it restored, and the one side effect a copy cannot restore
+    # (a stopped player) is held back until the offer closes. The store's own half is proved
+    # command by command in the offline section and in playback.sh.
+    #
+    # A pane of its own, because the held-back stop needs a REAL player and the pane above is
+    # the one whose row and banner assertions must not be moved by one. Every list is made by
+    # real commands: a real search envelope into the store, and the one-track list by `a`, the
+    # key itself. Every "is the list as it was" is read off the store, never the frame.
+    UNDO_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-undostore.XXXXXX")
+    UNDO_CFG="$UT_TEST_TMP/undo-config"
+    : >"$UNDO_CFG"
+    printf '%s' "$YT_S" | UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --add undo-list -j >/dev/null 2>&1
+    [ "$(UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --show undo-list -j 2>/dev/null | jq -r '.count // 0')" -ge 3 ] ||
+        { echo "contract.sh: the undo list did not seed — suite error, not a failure" >&2; exit 1; }
+    ul_show() { UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --show "$1" -j 2>/dev/null; }
+    ul_count() { ul_show "$1" | jq -r '.count // "none"'; }
+    TS="ctest-undo-$$"
+    tmux kill-session -t "$TS" 2>/dev/null
+    tmux new-session -d -s "$TS" -x 100 -y 30 \
+        "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$UNDO_STATE' TING_STATE_DIR='$UNDO_STATE' UT_CONFIG='$UNDO_CFG' TING_CONFIG='$UNDO_CFG' YT_LANG=en shell/ting --volume 0 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+    undo_up=$(poll_until 40 pane_has "query='")
+    report "the undo pane paints a list" 1 "$undo_up"
+    if [ "$undo_up" = 1 ]; then
+        # Row numbers on, so "the cursor is on row 2" is a thing the frame can say.
+        tmux send-keys -t "$TS" '#'
+        tmux send-keys -t "$TS" b
+        poll_until 10 pane_has '1\. undo-list' >/dev/null
+        tmux send-keys -t "$TS" 1 Enter
+        report "undo: the list opens" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
+        U_BEFORE=$(ul_show undo-list)
+        tmux send-keys -t "$TS" Down
+        poll_until 5 pane_has '^[>▶▎] +2\.' >/dev/null
+        # d on row 2: one key, no question, and the offer on the very next frame.
+        tmux send-keys -t "$TS" d
+        report "d offers z on the first frame" 1 "$(poll_until 10 pane_has 'Removed from .* z to undo')"
+        report "…and asks nothing" 1 "$(pane_lacks 'y/N' && echo 1 || echo 0)"
+        report "…and the store lost the row" "$(($(printf '%s' "$U_BEFORE" | jq -r '.count') - 1))" "$(ul_count undo-list)"
+        tmux send-keys -t "$TS" z
+        report "z says it undid it" 1 "$(poll_until 10 pane_has 'Undo: Undone')"
+        report "…the list is byte-for-byte back" 0 "$([ "$(ul_show undo-list)" = "$U_BEFORE" ]; echo $?)"
+        report "…and the cursor is on the row it put back" 1 "$(poll_until 5 pane_has '^[>▶▎] +2\.')"
+        # The offer is visible exactly while it can act: once the hint is gone, z says so and
+        # changes nothing. The wait is on the hint leaving the frame, not on a clock.
+        tmux send-keys -t "$TS" d
+        poll_until 10 pane_has 'z to undo' >/dev/null
+        report "the offer leaves the frame by itself" 1 "$(poll_until 8 pane_lacks 'z to undo')"
+        U_AFTER=$(ul_show undo-list)
+        tmux send-keys -t "$TS" z
+        report "…after which z has nothing to undo" 1 "$(poll_until 10 pane_has 'nothing to undo')"
+        report "…and the list keeps the removal" 0 "$([ "$(ul_show undo-list)" = "$U_AFTER" ]; echo $?)"
+        # A run of d leaves only the LAST one undoable: one slot, never a stack. Each d is
+        # waited out on the store's own count, because the offer text looks the same twice.
+        ul_count_is() { [ "$(ul_count undo-list)" = "$1" ]; }
+        U_N=$(ul_count undo-list)
+        tmux send-keys -t "$TS" d
+        poll_until 10 ul_count_is $((U_N - 1)) >/dev/null
+        U_MID=$(ul_show undo-list)
+        tmux send-keys -t "$TS" d
+        poll_until 10 ul_count_is $((U_N - 2)) >/dev/null
+        tmux send-keys -t "$TS" z
+        poll_until 10 pane_has 'Undo: Undone' >/dev/null
+        report "two d then z: only the second comes back" 0 "$([ "$(ul_show undo-list)" = "$U_MID" ]; echo $?)"
+        # The store moves under the offer — a real write from this shell, the way an agent or a
+        # second ting would make it — and z must refuse, say why, and leave that write alone.
+        tmux send-keys -t "$TS" d
+        poll_until 10 pane_has 'z to undo' >/dev/null
+        ul_show undo-list | jq -c '{items: .items[0:1]}' |
+            UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --add undo-list -j >/dev/null 2>&1
+        U_MOVED=$(ul_show undo-list)
+        tmux send-keys -t "$TS" z
+        report "z on a list changed elsewhere says so" 1 "$(poll_until 10 pane_has 'changed elsewhere, not undone')"
+        report "…and keeps the other writer's change" 0 "$([ "$(ul_show undo-list)" = "$U_MOVED" ]; echo $?)"
+        U_AFTER=$U_MOVED
+        # R, then z: the name on screen goes back with the file.
+        tmux send-keys -t "$TS" R
+        poll_until 10 pane_has 'New name for playlist' >/dev/null
+        tmux send-keys -t "$TS" undo-renamed Enter
+        poll_until 10 pane_has "playlist='undo-renamed'" >/dev/null
+        tmux send-keys -t "$TS" z
+        report "R then z: the title is the old name" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
+        report "…and so is the store" '["undo-list"]' \
+            "$(UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --ls -j 2>/dev/null | jq -c '[.playlists[].name]')"
+        # D, then z from the search it left us on: the list is reopened.
+        tmux send-keys -t "$TS" D
+        report "D lands on the search with the offer" 1 "$(poll_until 10 pane_has 'Deleted playlist .* z to undo')"
+        tmux send-keys -t "$TS" z
+        report "…and z reopens the list" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
+        report "…which the store has again" 0 "$([ "$(ul_show undo-list)" = "$U_AFTER" ]; echo $?)"
+        # `a` makes the one-track list, and its own undo is proved on the way: z on a list the
+        # add CREATED takes the list away again.
+        tmux send-keys -t "$TS" b
+        poll_until 10 pane_back "playlist='" "query='" >/dev/null
+        tmux send-keys -t "$TS" a
+        poll_until 10 pane_has 'Add to which' >/dev/null
+        tmux send-keys -t "$TS" undo-solo Enter
+        report "a offers z" 1 "$(poll_until 10 pane_has 'Added to .* z to undo')"
+        tmux send-keys -t "$TS" z
+        poll_until 10 pane_has 'Undo: Undone' >/dev/null
+        report "…and z unmakes the list it made" none "$(ul_count undo-solo)"
+        tmux send-keys -t "$TS" a
+        poll_until 10 pane_has 'Add to which' >/dev/null
+        tmux send-keys -t "$TS" undo-solo Enter
+        poll_until 10 pane_has 'Added to' >/dev/null
+        report "a made the one-track list" 1 "$(ul_count undo-solo)"
+        # Removing the last track: back to the search, no question, the empty-list sentence
+        # AND the offer on one line — and z brings the track back into the list it reopens.
+        tmux send-keys -t "$TS" b
+        poll_until 10 pane_has 'undo-solo' >/dev/null
+        tmux send-keys -t "$TS" undo-solo Enter
+        poll_until 10 pane_has "playlist='undo-solo'" >/dev/null
+        U_SOLO=$(ul_show undo-solo)
+        tmux send-keys -t "$TS" d
+        solo_emptied() { pane_has "query='" && pane_has 'that playlist is empty .* z to undo'; }
+        report "the last track out: the search, empty and undoable" 1 "$(poll_until 10 solo_emptied)"
+        report "…with no question about deleting it" 1 "$(pane_lacks 'y/N' && echo 1 || echo 0)"
+        tmux send-keys -t "$TS" z
+        report "…and z reopens it with the track" 1 "$(poll_until 10 pane_has "playlist='undo-solo'")"
+        report "…as the store has it" 0 "$([ "$(ul_show undo-solo)" = "$U_SOLO" ]; echo $?)"
+        # Let the empty list stand: it is still a list, and the picker still offers it.
+        tmux send-keys -t "$TS" d
+        poll_until 10 pane_has 'z to undo' >/dev/null
+        poll_until 8 pane_lacks 'z to undo' >/dev/null
+        tmux send-keys -t "$TS" b
+        report "an emptied list stays in the picker" 1 "$(poll_until 10 pane_has 'undo-solo +0 items')"
+        tmux send-keys -t "$TS" Escape
+        # Waited out before the next key: an Esc with a letter right behind it is Alt+letter to
+        # the reader, and the `b` below would be eaten as the tail of one.
+        poll_until 10 pane_lacks 'Open which' >/dev/null
+        # THE HELD-BACK STOP. Round one takes no undo: the player must survive the offer and
+        # stop when it closes. Round two takes it: the player must survive the offer's END,
+        # which is proved by outliving a second offer (the next d's) that closes after it.
+        ul_players() { shell/t-play --status -j 2>/dev/null | jq '.players | length'; }
+        tmux send-keys -t "$TS" b
+        poll_until 10 pane_has '[0-9]\. undo-list' >/dev/null
+        tmux send-keys -t "$TS" undo-list Enter
+        poll_until 10 pane_has "playlist='undo-list'" >/dev/null
+        tmux send-keys -t "$TS" Enter
+        undo_playing=$(poll_until 40 pane_has 'Playing: ')
+        report "the undo pane's player starts" 1 "$undo_playing"
+        if [ "$undo_playing" != 1 ]; then
+            echo "  ---- undo pane when its player did not start ----" >&2
+            tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+            echo "  ---- end of pane ----" >&2
+        fi
+        if [ "$undo_playing" = 1 ]; then
+            tmux send-keys -t "$TS" d
+            poll_until 10 pane_has 'z to undo' >/dev/null
+            report "d on the playing row: it plays on while z is offered" 1 \
+                "$( [ "$(ul_players)" = 1 ] && pane_has 'Playing: ' && echo 1 || echo 0)"
+            poll_until 8 pane_lacks 'z to undo' >/dev/null
+            report "…and stops when the offer closes" 1 "$(poll_until 10 pane_lacks 'Playing: ')"
+            report "…the player is gone, not just the banner" 0 "$(ul_players)"
+            tmux send-keys -t "$TS" Enter
+            poll_until 40 pane_has 'Playing: ' >/dev/null
+            tmux send-keys -t "$TS" d
+            poll_until 10 pane_has 'z to undo' >/dev/null
+            tmux send-keys -t "$TS" z
+            poll_until 10 pane_has 'Undo: Undone' >/dev/null
+            tmux send-keys -t "$TS" Down
+            tmux send-keys -t "$TS" d
+            poll_until 10 pane_has 'z to undo' >/dev/null
+            poll_until 8 pane_lacks 'z to undo' >/dev/null
+            report "d then z on the playing row: it never stops" 1 \
+                "$( [ "$(ul_players)" = 1 ] && pane_has 'Playing: ' && echo 1 || echo 0)"
+            # `+` is the queue's write with an undo, and it is on the same player.
+            tmux send-keys -t "$TS" +
+            poll_until 10 pane_has 'Queued .* z to undo' >/dev/null
+            tmux send-keys -t "$TS" z
+            poll_until 10 pane_has 'Undo: Undone' >/dev/null
+            report "+ then z: the queue is one track again" 1 \
+                "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].queue.len // empty')"
+            # ONE SLOT ACROSS BOTH STORES: a queue write after a playlist write drops the
+            # playlist's copy, so z takes back the + and the d before it stays done.
+            q_len_is() { [ "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].queue.len // empty')" = "$1" ]; }
+            tmux send-keys -t "$TS" d
+            poll_until 10 pane_has 'Removed from .* z to undo' >/dev/null
+            U_N=$(ul_count undo-list)
+            tmux send-keys -t "$TS" +
+            poll_until 10 q_len_is 2 >/dev/null
+            tmux send-keys -t "$TS" z
+            report "d, +, z: z takes back the +" 1 "$(poll_until 10 q_len_is 1)"
+            report "…and not the d before it" "$U_N" "$(ul_count undo-list)"
+            # The queue view's own keys. A tail of two to edit, then the queue from the search
+            # (u opens from search rows only). Every "came home" is the whole url order.
+            q_urls() { shell/t-play --queue-show -j 2>/dev/null | jq -c '[.items[].url]'; }
+            q_state() { shell/t-play --queue-show -j 2>/dev/null | jq -c '{pos, urls: [.items[].url]}'; }
+            tmux send-keys -t "$TS" +
+            poll_until 10 q_len_is 2 >/dev/null
+            tmux send-keys -t "$TS" Down
+            tmux send-keys -t "$TS" +
+            poll_until 10 q_len_is 3 >/dev/null
+            tmux send-keys -t "$TS" b
+            poll_until 10 pane_back "playlist='" "query='" >/dev/null
+            tmux send-keys -t "$TS" u
+            report "u opens the queue for its keys" 1 "$(poll_until 15 pane_has "queue='")"
+            Q0=$(q_urls)
+            tmux send-keys -t "$TS" Down
+            poll_until 5 pane_has '^[>▶▎] +2\.' >/dev/null
+            tmux send-keys -t "$TS" x
+            report "x offers z" 1 "$(poll_until 10 pane_has 'Removed from the queue .* z to undo')"
+            tmux send-keys -t "$TS" z
+            poll_until 10 pane_has 'Undo: Undone' >/dev/null
+            report "…and z puts the track back in its slot" "$Q0" "$(q_urls)"
+            tmux send-keys -t "$TS" X
+            report "X asks nothing and offers z" 1 "$(poll_until 10 pane_has 'Cleared the queue .* z to undo')"
+            tmux send-keys -t "$TS" z
+            poll_until 10 pane_has 'Undo: Undone' >/dev/null
+            report "…and z brings the whole tail back" "$Q0" "$(q_urls)"
+            # A TRACK BOUNDARY between x and z: the player has moved pos, so putting the old
+            # bytes back would replay a track. The TUI must say so and change nothing.
+            tmux send-keys -t "$TS" Down
+            poll_until 5 pane_has '^[>▶▎] +2\.' >/dev/null
+            tmux send-keys -t "$TS" x
+            poll_until 10 pane_has 'Removed from the queue .* z to undo' >/dev/null
+            tmux send-keys -t "$TS" '>'
+            q_pos_is() { [ "$(shell/t-play --queue-show -j 2>/dev/null | jq -r '.pos')" = "$1" ]; }
+            poll_until 10 q_pos_is 1 >/dev/null
+            Q1=$(q_state)
+            tmux send-keys -t "$TS" z
+            report "x, a skip, then z: refused and said" 1 "$(poll_until 10 pane_has 'changed elsewhere, not undone')"
+            report "…and the queue is left as the player has it" "$Q1" "$(q_state)"
+            # Back to the playlist, where the exit check below leaves its open copy.
+            tmux send-keys -t "$TS" u
+            poll_until 10 pane_back "queue='" "query='" >/dev/null
+            tmux send-keys -t "$TS" b
+            poll_until 10 pane_has '[0-9]\. undo-list' >/dev/null
+            tmux send-keys -t "$TS" undo-list Enter
+            poll_until 10 pane_has "playlist='undo-list'" >/dev/null
+        fi
+        # The copies go with the process that could have used them — so one is left OPEN when
+        # q lands, or this would pass on a copy some earlier z had already spent.
+        tmux send-keys -t "$TS" d
+        poll_until 10 pane_has 'z to undo' >/dev/null
+        tmux send-keys -t "$TS" q
+        report "the undo pane quits with 0" 1 "$(poll_until 10 pane_has 'RC=0')"
+        report "…and leaves no undo copy behind" 0 \
+            "$(ls -d "$UNDO_STATE"/undo/playlist-* "$TMPDIR/ting-$(id -u)"/undo-queue-* 2>/dev/null | wc -l | tr -d ' ')"
+        # The zh chrome, on a pane of its own: every string above was the en one, and the
+        # offer is a sentence the user reads, so its other spelling is proved too — first
+        # frame and after z, the two places it appears.
+        tmux kill-session -t "$TS" 2>/dev/null
+        tmux new-session -d -s "$TS" -x 100 -y 30 \
+            "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$UNDO_STATE' TING_STATE_DIR='$UNDO_STATE' UT_CONFIG='$UNDO_CFG' TING_CONFIG='$UNDO_CFG' YT_LANG=zh shell/ting 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+        if [ "$(poll_until 40 pane_has "query='")" = 1 ]; then
+            tmux send-keys -t "$TS" b
+            poll_until 10 pane_has '[0-9]\. undo-list' >/dev/null
+            tmux send-keys -t "$TS" undo-list Enter
+            poll_until 10 pane_has "playlist='undo-list'" >/dev/null
+            U_ZH=$(ul_show undo-list)
+            tmux send-keys -t "$TS" d
+            report "zh: the offer reads z 撤销" 1 "$(poll_until 10 pane_has '已移出 .* z 撤销')"
+            tmux send-keys -t "$TS" z
+            report "zh: …and z answers 已撤销" 1 "$(poll_until 10 pane_has '撤销: 已撤销')"
+            report "zh: …with the list back" 0 "$([ "$(ul_show undo-list)" = "$U_ZH" ]; echo $?)"
+            tmux send-keys -t "$TS" q
+            poll_until 10 pane_has 'RC=0' >/dev/null
+        else
+            report "zh: the undo pane paints a list" 1 0
+        fi
+    fi
+    shell/t-play --stop --all -j >/dev/null 2>&1
+    tmux kill-session -t "$TS" 2>/dev/null
+    rm -rf "$UNDO_STATE"
+}
+
+# --only undo: the pane above and nothing else. It needs the one input the full run hands it
+# — a real search envelope, made the way the live preamble makes it (search-yt) — and the
+# tally. Placed after every helper and before the first check, so it skips everything and
+# borrows nothing it would not get in a full run.
+if [ "$ONLY" = undo ]; then
+    echo "── only: the undo pane ────────────────────────────────────────────"
+    if ! tmux_ok; then
+        echo "  skip  (needs tmux for a real tty)"
+        summary
+    fi
+    YT_S=$(shell/yt-search -j -n 10 -- lofi 2>/dev/null)
+    [ "$(printf '%s' "$YT_S" | jq -r '.count // 0' 2>/dev/null)" -ge 3 ] ||
+        { echo "contract.sh: the search for the undo pane returned too little — suite error, not a failure" >&2; exit 1; }
+    undo_pane
+    summary
+fi
 
 # ---- the offline half, FIRST -------------------------------------------------------
 # Everything below this line to the live preamble runs without a network: flag gates,
@@ -1902,15 +2249,6 @@ rm -rf "$CFGD"
 # discriminating bound: unreachable for a one-second wait, and four times the ~130 ms the
 # tty-timed reader takes. It is spent as ONE sleep and ONE capture rather than a poll loop —
 # a loop's own forks would inflate the very window being measured.
-tmux_ok() {
-    command -v tmux >/dev/null 2>&1 || return 1
-    local _probe="ctest-probe-$$"
-    if tmux new-session -d -s "$_probe" "exit 0" 2>/dev/null; then
-        tmux kill-session -t "$_probe" 2>/dev/null || true
-        return 0
-    fi
-    return 1
-}
 
 echo
 echo "── a paste is text, not keys ──────────────────────────────────────"
@@ -2870,34 +3208,8 @@ echo "── the TUI boots, paints, survives a resize, and leaves on q ───
 # tmux is the tty. Wait on the ready marker, never on a sleep — a captured spinner frame is
 # a picture of the loading state, and a blind sleep here has produced a wrong result before.
 #
-# ONE POLLER FOR THE WHOLE SECTION. There used to be twenty-five copies of the same five-line
-# loop, each with its own counter, its own `sleep 0.25` and its own spelling of "did it
-# happen yet" — and a quarter of a second is a terrible granularity to watch a 15-25ms redraw
-# with: every one of those polls missed its first capture and then slept 250ms, so the
-# section spent seconds of wall clock waiting for something that had already happened. The
-# BUDGET is unchanged (the numbers below are seconds, and they are the same seconds the
-# counters spelled as `-lt 40` × 0.25); only the granularity moved.
-#
-# `poll_until <secs> <predicate…>` echoes 1 the moment the predicate holds and 0 when the
-# budget is gone, which is exactly the shape `report` wants — so a check is one line and
-# cannot drift from the poll that fed it.
-poll_until() {
-    local secs=$1 n i=0; shift
-    n=$((secs * 20))
-    while [ $i -lt $n ]; do
-        "$@" >/dev/null 2>&1 && { echo 1; return 0; }
-        sleep 0.05; i=$((i + 1))
-    done
-    echo 0
-}
-# The predicates. `-J` everywhere (join wrapped lines) so a pattern cannot miss because the
-# terminal folded the line it was on.
-pane_has()   { tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE "$1"; }
-pane_lacks() { ! pane_has "$1"; }
-# Left a room and came back: the pane must no longer show the room's marker AND must show the
-# one it returned to. Both halves, because a view that never changed still shows the second.
-pane_back()  { pane_lacks "$1" && pane_has "$2"; }
-cfg_has()    { grep -qE "$1" "$TUI_CFG"; }
+# The poller and the pane predicates are defined up with the other helpers (search for
+# poll_until): the undo pane, which `--only undo` runs on its own, needs them before this line.
 if ! tmux_ok; then
     echo "  skip  (needs tmux for a real tty)"
 else
@@ -3688,171 +4000,7 @@ else
     tmux kill-session -t "$TS" 2>/dev/null
     rm -rf "$TUI_STATE"
 
-    # ── Undo replaces the confirmation: `z` ─────────────────────────────────────────────
-    # d, D and X used to stop the frame for a y/N; now they act on one key and the frame
-    # offers `z` for three seconds (ARCH-tui.md「可撤销取代预先确认」). What is claimed here is
-    # the TUI half — the offer is on the first frame and gone when `z` stops working, `z`
-    # puts back what the store says it restored, and the one side effect a copy cannot restore
-    # (a stopped player) is held back until the offer closes. The store's own half is proved
-    # command by command in the offline section and in playback.sh.
-    #
-    # A pane of its own, because the held-back stop needs a REAL player and the pane above is
-    # the one whose row and banner assertions must not be moved by one. Every list is made by
-    # real commands: a real search envelope into the store, and the one-track list by `a`, the
-    # key itself. Every "is the list as it was" is read off the store, never the frame.
-    UNDO_STATE=$(mktemp -d "${TMPDIR:-/tmp}/ting-undostore.XXXXXX")
-    UNDO_CFG="$UT_TEST_TMP/undo-config"
-    : >"$UNDO_CFG"
-    printf '%s' "$YT_S" | UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --add undo-list -j >/dev/null 2>&1
-    [ "$(UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --show undo-list -j 2>/dev/null | jq -r '.count // 0')" -ge 3 ] ||
-        { echo "contract.sh: the undo list did not seed — suite error, not a failure" >&2; exit 1; }
-    ul_show() { UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --show "$1" -j 2>/dev/null; }
-    ul_count() { ul_show "$1" | jq -r '.count // "none"'; }
-    TS="ctest-undo-$$"
-    tmux kill-session -t "$TS" 2>/dev/null
-    tmux new-session -d -s "$TS" -x 100 -y 30 \
-        "cd '$PWD' && env YT_SYNC=0 UT_HISTORY=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$UNDO_STATE' TING_STATE_DIR='$UNDO_STATE' UT_CONFIG='$UNDO_CFG' TING_CONFIG='$UNDO_CFG' YT_LANG=en shell/ting --volume 0 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
-    undo_up=$(poll_until 40 pane_has "query='")
-    report "the undo pane paints a list" 1 "$undo_up"
-    if [ "$undo_up" = 1 ]; then
-        # Row numbers on, so "the cursor is on row 2" is a thing the frame can say.
-        tmux send-keys -t "$TS" '#'
-        tmux send-keys -t "$TS" b
-        poll_until 10 pane_has '1\. undo-list' >/dev/null
-        tmux send-keys -t "$TS" 1 Enter
-        report "undo: the list opens" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
-        U_BEFORE=$(ul_show undo-list)
-        tmux send-keys -t "$TS" Down
-        poll_until 5 pane_has '^[>▶▎] +2\.' >/dev/null
-        # d on row 2: one key, no question, and the offer on the very next frame.
-        tmux send-keys -t "$TS" d
-        report "d offers z on the first frame" 1 "$(poll_until 10 pane_has 'Removed from .* z to undo')"
-        report "…and asks nothing" 1 "$(pane_lacks 'y/N' && echo 1 || echo 0)"
-        report "…and the store lost the row" "$(($(printf '%s' "$U_BEFORE" | jq -r '.count') - 1))" "$(ul_count undo-list)"
-        tmux send-keys -t "$TS" z
-        report "z says it undid it" 1 "$(poll_until 10 pane_has 'Undo: Undone')"
-        report "…the list is byte-for-byte back" 0 "$([ "$(ul_show undo-list)" = "$U_BEFORE" ]; echo $?)"
-        report "…and the cursor is on the row it put back" 1 "$(poll_until 5 pane_has '^[>▶▎] +2\.')"
-        # The offer is visible exactly while it can act: once the hint is gone, z says so and
-        # changes nothing. The wait is on the hint leaving the frame, not on a clock.
-        tmux send-keys -t "$TS" d
-        poll_until 10 pane_has 'z to undo' >/dev/null
-        report "the offer leaves the frame by itself" 1 "$(poll_until 8 pane_lacks 'z to undo')"
-        U_AFTER=$(ul_show undo-list)
-        tmux send-keys -t "$TS" z
-        report "…after which z has nothing to undo" 1 "$(poll_until 10 pane_has 'nothing to undo')"
-        report "…and the list keeps the removal" 0 "$([ "$(ul_show undo-list)" = "$U_AFTER" ]; echo $?)"
-        # R, then z: the name on screen goes back with the file.
-        tmux send-keys -t "$TS" R
-        poll_until 10 pane_has 'New name for playlist' >/dev/null
-        tmux send-keys -t "$TS" undo-renamed Enter
-        poll_until 10 pane_has "playlist='undo-renamed'" >/dev/null
-        tmux send-keys -t "$TS" z
-        report "R then z: the title is the old name" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
-        report "…and so is the store" '["undo-list"]' \
-            "$(UT_STATE_DIR="$UNDO_STATE" shell/t-playlist --ls -j 2>/dev/null | jq -c '[.playlists[].name]')"
-        # D, then z from the search it left us on: the list is reopened.
-        tmux send-keys -t "$TS" D
-        report "D lands on the search with the offer" 1 "$(poll_until 10 pane_has 'Deleted playlist .* z to undo')"
-        tmux send-keys -t "$TS" z
-        report "…and z reopens the list" 1 "$(poll_until 10 pane_has "playlist='undo-list'")"
-        report "…which the store has again" 0 "$([ "$(ul_show undo-list)" = "$U_AFTER" ]; echo $?)"
-        # `a` makes the one-track list, and its own undo is proved on the way: z on a list the
-        # add CREATED takes the list away again.
-        tmux send-keys -t "$TS" b
-        poll_until 10 pane_back "playlist='" "query='" >/dev/null
-        tmux send-keys -t "$TS" a
-        poll_until 10 pane_has 'Add to which' >/dev/null
-        tmux send-keys -t "$TS" undo-solo Enter
-        report "a offers z" 1 "$(poll_until 10 pane_has 'Added to .* z to undo')"
-        tmux send-keys -t "$TS" z
-        poll_until 10 pane_has 'Undo: Undone' >/dev/null
-        report "…and z unmakes the list it made" none "$(ul_count undo-solo)"
-        tmux send-keys -t "$TS" a
-        poll_until 10 pane_has 'Add to which' >/dev/null
-        tmux send-keys -t "$TS" undo-solo Enter
-        poll_until 10 pane_has 'Added to' >/dev/null
-        report "a made the one-track list" 1 "$(ul_count undo-solo)"
-        # Removing the last track: back to the search, no question, the empty-list sentence
-        # AND the offer on one line — and z brings the track back into the list it reopens.
-        tmux send-keys -t "$TS" b
-        poll_until 10 pane_has 'undo-solo' >/dev/null
-        tmux send-keys -t "$TS" undo-solo Enter
-        poll_until 10 pane_has "playlist='undo-solo'" >/dev/null
-        U_SOLO=$(ul_show undo-solo)
-        tmux send-keys -t "$TS" d
-        solo_emptied() { pane_has "query='" && pane_has 'that playlist is empty .* z to undo'; }
-        report "the last track out: the search, empty and undoable" 1 "$(poll_until 10 solo_emptied)"
-        report "…with no question about deleting it" 1 "$(pane_lacks 'y/N' && echo 1 || echo 0)"
-        tmux send-keys -t "$TS" z
-        report "…and z reopens it with the track" 1 "$(poll_until 10 pane_has "playlist='undo-solo'")"
-        report "…as the store has it" 0 "$([ "$(ul_show undo-solo)" = "$U_SOLO" ]; echo $?)"
-        # Let the empty list stand: it is still a list, and the picker still offers it.
-        tmux send-keys -t "$TS" d
-        poll_until 10 pane_has 'z to undo' >/dev/null
-        poll_until 8 pane_lacks 'z to undo' >/dev/null
-        tmux send-keys -t "$TS" b
-        report "an emptied list stays in the picker" 1 "$(poll_until 10 pane_has 'undo-solo +0 items')"
-        tmux send-keys -t "$TS" Escape
-        # Waited out before the next key: an Esc with a letter right behind it is Alt+letter to
-        # the reader, and the `b` below would be eaten as the tail of one.
-        poll_until 10 pane_lacks 'Open which' >/dev/null
-        # THE HELD-BACK STOP. Round one takes no undo: the player must survive the offer and
-        # stop when it closes. Round two takes it: the player must survive the offer's END,
-        # which is proved by outliving a second offer (the next d's) that closes after it.
-        ul_players() { shell/t-play --status -j 2>/dev/null | jq '.players | length'; }
-        tmux send-keys -t "$TS" b
-        poll_until 10 pane_has '[0-9]\. undo-list' >/dev/null
-        tmux send-keys -t "$TS" undo-list Enter
-        poll_until 10 pane_has "playlist='undo-list'" >/dev/null
-        tmux send-keys -t "$TS" Enter
-        undo_playing=$(poll_until 40 pane_has 'Playing: ')
-        report "the undo pane's player starts" 1 "$undo_playing"
-        if [ "$undo_playing" != 1 ]; then
-            echo "  ---- undo pane when its player did not start ----" >&2
-            tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
-            echo "  ---- end of pane ----" >&2
-        fi
-        if [ "$undo_playing" = 1 ]; then
-            tmux send-keys -t "$TS" d
-            poll_until 10 pane_has 'z to undo' >/dev/null
-            report "d on the playing row: it plays on while z is offered" 1 \
-                "$( [ "$(ul_players)" = 1 ] && pane_has 'Playing: ' && echo 1 || echo 0)"
-            poll_until 8 pane_lacks 'z to undo' >/dev/null
-            report "…and stops when the offer closes" 1 "$(poll_until 10 pane_lacks 'Playing: ')"
-            report "…the player is gone, not just the banner" 0 "$(ul_players)"
-            tmux send-keys -t "$TS" Enter
-            poll_until 40 pane_has 'Playing: ' >/dev/null
-            tmux send-keys -t "$TS" d
-            poll_until 10 pane_has 'z to undo' >/dev/null
-            tmux send-keys -t "$TS" z
-            poll_until 10 pane_has 'Undo: Undone' >/dev/null
-            tmux send-keys -t "$TS" Down
-            tmux send-keys -t "$TS" d
-            poll_until 10 pane_has 'z to undo' >/dev/null
-            poll_until 8 pane_lacks 'z to undo' >/dev/null
-            report "d then z on the playing row: it never stops" 1 \
-                "$( [ "$(ul_players)" = 1 ] && pane_has 'Playing: ' && echo 1 || echo 0)"
-            # `+` is the queue's write with an undo, and it is on the same player.
-            tmux send-keys -t "$TS" +
-            poll_until 10 pane_has 'Queued .* z to undo' >/dev/null
-            tmux send-keys -t "$TS" z
-            poll_until 10 pane_has 'Undo: Undone' >/dev/null
-            report "+ then z: the queue is one track again" 1 \
-                "$(shell/t-play --status -j 2>/dev/null | jq -r '.players[0].queue.len // empty')"
-        fi
-        # The copies go with the process that could have used them — so one is left OPEN when
-        # q lands, or this would pass on a copy some earlier z had already spent.
-        tmux send-keys -t "$TS" d
-        poll_until 10 pane_has 'z to undo' >/dev/null
-        tmux send-keys -t "$TS" q
-        report "the undo pane quits with 0" 1 "$(poll_until 10 pane_has 'RC=0')"
-        report "…and leaves no undo copy behind" 0 \
-            "$(ls -d "$UNDO_STATE"/undo/playlist-* "$TMPDIR/ting-$(id -u)"/undo-queue-* 2>/dev/null | wc -l | tr -d ' ')"
-    fi
-    shell/t-play --stop --all -j >/dev/null 2>&1
-    tmux kill-session -t "$TS" 2>/dev/null
-    rm -rf "$UNDO_STATE"
+    undo_pane
 
     # ── Startup adoption: the player this screen did NOT launch ─────────────────────────
     # The bug this section pins was audible. With `t-play -d` already playing, ting started

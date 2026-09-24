@@ -61,7 +61,8 @@ bash -n shell/*
 
 # 契约与单元测试（自动化测试）
 tests/contract.sh --offline               # 离线半边检查（约 48s，不发网络包，覆盖 TUI 启动与 CLI 门控）
-tests/contract.sh                         # 全量契约检查（约 175s，646 项检查，含真实端点探测）
+tests/contract.sh                         # 全量契约检查（约 175s，661 项检查，含真实端点探测）
+tests/contract.sh --only undo             # 只跑 TUI 撤销那一段（约 47s，真实搜索 + 真实播放器）
 tests/playback.sh                         # 真实 detached 播放器生命周期回归测试（约 108s）
 tests/drive.sh -x 62 -y 20                # tmux 窄终端 TUI 键盘自动化驱动与截屏测试
 
