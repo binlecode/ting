@@ -492,7 +492,13 @@ require_deps() {
 NC_UNIX=()
 resolve_nc_unix() {
     ((${#NC_UNIX[@]})) && return 0
-    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q -- '-U'; then
+    # CAPTURED, then matched — never `nc -h | grep -q`. Under pipefail that pipeline's status
+    # is nc's, and BSD `nc -h` exits 1 after printing its usage, so the stock macOS client
+    # was refused on every machine and only ever worked where nmap's ncat caught the fall.
+    local nc_help=""
+    command -v nc >/dev/null 2>&1 && nc_help=$(nc -h 2>&1 || true)
+    # Whitespace either side, not a space: BSD indents its flag lines with a TAB.
+    if [[ "$nc_help" =~ [[:space:]]-U[[:space:]] ]]; then
         NC_UNIX=(nc -U -w1)
     elif command -v ncat >/dev/null 2>&1; then
         NC_UNIX=(ncat -U -w 1 -i 1)

@@ -594,7 +594,9 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 **用 netcat 而不是 `socat`（不加新依赖）。** 已有的 mpv 包装器多用
 `socat - UNIX-CONNECT:$sock`（干净的 EOF，没有 `-w` 的延迟地板），但 macOS 上没有 socat。我们
 留在 netcat 上，用 `request_id` 过滤买回健壮性 —— 比引入一个工具链其余部分都不需要的依赖便宜。
-**具体用哪个 netcat 由 `resolve_nc_unix` 按能力探测**（`-h` 文本里有没有 `-U`）：BSD/openbsd 的
+**具体用哪个 netcat 由 `resolve_nc_unix` 按能力探测**（`-h` 文本里有没有一个两侧是空白的 `-U`；
+先把 `-h` 的输出存进变量再匹配，绝不 `nc -h | grep -q` —— pipefail 下那条管道的状态是 nc 自己的，
+而 BSD `nc -h` 退 1，于是系统自带的 nc 在每台 Mac 上都被拒掉过；BSD 的选项行以 tab 缩进）：BSD/openbsd 的
 `nc -U -w1` 优先，没有就落 `ncat -U -w 1 -i 1`（ncat 的 `-w` 只管连接超时，空闲兜底是 `-i`），
 两个都没有，socket 动词才拒。`t-play` 与 `ting` 各带一份探测（十个对等文件不共享库）。延迟是
 地板不是天花板（约 ≤1s/次）：mpv 把 socket 一直开着，所以回复之后若没有后续事件，读端可能一直

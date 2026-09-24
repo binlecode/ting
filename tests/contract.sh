@@ -19,7 +19,7 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-09-23 on the author's machine: ~195s in full (664 checks), of which
+# Cost, measured 2026-09-23 on the author's machine: ~195s in full (665 checks), of which
 # `--offline` is the first ~48s with no packet sent. The live half is dominated by real
 # engine round trips (2-8s each) and the tmux TUI panes, which each wait for a real search and
 # a real first frame. The total count moves by a few between runs, and that is not sloppiness:
@@ -671,6 +671,26 @@ done
 # verb is raising a count, not covering a case — the exit codes above are what catch a verb
 # wired to the wrong helper.
 report "idle --pause says why"   0 "$(jq_ok '.status=="not_playing"' shell/t-play --pause -j)"
+# THE STOCK CLIENT IS ENOUGH. Every socket verb needs a unix-socket netcat, and macOS ships
+# one — but the probe used to be `nc -h | grep -q` under pipefail, which carries nc's own
+# exit, and BSD `nc -h` exits 1. So the stock client was refused everywhere and the suite
+# passed only because this machine also had nmap's ncat. Here PATH holds jq and the system
+# dirs and nothing else: 4 (no player) is the client accepted, 2 is the client refused.
+# Skipped, with a line, where the premise is not there to test: no BSD nc with -U in /usr/bin,
+# or an ncat in the system dirs that would make the check pass without the nc branch.
+NC_ONLY=$(mktemp -d "${TMPDIR:-/tmp}/ting-nconly.XXXXXX")
+ln -s "$(command -v jq)" "$NC_ONLY/jq"
+# The premise is read the way the fix reads it — captured, then matched: this file runs under
+# pipefail too, and `nc -h | grep -q` here would skip on every machine for the same reason.
+_nch=""
+[ -x /usr/bin/nc ] && _nch=$(/usr/bin/nc -h 2>&1 || true)
+if [[ "$_nch" =~ [[:space:]]-U[[:space:]] ]] &&
+    ! env "PATH=/usr/bin:/bin" command -v ncat >/dev/null 2>&1; then
+    report "the stock nc drives the socket verbs" 4 "$(env "PATH=$NC_ONLY:/usr/bin:/bin" shell/t-play --pause -j >/dev/null 2>&1; echo $?)"
+else
+    echo "  skip  (no BSD nc with -U in /usr/bin, or an ncat beside it — the stock-client claim cannot be tested here)"
+fi
+rm -rf "$NC_ONLY"
 # The 1-vs-4 split on the one verb that can fail both ways. A malformed value never reaches a
 # player, so it is usage (1); a well-formed call with no player to receive it is 4. Getting
 # these the same way round is what makes an agent retry a call it should have fixed instead.

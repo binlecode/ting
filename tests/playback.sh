@@ -344,6 +344,24 @@ report "--resume reads back running" "false" \
     "$(shell/t-play --resume --id "$id1" -j | jq -r '.paused')"
 report "…and --status agrees"         "false" \
     "$(shell/t-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
+# THE SAME ROUND TRIP WITH NOTHING BUT THE STOCK nc. contract.sh proves the client is
+# accepted; only a real mpv socket proves BSD `nc -U -w1` actually carries a command and brings
+# the answer back. PATH holds jq and the system dirs, so no ncat can stand in for it. Skipped
+# where the premise is absent (no BSD nc with -U, or an ncat in the system dirs).
+NC_ONLY="$UT_TEST_TMP/nc-only"
+mkdir -p "$NC_ONLY"
+ln -sf "$(command -v jq)" "$NC_ONLY/jq"
+_nch=""
+[ -x /usr/bin/nc ] && _nch=$(/usr/bin/nc -h 2>&1 || true)
+if [[ "$_nch" =~ [[:space:]]-U[[:space:]] ]] &&
+    ! env "PATH=/usr/bin:/bin" command -v ncat >/dev/null 2>&1; then
+    report "stock nc: --pause reads back paused" "true" \
+        "$(env "PATH=$NC_ONLY:/usr/bin:/bin" shell/t-play --pause --id "$id1" -j | jq -r '.paused')"
+    report "stock nc: --resume reads back running" "false" \
+        "$(env "PATH=$NC_ONLY:/usr/bin:/bin" shell/t-play --resume --id "$id1" -j | jq -r '.paused')"
+else
+    echo "  skip  (no BSD nc with -U in /usr/bin, or an ncat beside it — the stock-client round trip cannot be tested here)"
+fi
 
 # NOT checked here: the `head -n <count>` pipe close in live_props (ARCH-player.md「运行时 IPC」).
 # Tried and pulled: against the real peer it cannot go red — swap the `head` for a bare `cat`
