@@ -57,7 +57,7 @@ yt-dlp/mpv 在任何语言里都是子进程，生命周期的回归无法二分
 | `fetch_play_times` 每拍在 `--status` 公布的 `sock` 上直读 14 个 mpv 属性 | 每拍 fork 一条 `t-play` 太贵 | `t-play --watch`（§4.1） |
 | `mpv_get_prop core-idle` 判断起播就绪 | 同上 | `--watch` 的状态事件 |
 | `-`/`=` 音量走 `send_mpv_ipc`，先 `get_property volume` 再 set | 按住连发：socket 10 ms/次，`--set-volume` 60 ms/次 | Go 端合并连按（只保留最新目标值、同一时刻最多一个在途调用），走 `--set-volume`；当前音量来自 `--watch` |
-| 封面：TUI 自己起一个 `mpv --vo=image` 做转码 | bash 解不了图 | Go 用标准库解码搜索信封里的 `thumbnail`，自己发 Kitty 协议；mpv 从 TUI 里消失 |
+| 封面：TUI 自己起一个 `mpv --vo=image` 做转码 | bash 解不了图 | Go 解码搜索信封里的 `thumbnail`，自己发 Kitty 协议；mpv 从 TUI 里消失（细节见 §5「封面」） |
 | `--parts` / `--info` 支不支持，靠调一次、嗅 stderr 的用法错 | 没有发现动词 | `<engine>-resolve --capabilities -j`（§4.2） |
 | 引擎发现：本目录 → `UT_ENGINE_DIR` → PATH 三处扫描，与 `t-play` 各写一份 | — | Go 实现同一条规则（规则正本在 `ARCH-cli-contract.md`「加一个引擎」）；见「未决」 |
 
@@ -73,13 +73,21 @@ yt-dlp/mpv 在任何语言里都是子进程，生命周期的回归无法二分
 - **形状**：stdout 每行一个信封（NDJSON），首行是一份完整快照，之后只在变化时出行。
   字段用播放器自己的词（与 `--status` 的 `media` 同源），**不**透传 mpv 属性名 ——
   mpv 仍是私有的，换掉它不应改变这份输出。
+- **只发离散事件，每条都带位置**：就绪、暂停/继续、音量、seek、换曲过渡、结束；
+  外加约 1 秒一次的心跳。连续的播放位置**不**逐帧转发：实测 mpv 对 `time-pos` 约
+  19 次/秒（5 秒 95 条），管道成本可以忽略（`nc` 0.0%、`jq --unbuffered` 0.1% CPU，
+  到达时间与播放时钟恒定偏移，没有缓冲积压）——不转发的理由是**调用方**：
+  一个 agent 读这条流，每秒 19 行是它要付 token 的噪声。节流在那一个常驻 `jq` 里做
+  （`now` 比较），不为节流 fork。Go 用最近一条事件的位置加单调时钟外推，暂停时停止外推。
 - **实现可行性（已实测）**：macOS 自带 `/usr/bin/nc -U` 保持一条长连接，对 mpv 发
   `observe_property` 后，另一个客户端改 volume / pause 时，`property-change` 事件被实时推到
   这条连接上。前提是 nc 的 stdin 一直不关——`--watch` 必须自己持有那个 fd。
-  这意味着 bash 端零 fork/拍，时钟精度由 mpv 决定，不再是 1 Hz。
-- **跨曲目**：队列每首是一个新的 mpv 进程，socket 连接会断；`--watch` 负责重连，
-  并发一个换曲事件，调用方看到的是一条连续的流。
-- **结束**：播放器消失时发最后一行并退出；退出码按四级分类（未决：正常结束报 0，
+- **生命周期跟播放器走，不跟 socket 走**：队列每首是一个新的 mpv 进程，换曲时旧 socket 关闭，
+  新 mpv 要等引擎解析完下一首的直链才起来，中间有一段没有 socket 的空窗。`nc` 在旧连接上读到
+  EOF 就退出，立刻重连会被拒。所以 `--watch` 以**播放器进程**是否还活着为准：活着就轮询等
+  新 socket 出现再接上，stdout 不断；进入空窗之前先发一条 `transitioning`（去向哪一首），
+  调用方由此知道接下来的安静是换曲，不是死亡。
+- **结束**：播放器进程消失时发最后一行并退出；退出码按四级分类（未决：正常结束报 0，
   `--id` 不存在报 4）。
 - **agent 同样受益**：`ARCHITECTURE.md`「六条发现」第 4 条列过"流式进度"为 bash 给不了的诉求——
   它给得了，只是当时没有人要。
@@ -103,10 +111,23 @@ yt-dlp/mpv 在任何语言里都是子进程，生命周期的回归无法二分
   取代 `disp_w` 的 EAW 表）、`harmonica`（弹簧动效，可选）。
 - **一个 `verb` 包**：唯一执行子进程的地方。拼 argv、解信封、把退出码映射成类型化错误；
   所有键处理器只调它。它同时是"Go 里不许出现 mpv"那条判据的落点。
+- **找兄弟动词**：与今天的 shell 脚本同一条规则——先解开 Go 二进制自身的符号链接
+  （`os.Executable` + `filepath.EvalSymlinks`），在它真实所在的目录找，再回落 PATH。
+  不加新环境变量；十个命令继续作为 `bin/` 下的公开命令安装（tap formula 今天就是这样），
+  因为它们是 agent 的产品面，不是藏进 `libexec` 的内部件。`t-playlist` / `t-history` 缺席时
+  按契约降级，不是启动失败。
 - **配置面**：Go 实现同一条继承链（flag > `TING_*` > `UT_*` > 用户配置 > 出厂配置）与
-  11 个偏好键的原地写回（保留注释与布局）。文件格式是既有契约，不改。
+  11 个偏好键的原地写回。文件格式是既有契约，不改。写回不用任何配置库（它们会在
+  反序列化-序列化之间丢掉注释），逐行搬运，并保住今天 bash 版的每一条保证：
+  值后面的行内注释与它的对齐空白原样保留；文件里还没有的键追加到末尾；文件不存在时
+  带说明头新建；写临时文件后 rename，且保持原文件权限（今天是 `cp -p`）；环境变量里
+  钉住的键不写回。
+- **封面**：YouTube 的 `hq720.jpg` 实际以 `image/webp` 返回（实测 content-type），
+  bili 与 ne 是 JPEG，所以需要 `golang.org/x/image/webp`（构建依赖）。Kitty 负载按块发送
+  （今天的 `m=1` 分块），重排与退出时删除 placement。tmux 下保持关闭——今天
+  `UT_IMAGE=auto` 在 tmux 下就是关的，并没有 tmux 穿透可移植。
 
-### 功能对齐清单（切换前必须全部到位）
+### 功能对齐清单（工作清单，不是合入门槛）
 
 `ting --help` 键表里的每一个键；TTY 双门；argv 与三类标志的转发；接管已在跑的播放器、
 退出时只停本会话起的那个；撤销的 3 秒窗口；`b`/`h`/`c`/`i` 四种临时行源；`/` 过滤；
@@ -124,11 +145,14 @@ ASCII 模式、亮暗背景探测；同步重绘（今天是 DCS `1q/2q`，tmux 
 4. **对齐**：按 §5 清单逐项。
 5. **测试迁移**：`tests/contract.sh` 的 tmux 段与 `tests/drive.sh` 改为驱动 Go 二进制；
    断言针对行为与帧结构，不针对 bash 实现细节。
-6. **一次切换**（已确认：不并行运行）：同一个 commit 里 Go 接过 `ting` 这个名字、
-   `git rm shell/ting`、更新 tap formula；`--offline` 与全量契约全绿才合入。
+6. **替换**：Go 接过 `ting` 这个名字、`git rm shell/ting`、更新 tap formula。
 7. **蒸馏**：重写 `ARCH-tui.md`；改 `ARCHITECTURE.md` 定位一节与「六条发现」、
    `ARCH-cli-contract.md` 的 `ting` 一节、`CLAUDE.md`（"10 个脚本"、常用命令、`bash -n` 门禁），
    然后 `git rm` 本文件。
+
+全部直接在 main 上做，不开分支、不设影子二进制、不搞切换仪式——目前唯一的用户就是作者本人。
+§5 的对齐清单是**工作清单**，不是合入门槛；每个 commit 仍照常过 `bash -n shell/*` 与
+`--offline`，所以 tmux 段在哪一步改为驱动 Go，就在哪一步随之迁移。
 
 ---
 
@@ -137,6 +161,6 @@ ASCII 模式、亮暗背景探测；同步重绘（今天是 DCS `1q/2q`，tmux 
 - `--watch` 的事件字段清单与结束退出码。
 - `--watch` 的 `--id` 缺省：像其他 socket 动词一样"唯一那个"，还是允许不带 id 时观察全部播放器。
 - 引擎发现：Go 复刻三处扫描，还是再加一个列出已装引擎的动词，让规则只在 shell 里写一次。
-- 分发：tap 从源码编译还是发 bottle；Go 二进制怎样找到旁边的 shell 动词（同目录 / `libexec`）。
-- 封面格式：`thumbnail` 若是 webp，需要 `golang.org/x/image/webp`（构建依赖）。
-- 一次切换意味着对齐期间 main 上没有可用的新 TUI：开发在分支上进行，还是 Go 代码先合入但不接名字。
+- 分发：tap 从源码编译还是发 bottle；Go 二进制装在 `libexec` 树里的哪一处，使"真实路径旁边"
+  那条寻址规则成立。
+- 心跳间隔（草拟 1 秒）与 `transitioning` 事件的字段。

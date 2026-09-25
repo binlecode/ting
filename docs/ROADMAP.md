@@ -150,13 +150,13 @@
 
 - **【最高优先级 · 待做】TUI 改用 Go，CLI 契约成为唯一接缝。**
   **收益**：高。bash 3.2 给不了的人机脸（亚秒时钟、动效、事件循环）；同时关掉 TUI 直读 mpv socket 等绕过契约的洞。
-  **成本**：高。先加 `t-play --watch -j` 与 `--capabilities -j` 两项契约，再做完整对齐与测试迁移，一次切换。
+  **成本**：高。先加 `t-play --watch -j` 与 `--capabilities -j` 两项契约，再做对齐与测试迁移，直接在 main 上替换。
   **计划**：[`docs/PLAN-go-tui.md`](PLAN-go-tui.md)。
 
 - **【高 ROI · 待做 · 前置 Go TUI】焦点行歌词窥探。**
   **收益**：高。光标停在在播行时，details 空间内联当前一句歌词，行预算不变。
   **成本**：中。只消费 `--transcript -J` 与 `--watch -j` 两个已发布动词，零契约改动。
-  **前置**：Go TUI 切换完成；不在 bash TUI 上实现。**计划**：[`docs/PLAN-lyric-peeking.md`](PLAN-lyric-peeking.md)。
+  **前置**：Go TUI 已替换 `shell/ting`；不在 bash TUI 上实现。**计划**：[`docs/PLAN-lyric-peeking.md`](PLAN-lyric-peeking.md)。
 
 - **【最高优先级 · TUI Design / 视觉排版】付费权限徽章（`access`）要不要上屏，以及上在哪一行。**
   **收益**：高。优化单行视觉设计与信息密度。`ne` 的信封已经免费带着 `fee → access`（`full` / `preview` / `paywalled`），一枚设计精炼的 `30s 试听` / `VIP` 徽章能让用户在按 Enter 之前一眼预判单曲可用性。
